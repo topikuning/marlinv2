@@ -110,7 +110,7 @@ def list_contracts(
     status: Optional[ContractStatus] = None,
     fiscal_year: Optional[int] = None,
     page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
+    page_size: int = Query(50, ge=1, le=1000),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contract.read")),
 ):
