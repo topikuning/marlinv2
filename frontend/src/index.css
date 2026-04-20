@@ -1,0 +1,168 @@
+@import url("https://cdn.jsdelivr.net/npm/ag-grid-community@32.2.2/styles/ag-grid.css");
+@import url("https://cdn.jsdelivr.net/npm/ag-grid-community@32.2.2/styles/ag-theme-quartz.css");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --grid-border: #e5e7eb;
+  }
+  html,
+  body,
+  #root {
+    @apply h-full;
+  }
+  body {
+    @apply bg-ink-50 text-ink-900 font-sans antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply font-display tracking-tight;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-white border border-ink-200/70 rounded-xl shadow-soft;
+  }
+  .card-pad {
+    @apply p-5;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium transition
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply btn bg-brand-600 text-white hover:bg-brand-700 shadow-soft;
+  }
+  .btn-secondary {
+    @apply btn bg-white border border-ink-200 text-ink-700 hover:bg-ink-50;
+  }
+  .btn-ghost {
+    @apply btn text-ink-600 hover:bg-ink-100;
+  }
+  .btn-danger {
+    @apply btn bg-red-600 text-white hover:bg-red-700;
+  }
+  .btn-xs {
+    @apply px-2 py-1 text-xs gap-1;
+  }
+  .input,
+  .select,
+  .textarea {
+    @apply w-full px-3 py-2 rounded-lg border border-ink-200 bg-white
+           text-sm text-ink-900 placeholder:text-ink-400
+           focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500
+           disabled:bg-ink-50 disabled:text-ink-400;
+  }
+  .label {
+    @apply block text-xs font-medium text-ink-600 mb-1.5;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium;
+  }
+  .badge-gray {
+    @apply badge bg-ink-100 text-ink-700;
+  }
+  .badge-green {
+    @apply badge bg-emerald-50 text-emerald-700 border border-emerald-200;
+  }
+  .badge-red {
+    @apply badge bg-red-50 text-red-700 border border-red-200;
+  }
+  .badge-yellow {
+    @apply badge bg-amber-50 text-amber-700 border border-amber-200;
+  }
+  .badge-blue {
+    @apply badge bg-brand-50 text-brand-700 border border-brand-200;
+  }
+  .page-title {
+    @apply text-xl md:text-2xl font-display font-semibold text-ink-900;
+  }
+  .page-sub {
+    @apply text-sm text-ink-500 mt-0.5;
+  }
+  .table-wrap {
+    @apply overflow-x-auto;
+  }
+  .table-th {
+    @apply px-4 py-3 text-left text-[11px] uppercase tracking-wider font-semibold text-ink-500
+           bg-ink-50 border-b border-ink-200;
+  }
+  .table-td {
+    @apply px-4 py-3 text-sm text-ink-700 border-b border-ink-100;
+  }
+  .kpi-label {
+    @apply text-xs font-medium text-ink-500 uppercase tracking-wide;
+  }
+  .kpi-value {
+    @apply font-display font-semibold text-ink-900 text-2xl mt-1;
+  }
+  .menu-link {
+    @apply flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-ink-300
+           hover:bg-white/5 hover:text-white transition;
+  }
+  .menu-link.active {
+    @apply bg-white/10 text-white shadow-soft;
+  }
+  .menu-group-label {
+    @apply text-[10px] uppercase tracking-wider font-semibold text-ink-500 px-3 mt-5 mb-1.5;
+  }
+}
+
+/* AG Grid custom theming */
+.ag-theme-quartz {
+  --ag-border-color: #e5e7eb;
+  --ag-header-background-color: #f8fafc;
+  --ag-header-foreground-color: #475569;
+  --ag-odd-row-background-color: #fafbfc;
+  --ag-row-hover-color: #eff6ff;
+  --ag-selected-row-background-color: #dbeafe;
+  --ag-font-family: Inter, system-ui, sans-serif;
+  --ag-font-size: 13px;
+  --ag-cell-horizontal-padding: 12px;
+  --ag-grid-size: 6px;
+}
+.ag-theme-quartz .ag-header-cell-text {
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Page animation */
+.page-enter {
+  animation: pageEnter 0.25s ease-out;
+}
+@keyframes pageEnter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
