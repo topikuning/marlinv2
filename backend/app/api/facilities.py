@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 
 from app.core.database import get_db
-from app.models.models import Facility, Location, MasterFacility, User
+from app.models.models import Contract, ContractStatus, Facility, Location, MasterFacility, User
 from app.schemas.schemas import (
     FacilityCreate, FacilityUpdate, FacilityBulkCreate, FacilityOut, ExcelImportResult,
 )
@@ -52,6 +52,52 @@ def _resolve_master_facility(
     return None
 
 
+# Statuses where the facility set of a contract is still editable. DRAFT is the
+# initial build phase; ADDENDUM is the live-edit window opened by a CCO. Any
+# other status (ACTIVE, ON_HOLD, COMPLETED, TERMINATED) locks facilities —
+# changes must go through a new Addendum.
+_FACILITY_EDITABLE_STATUSES = {ContractStatus.DRAFT, ContractStatus.ADDENDUM}
+
+
+def _assert_facility_editable(db: Session, *, location_id=None, facility_id=None) -> None:
+    """
+    Block facility create/update/delete when the parent contract is no longer
+    in an editable status. Mirrors the BOQ write-guard so the two modification
+    surfaces behave consistently.
+    """
+    if facility_id is not None and location_id is None:
+        fac = db.query(Facility).filter(Facility.id == facility_id).first()
+        if fac:
+            location_id = fac.location_id
+    if location_id is None:
+        return
+
+    row = (
+        db.query(Contract.status, Contract.contract_number)
+        .join(Location, Location.contract_id == Contract.id)
+        .filter(Location.id == location_id)
+        .first()
+    )
+    if not row:
+        return
+    status, contract_number = row
+    if status in _FACILITY_EDITABLE_STATUSES:
+        return
+
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "message": (
+                f"Fasilitas tidak dapat diubah karena kontrak {contract_number} "
+                f"berstatus {status.value}. Buat Addendum untuk menambah atau "
+                f"mengubah fasilitas pada kontrak yang sudah berjalan."
+            ),
+            "code": "contract_not_editable",
+            "contract_status": status.value,
+        },
+    )
+
+
 @router.get("/by-location/{location_id}", response_model=List[dict])
 def list_by_location(location_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
     rows = db.query(Facility).filter(
@@ -76,6 +122,7 @@ def create_facility(
 ):
     if not db.query(Location).filter(Location.id == data.location_id).first():
         raise HTTPException(400, "Lokasi tidak ditemukan")
+    _assert_facility_editable(db, location_id=data.location_id)
     if db.query(Facility).filter(
         Facility.location_id == data.location_id,
         Facility.facility_code == data.facility_code,
@@ -115,6 +162,7 @@ def bulk_create_facilities(
 ):
     if not db.query(Location).filter(Location.id == data.location_id).first():
         raise HTTPException(400, "Lokasi tidak ditemukan")
+    _assert_facility_editable(db, location_id=data.location_id)
 
     created = 0
     skipped = 0
@@ -165,6 +213,7 @@ async def import_facilities_excel(
 ):
     if not db.query(Location).filter(Location.id == location_id).first():
         raise HTTPException(404, "Lokasi tidak ditemukan")
+    _assert_facility_editable(db, location_id=location_id)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
         tmp.write(await file.read())
         tmp_path = tmp.name
@@ -226,6 +275,7 @@ def update_facility(
     f = db.query(Facility).filter(Facility.id == facility_id).first()
     if not f:
         raise HTTPException(404, "Fasilitas tidak ditemukan")
+    _assert_facility_editable(db, location_id=f.location_id)
     for k, v in data.model_dump(exclude_unset=True).items():
         setattr(f, k, v)
     db.commit()
@@ -242,6 +292,7 @@ def delete_facility(
     f = db.query(Facility).filter(Facility.id == facility_id).first()
     if not f:
         raise HTTPException(404, "Fasilitas tidak ditemukan")
+    _assert_facility_editable(db, location_id=f.location_id)
     db.delete(f)
     db.commit()
     log_audit(db, current_user, "delete", "facility", facility_id, request=request, commit=True)
