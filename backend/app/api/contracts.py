@@ -75,6 +75,27 @@ def _contract_to_detail(c: Contract, db: Session) -> dict:
     ppk = db.query(PPK).filter(PPK.id == c.ppk_id).first()
     konsultan = db.query(Company).filter(Company.id == c.konsultan_id).first() if c.konsultan_id else None
 
+    # Surface the currently-active BOQ revision (if any) so the UI can show
+    # "CCO-N · approved/draft" next to the BOQ tab and decide which revision
+    # the progress grid should read from.
+    from app.models.models import BOQRevision
+    active_rev = (
+        db.query(BOQRevision)
+        .filter(BOQRevision.contract_id == c.id, BOQRevision.is_active == True)  # noqa: E712
+        .first()
+    )
+    active_rev_payload = None
+    if active_rev:
+        active_rev_payload = {
+            "id": str(active_rev.id),
+            "cco_number": active_rev.cco_number,
+            "revision_code": active_rev.revision_code,
+            "status": active_rev.status.value if hasattr(active_rev.status, "value") else active_rev.status,
+            "total_value": float(active_rev.total_value or 0),
+            "item_count": active_rev.item_count or 0,
+            "approved_at": active_rev.approved_at.isoformat() if active_rev.approved_at else None,
+        }
+
     return {
         "id": str(c.id),
         "contract_number": c.contract_number,
@@ -96,6 +117,9 @@ def _contract_to_detail(c: Contract, db: Session) -> dict:
         "description": c.description,
         "weekly_report_due_day": c.weekly_report_due_day,
         "daily_report_required": c.daily_report_required,
+        "activated_at": c.activated_at.isoformat() if c.activated_at else None,
+        "activated_by_id": str(c.activated_by_id) if c.activated_by_id else None,
+        "active_revision": active_rev_payload,
         "created_at": c.created_at.isoformat(),
         "locations": locations,
         "addenda": addenda,
@@ -109,11 +133,26 @@ def list_contracts(
     q: Optional[str] = None,
     status: Optional[ContractStatus] = None,
     fiscal_year: Optional[int] = None,
+    include_draft: bool = True,
+    reportable_only: bool = False,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=1000),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contract.read")),
 ):
+    """
+    List contracts. By default returns every non-deleted contract in any
+    status — including DRAFT — so that users can start typing daily/weekly
+    reports against a contract that hasn't been formally activated yet
+    (addresses catatan #6, "kontrak gaib di menu laporan").
+
+    Flags:
+      * include_draft=False  → hide DRAFT contracts (cosmetic filter)
+      * reportable_only=True → keep only contracts that can legitimately
+                               have reports attached (active, addendum,
+                               optionally draft when include_draft=True).
+                               Excludes completed/terminated.
+    """
     query = db.query(Contract).filter(Contract.deleted_at.is_(None))
     if q:
         query = query.filter(or_(
@@ -124,6 +163,14 @@ def list_contracts(
         query = query.filter(Contract.status == status)
     if fiscal_year:
         query = query.filter(Contract.fiscal_year == fiscal_year)
+
+    if not include_draft:
+        query = query.filter(Contract.status != ContractStatus.DRAFT)
+    if reportable_only:
+        allowed = [ContractStatus.ACTIVE, ContractStatus.ADDENDUM]
+        if include_draft:
+            allowed.append(ContractStatus.DRAFT)
+        query = query.filter(Contract.status.in_(allowed))
 
     # Scope by assigned contracts for konsultan/kontraktor
     role = current_user.role_obj
@@ -226,6 +273,17 @@ def create_contract(
             continue
         loc = Location(contract_id=contract.id, **loc_data.model_dump())
         db.add(loc)
+    db.flush()
+
+    # Bootstrap an empty CCO-0 BOQ revision in DRAFT state.
+    # BOQ imports and the inline grid editor will attach their items to this
+    # revision. Admin has to explicitly approve it before activating the
+    # contract (see POST /contracts/{id}/activate and
+    # POST /boq/revisions/{id}/approve).
+    from app.services import boq_revision_service
+    boq_revision_service.ensure_cco_zero(
+        db, contract, created_by_id=current_user.id, auto_approve=False,
+    )
 
     db.commit()
     db.refresh(contract)
@@ -234,23 +292,124 @@ def create_contract(
     return {"id": str(contract.id), "success": True}
 
 
+# Fields that can always be edited regardless of contract status.
+# These are descriptive/administrative; they never change the legal
+# meaning of the contract (value, dates, parties).
+_ALWAYS_EDITABLE_FIELDS = {
+    "contract_name",
+    "description",
+    "document_file",
+    "weekly_report_due_day",
+    "daily_report_required",
+}
+
+# Fields that are only editable while the contract is still DRAFT.
+# Once ACTIVE, these can only be changed via an Addendum (which creates
+# an auditable paper trail). COMPLETED/TERMINATED contracts are frozen.
+_DRAFT_ONLY_FIELDS = {
+    "contract_number",
+    "company_id",
+    "ppk_id",
+    "konsultan_id",          # legacy contract-wide fallback
+    "fiscal_year",
+    "original_value",
+    "current_value",
+    "start_date",
+    "end_date",
+}
+
+
 @router.put("/{contract_id}", response_model=dict)
 def update_contract(
     contract_id: str, data: ContractUpdate, request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contract.update")),
 ):
+    """
+    Edit a contract with status-aware rules:
+
+      * DRAFT         → all fields editable (fix for catatan #8: typo recovery)
+      * ACTIVE        → only descriptive fields; value/dates/parties need an Addendum
+      * COMPLETED /
+        TERMINATED   → read-only (only way back is an Addendum)
+
+    This is *business logic*, not permission. Who can call this endpoint
+    at all is decided by the `contract.update` permission upstream.
+    """
     c = db.query(Contract).filter(Contract.id == contract_id, Contract.deleted_at.is_(None)).first()
     if not c:
         raise HTTPException(404, "Kontrak tidak ditemukan")
 
-    before = {"status": str(c.status), "contract_name": c.contract_name}
-    for k, v in data.model_dump(exclude_unset=True).items():
+    status_value = c.status.value if hasattr(c.status, "value") else str(c.status)
+
+    if status_value in ("completed", "terminated"):
+        raise HTTPException(
+            400,
+            f"Kontrak berstatus '{status_value}' tidak dapat diedit. "
+            f"Gunakan Addendum jika perlu perubahan.",
+        )
+
+    incoming = data.model_dump(exclude_unset=True)
+    rejected: List[str] = []
+    if status_value != "draft":
+        for key in list(incoming.keys()):
+            if key in _DRAFT_ONLY_FIELDS:
+                rejected.append(key)
+                incoming.pop(key)
+    if rejected:
+        raise HTTPException(
+            400,
+            {
+                "message": (
+                    "Field berikut hanya bisa diubah saat status kontrak masih "
+                    "'draft', atau lewat Addendum setelah kontrak aktif."
+                ),
+                "rejected_fields": rejected,
+                "hint": "Perbaiki nomor/ nilai/ tanggal sebelum Activate, atau buat Addendum.",
+            },
+        )
+
+    # Nomor kontrak yang baru (kalau diedit di DRAFT) harus tetap unik.
+    if "contract_number" in incoming and incoming["contract_number"] != c.contract_number:
+        clash = (
+            db.query(Contract)
+            .filter(
+                Contract.contract_number == incoming["contract_number"],
+                Contract.id != c.id,
+                Contract.deleted_at.is_(None),
+            )
+            .first()
+        )
+        if clash:
+            raise HTTPException(400, "Nomor kontrak sudah digunakan kontrak lain.")
+
+    before = {
+        k: (v.isoformat() if hasattr(v, "isoformat") else (float(v) if hasattr(v, "real") and not isinstance(v, bool) else v))
+        for k, v in {key: getattr(c, key) for key in incoming}.items()
+    }
+
+    for k, v in incoming.items():
         setattr(c, k, v)
+
+    # If start/end changed in DRAFT, keep duration in sync.
+    if "start_date" in incoming or "end_date" in incoming:
+        c.duration_days = (c.end_date - c.start_date).days
+        # Keep original_end_date in sync too — we haven't activated yet.
+        if "end_date" in incoming:
+            c.original_end_date = c.end_date
+
+    # If original_value changed in DRAFT, keep current_value in sync
+    # (no addendum has been applied yet).
+    if "original_value" in incoming:
+        c.current_value = c.original_value
+
     db.commit()
-    log_audit(db, current_user, "update", "contract", str(c.id),
-              changes={"before": before}, request=request, commit=True)
-    return {"success": True}
+    log_audit(
+        db, current_user, "update", "contract", str(c.id),
+        changes={"before": before, "after": {k: incoming[k] for k in incoming}},
+        request=request, commit=True,
+    )
+    return {"success": True, "fields_updated": list(incoming.keys())}
 
 
 @router.delete("/{contract_id}", response_model=dict)
@@ -287,6 +446,13 @@ def create_addendum(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contract.update")),
 ):
+    """
+    Create an Addendum / CCO. If the addendum affects the BOQ
+    (`cco`, `value_change`, `combined`) we also clone the currently-active
+    BOQ revision into a new DRAFT revision bound to this addendum. The
+    admin edits the new revision, then calls
+    `POST /boq/revisions/{id}/approve` to make it active.
+    """
     c = db.query(Contract).filter(Contract.id == contract_id, Contract.deleted_at.is_(None)).first()
     if not c:
         raise HTTPException(404, "Kontrak tidak ditemukan")
@@ -305,22 +471,50 @@ def create_addendum(
         created_by=current_user.id,
     )
     db.add(addendum)
+    db.flush()
 
-    # Apply changes to the contract
-    if data.extension_days:
-        c.end_date = c.end_date + (data.new_end_date - c.end_date if data.new_end_date else
-                                    __import__("datetime").timedelta(days=data.extension_days))
+    # Apply schedule / value changes to the contract header immediately.
+    if data.new_end_date:
+        c.end_date = data.new_end_date
+        c.duration_days = (c.end_date - c.start_date).days
+    elif data.extension_days:
+        import datetime as _dt
+        c.end_date = c.end_date + _dt.timedelta(days=data.extension_days)
         c.duration_days = (c.end_date - c.start_date).days
     if data.new_contract_value:
         c.current_value = data.new_contract_value
     c.status = ContractStatus.ADDENDUM
 
+    new_revision_id = None
+    # Spawn a new draft BOQ revision if this addendum touches the BOQ.
+    touches_boq = data.addendum_type in (
+        AddendumType.CCO,
+        AddendumType.VALUE_CHANGE,
+        AddendumType.COMBINED,
+    )
+    if touches_boq:
+        from app.services import boq_revision_service
+        new_rev = boq_revision_service.clone_revision_for_addendum(
+            db, addendum, created_by_id=current_user.id,
+        )
+        new_revision_id = str(new_rev.id)
+
     db.commit()
     db.refresh(addendum)
-    log_audit(db, current_user, "create", "addendum", str(addendum.id),
-              changes={"contract_id": contract_id, "type": data.addendum_type.value},
-              request=request, commit=True)
-    return {"id": str(addendum.id), "success": True}
+    log_audit(
+        db, current_user, "create", "addendum", str(addendum.id),
+        changes={
+            "contract_id": contract_id,
+            "type": data.addendum_type.value,
+            "new_revision_id": new_revision_id,
+        },
+        request=request, commit=True,
+    )
+    return {
+        "id": str(addendum.id),
+        "success": True,
+        "new_revision_id": new_revision_id,
+    }
 
 
 @router.delete("/{contract_id}/addenda/{addendum_id}", response_model=dict)
@@ -346,3 +540,93 @@ def delete_addendum(
     db.commit()
     log_audit(db, current_user, "delete", "addendum", addendum_id, request=request, commit=True)
     return {"success": True}
+
+
+# ═══════════════════════════════════════════ ACTIVATION / LIFECYCLE ══════════
+
+@router.get("/{contract_id}/readiness", response_model=dict)
+def get_activation_readiness(
+    contract_id: str,
+    db: Session = Depends(get_db),
+    _=Depends(require_permission("contract.read")),
+):
+    """
+    Non-mutating preview of activation checks. The UI calls this to render
+    a readiness checklist ("✓ Lokasi ada · ✗ BOQ belum di-approve · ...")
+    next to the Activate button so the admin knows what's missing.
+    """
+    c = db.query(Contract).filter(Contract.id == contract_id, Contract.deleted_at.is_(None)).first()
+    if not c:
+        raise HTTPException(404, "Kontrak tidak ditemukan")
+
+    from app.services.contract_lifecycle_service import check_readiness
+    r = check_readiness(db, c)
+    return {
+        "ready": r.ready,
+        "reasons": r.reasons,
+        "checks": {
+            "has_locations": r.has_locations,
+            "has_facilities": r.has_facilities,
+            "has_approved_cco_zero": r.has_approved_cco_zero,
+            "value_ok": r.value_ok,
+        },
+        "boq_total_value": r.boq_total_value,
+        "contract_value": r.contract_value,
+        "status": c.status.value if hasattr(c.status, "value") else c.status,
+    }
+
+
+@router.post("/{contract_id}/activate", response_model=dict)
+def activate_contract_endpoint(
+    contract_id: str, request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contract.update")),
+):
+    """
+    Flip DRAFT contract to ACTIVE after passing readiness checks. Idempotent.
+    Returns a 400 with `reasons` array if checks fail.
+    """
+    c = db.query(Contract).filter(Contract.id == contract_id, Contract.deleted_at.is_(None)).first()
+    if not c:
+        raise HTTPException(404, "Kontrak tidak ditemukan")
+
+    from app.services.contract_lifecycle_service import activate_contract, ActivationError
+    try:
+        activate_contract(db, c, activated_by_id=current_user.id)
+    except ActivationError as e:
+        raise HTTPException(400, {"message": "Kontrak belum siap diaktifkan.", "reasons": e.reasons})
+
+    db.commit()
+    log_audit(
+        db, current_user, "activate", "contract", str(c.id),
+        changes={"new_status": "active"}, request=request, commit=True,
+    )
+    return {
+        "success": True,
+        "status": c.status.value,
+        "activated_at": c.activated_at.isoformat() if c.activated_at else None,
+    }
+
+
+@router.post("/{contract_id}/complete", response_model=dict)
+def complete_contract(
+    contract_id: str, request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contract.update")),
+):
+    """
+    Mark an ACTIVE (or ADDENDUM) contract as COMPLETED. After this point the
+    contract is read-only. Reactivation would require a new addendum.
+    """
+    c = db.query(Contract).filter(Contract.id == contract_id, Contract.deleted_at.is_(None)).first()
+    if not c:
+        raise HTTPException(404, "Kontrak tidak ditemukan")
+
+    status_value = c.status.value if hasattr(c.status, "value") else str(c.status)
+    if status_value not in ("active", "addendum"):
+        raise HTTPException(400, f"Kontrak berstatus '{status_value}' tidak bisa di-complete.")
+
+    c.status = ContractStatus.COMPLETED
+    db.commit()
+    log_audit(db, current_user, "complete", "contract", str(c.id), request=request, commit=True)
+    return {"success": True, "status": c.status.value}

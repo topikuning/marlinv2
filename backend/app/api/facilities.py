@@ -3,10 +3,10 @@ import tempfile
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 
 from app.core.database import get_db
-from app.models.models import Facility, Location, User
+from app.models.models import Facility, Location, MasterFacility, User
 from app.schemas.schemas import (
     FacilityCreate, FacilityUpdate, FacilityBulkCreate, FacilityOut, ExcelImportResult,
 )
@@ -14,6 +14,42 @@ from app.api.deps import get_current_user, require_permission
 from app.services.audit_service import log_audit
 
 router = APIRouter(prefix="/facilities", tags=["facilities"])
+
+
+def _resolve_master_facility(
+    db: Session,
+    *,
+    master_facility_id: Optional[str] = None,
+    facility_code: Optional[str] = None,
+    facility_name: Optional[str] = None,
+) -> Optional[MasterFacility]:
+    """
+    Look up a MasterFacility by id → code → name (in that priority).
+    Returns the row or None if nothing matches. Used to hydrate
+    master_facility_id on Facility create/bulk/import so the catalog stays
+    authoritative even when the client sends a legacy payload.
+    """
+    if master_facility_id:
+        m = db.query(MasterFacility).filter(MasterFacility.id == master_facility_id).first()
+        if m:
+            return m
+    if facility_code:
+        m = (
+            db.query(MasterFacility)
+            .filter(MasterFacility.code == facility_code.upper())
+            .first()
+        )
+        if m:
+            return m
+    if facility_name:
+        m = (
+            db.query(MasterFacility)
+            .filter(MasterFacility.name.ilike(facility_name.strip()))
+            .first()
+        )
+        if m:
+            return m
+    return None
 
 
 @router.get("/by-location/{location_id}", response_model=List[dict])
@@ -24,6 +60,7 @@ def list_by_location(location_id: str, db: Session = Depends(get_db), _=Depends(
     return [
         {
             "id": str(f.id), "location_id": str(f.location_id),
+            "master_facility_id": str(f.master_facility_id) if f.master_facility_id else None,
             "facility_code": f.facility_code, "facility_type": f.facility_type,
             "facility_name": f.facility_name, "display_order": f.display_order,
             "total_value": float(f.total_value or 0), "is_active": f.is_active,
@@ -44,12 +81,30 @@ def create_facility(
         Facility.facility_code == data.facility_code,
     ).first():
         raise HTTPException(400, "Kode fasilitas sudah dipakai di lokasi ini")
-    f = Facility(**data.model_dump())
+
+    payload = data.model_dump()
+
+    # Resolve master catalog row. New rows SHOULD be picked from master; we
+    # try id/code/name in that order, and fall back to legacy free-text
+    # behavior if nothing matches (kept to preserve backward compat with
+    # existing seed + imports).
+    master = _resolve_master_facility(
+        db,
+        master_facility_id=payload.get("master_facility_id"),
+        facility_code=payload.get("facility_code"),
+        facility_name=payload.get("facility_name"),
+    )
+    if master:
+        payload["master_facility_id"] = master.id
+        if not payload.get("facility_type"):
+            payload["facility_type"] = master.facility_type
+
+    f = Facility(**payload)
     db.add(f)
     db.commit()
     db.refresh(f)
     log_audit(db, current_user, "create", "facility", str(f.id), request=request, commit=True)
-    return {"id": str(f.id), "success": True}
+    return {"id": str(f.id), "success": True, "master_facility_id": str(f.master_facility_id) if f.master_facility_id else None}
 
 
 @router.post("/bulk", response_model=dict)
@@ -75,10 +130,20 @@ def bulk_create_facilities(
         ).first():
             skipped += 1
             continue
+
+        master = _resolve_master_facility(
+            db,
+            master_facility_id=row.get("master_facility_id"),
+            facility_code=code,
+            facility_name=name,
+        )
+
         db.add(Facility(
             location_id=data.location_id,
+            master_facility_id=master.id if master else None,
             facility_code=code,
-            facility_type=str(row.get("facility_type") or "") or None,
+            facility_type=str(row.get("facility_type") or "")
+                or (master.facility_type if master else None),
             facility_name=name,
             display_order=int(row.get("display_order") or idx),
             notes=str(row.get("notes") or "") or None,
@@ -122,10 +187,19 @@ async def import_facilities_excel(
             ).first():
                 result.items_skipped += 1
                 continue
+
+            master = _resolve_master_facility(
+                db,
+                facility_code=code,
+                facility_name=name,
+            )
+
             db.add(Facility(
                 location_id=location_id,
+                master_facility_id=master.id if master else None,
                 facility_code=code,
-                facility_type=str(rec.get("facility_type") or "") or None,
+                facility_type=str(rec.get("facility_type") or "")
+                    or (master.facility_type if master else None),
                 facility_name=name,
                 display_order=int(float(rec.get("display_order") or idx)),
                 notes=str(rec.get("notes") or "") or None,

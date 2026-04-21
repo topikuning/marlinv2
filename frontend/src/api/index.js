@@ -83,6 +83,12 @@ export const masterAPI = {
   createWorkCode: (data) => api.post("/master/work-codes", data),
   updateWorkCode: (code, data) => api.put(`/master/work-codes/${code}`, data),
   deleteWorkCode: (code) => api.delete(`/master/work-codes/${code}`),
+
+  // Tahap 2: Master facilities (catalog)
+  facilities: (params) => api.get("/master/facilities", { params }),
+  createFacility: (data) => api.post("/master/facilities", data),
+  updateFacility: (id, data) => api.put(`/master/facilities/${id}`, data),
+  deleteFacility: (id) => api.delete(`/master/facilities/${id}`),
 };
 
 export const contractsAPI = {
@@ -94,6 +100,11 @@ export const contractsAPI = {
   listAddenda: (id) => api.get(`/contracts/${id}/addenda`),
   createAddendum: (id, data) => api.post(`/contracts/${id}/addenda`, data),
   deleteAddendum: (cId, aId) => api.delete(`/contracts/${cId}/addenda/${aId}`),
+
+  // Tahap 2: activation / lifecycle
+  readiness: (id) => api.get(`/contracts/${id}/readiness`),
+  activate: (id) => api.post(`/contracts/${id}/activate`),
+  complete: (id) => api.post(`/contracts/${id}/complete`),
 };
 
 export const locationsAPI = {
@@ -153,6 +164,20 @@ export const boqAPI = {
       params,
     });
   },
+
+  // Tahap 2: BOQ revisions (CCO)
+  listRevisions: (contractId) =>
+    api.get(`/boq/revisions/by-contract/${contractId}`),
+  approveRevision: (revisionId) =>
+    api.post(`/boq/revisions/${revisionId}/approve`),
+  diffRevision: (revisionId) =>
+    api.get(`/boq/revisions/${revisionId}/diff`),
+
+  // Tahap 2: Location-level rollup (catatan #9)
+  locationRollup: (locationId, revisionId) =>
+    api.get(`/boq/by-location/${locationId}/rollup`, {
+      params: revisionId ? { revision_id: revisionId } : {},
+    }),
 };
 
 export const weeklyAPI = {

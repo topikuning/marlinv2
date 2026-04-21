@@ -135,6 +135,17 @@ def create_report(
     if not c:
         raise HTTPException(404, "Kontrak tidak ditemukan")
 
+    # Status gate. DRAFT is deliberately allowed (catatan #6) so users can
+    # prepare their first report in parallel with contract setup — the
+    # report will just display a "contract not yet activated" hint in UI.
+    # Completed/terminated contracts are frozen.
+    status_value = c.status.value if hasattr(c.status, "value") else str(c.status)
+    if status_value in ("completed", "terminated"):
+        raise HTTPException(
+            400,
+            f"Kontrak berstatus '{status_value}' tidak menerima laporan baru.",
+        )
+
     if db.query(WeeklyReport).filter(
         WeeklyReport.contract_id == contract_id,
         WeeklyReport.week_number == data.week_number,

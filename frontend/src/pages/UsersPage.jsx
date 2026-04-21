@@ -191,20 +191,43 @@ export default function UsersPage() {
   );
 }
 
-function UserModal({ initial, roles, contracts, onClose, onSave }) {
+function UserModal({ initial, roles: propRoles, contracts, onClose, onSave }) {
+  // Fallback-load roles if the parent passed an empty array.
+  // This guards against a race where the modal mounts before the parent's
+  // Promise.all has resolved, which used to leave the dropdown blank
+  // (catatan #10a).
+  const [roles, setRoles] = useState(propRoles || []);
+  useEffect(() => {
+    if (propRoles?.length) {
+      setRoles(propRoles);
+      return;
+    }
+    rbacAPI.roles().then(({ data }) => setRoles(data || []));
+  }, [propRoles]);
+
   const [form, setForm] = useState(
     initial || {
       email: "",
       username: "",
       full_name: "",
       password: "",
-      role_id: roles[0]?.id || "",
+      role_id: "",
       is_active: true,
       phone: "",
       whatsapp: "",
       assigned_contract_ids: [],
     }
   );
+
+  // Once roles are available and we don't have a role yet (new-user path),
+  // default to the first role so the dropdown never shows a blank value
+  // that the backend would reject.
+  useEffect(() => {
+    if (!form.role_id && roles.length > 0 && !initial) {
+      setForm((f) => ({ ...f, role_id: roles[0].id }));
+    }
+  }, [roles, form.role_id, initial]);
+
   const [saving, setSaving] = useState(false);
 
   const submit = async () => {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import toast from "react-hot-toast";
 import { Plus, Edit2, Trash2, ShieldCheck, Lock } from "lucide-react";
 import { rbacAPI } from "../api";
@@ -154,13 +154,63 @@ export default function RolesPage() {
   );
 }
 
-function RoleModal({ initial, permissions, menus, onClose, onSave }) {
-  const [form, setForm] = useState({
+/**
+ * Turn a server-shaped role object into the flat form shape the modal uses.
+ *
+ * The /rbac/roles/{id} endpoint returns:
+ *   { ...role, permissions: [{id,...}, ...], menus: [{id,...}, ...] }
+ *
+ * But the form binds to `permission_ids` / `menu_ids` (flat arrays).
+ * Keeping this normalization in one place means we can't accidentally
+ * get out of sync when the shape evolves.
+ */
+function normalizeInitial(initial) {
+  if (!initial) {
+    return {
+      code: "",
+      name: "",
+      description: "",
+      permission_ids: [],
+      menu_ids: [],
+      is_system: false,
+    };
+  }
+  return {
     ...initial,
     permission_ids:
-      initial.permissions?.map((p) => p.id) || initial.permission_ids || [],
-    menu_ids: initial.menus?.map((m) => m.id) || initial.menu_ids || [],
-  });
+      initial.permissions?.map((p) => p.id) ||
+      initial.permission_ids ||
+      [],
+    menu_ids:
+      initial.menus?.map((m) => m.id) || initial.menu_ids || [],
+  };
+}
+
+
+function RoleModal({ initial, permissions, menus, onClose, onSave }) {
+  // on mount. Previously (useState(...) only), opening a different role
+  // after saving left the checkbox matrix showing the *first* role's
+  // state — fixed catatan #10b.
+  //
+  // We also normalize the server response (which comes back with
+  // `permissions: [...]` / `menus: [...]`) into a flat id-array shape
+  // the form actually binds to.
+  const [form, setForm] = useState(() => normalizeInitial(initial));
+
+  useEffect(() => {
+    setForm(normalizeInitial(initial));
+  }, [initial]);
+
+  // Sets for O(1) membership checks — checkboxes render often.
+  const selectedPerms = useMemo(
+    () => new Set(form.permission_ids || []),
+    [form.permission_ids]
+  );
+  const selectedMenus = useMemo(
+    () => new Set(form.menu_ids || []),
+    [form.menu_ids]
+  );
+
   const [saving, setSaving] = useState(false);
 
   const grouped = permissions.reduce((acc, p) => {
@@ -169,21 +219,25 @@ function RoleModal({ initial, permissions, menus, onClose, onSave }) {
   }, {});
 
   const toggle = (key, id) => {
-    const curr = form[key] || [];
-    setForm({
-      ...form,
-      [key]: curr.includes(id) ? curr.filter((x) => x !== id) : [...curr, id],
+    setForm((prev) => {
+      const curr = prev[key] || [];
+      return {
+        ...prev,
+        [key]: curr.includes(id) ? curr.filter((x) => x !== id) : [...curr, id],
+      };
     });
   };
 
   const toggleModule = (module, allIds) => {
-    const curr = form.permission_ids || [];
-    const allSelected = allIds.every((id) => curr.includes(id));
-    setForm({
-      ...form,
-      permission_ids: allSelected
-        ? curr.filter((id) => !allIds.includes(id))
-        : [...new Set([...curr, ...allIds])],
+    setForm((prev) => {
+      const curr = prev.permission_ids || [];
+      const allSelected = allIds.every((id) => curr.includes(id));
+      return {
+        ...prev,
+        permission_ids: allSelected
+          ? curr.filter((id) => !allIds.includes(id))
+          : [...new Set([...curr, ...allIds])],
+      };
     });
   };
 
@@ -257,9 +311,7 @@ function RoleModal({ initial, permissions, menus, onClose, onSave }) {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {Object.entries(grouped).map(([mod, perms]) => {
             const allIds = perms.map((p) => p.id);
-            const allSelected = allIds.every((id) =>
-              (form.permission_ids || []).includes(id)
-            );
+            const allSelected = allIds.every((id) => selectedPerms.has(id));
             return (
               <div
                 key={mod}
@@ -282,7 +334,7 @@ function RoleModal({ initial, permissions, menus, onClose, onSave }) {
                     >
                       <input
                         type="checkbox"
-                        checked={(form.permission_ids || []).includes(p.id)}
+                        checked={selectedPerms.has(p.id)}
                         onChange={() => toggle("permission_ids", p.id)}
                         disabled={disabled}
                       />
@@ -308,14 +360,14 @@ function RoleModal({ initial, permissions, menus, onClose, onSave }) {
             <label
               key={m.id}
               className={`flex items-center gap-2 text-sm p-2 rounded-lg border ${
-                (form.menu_ids || []).includes(m.id)
+                selectedMenus.has(m.id)
                   ? "bg-brand-50 border-brand-200"
                   : "border-ink-200"
               }`}
             >
               <input
                 type="checkbox"
-                checked={(form.menu_ids || []).includes(m.id)}
+                checked={selectedMenus.has(m.id)}
                 onChange={() => toggle("menu_ids", m.id)}
                 disabled={disabled}
               />

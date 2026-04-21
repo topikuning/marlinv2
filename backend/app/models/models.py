@@ -18,7 +18,7 @@ from datetime import datetime, date
 from sqlalchemy import (
     Column, String, Text, Integer, Numeric, Boolean,
     DateTime, Date, ForeignKey, Enum, Index, UniqueConstraint,
-    JSON as SQLJson,
+    JSON as SQLJson, text,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
@@ -106,6 +106,26 @@ class NotificationChannel(str, enum.Enum):
     WHATSAPP = "whatsapp"
     EMAIL = "email"
     IN_APP = "in_app"
+
+
+class RevisionStatus(str, enum.Enum):
+    """BOQ revision lifecycle for CCO versioning.
+
+    - draft: being edited, not yet legally in force
+    - approved: signed off and active (exactly one per contract is active)
+    - superseded: was active once but a newer approved revision has replaced it
+    """
+    DRAFT = "draft"
+    APPROVED = "approved"
+    SUPERSEDED = "superseded"
+
+
+class BOQChangeType(str, enum.Enum):
+    """How a BOQ item in revision N relates to revision N-1."""
+    UNCHANGED = "unchanged"       # cloned as-is from previous revision
+    MODIFIED = "modified"         # changed volume / unit_price / description
+    ADDED = "added"               # brand new item in this CCO (no predecessor)
+    REMOVED = "removed"           # tombstone: existed before, dropped in this CCO
 
 
 class NotificationStatus(str, enum.Enum):
@@ -198,6 +218,17 @@ class User(Base):
     assigned_contract_ids = Column(JSONB, default=list)  # array of contract UUIDs for konsultan/kontraktor
 
     is_active = Column(Boolean, default=True)
+
+    # Force user to change password on next login.
+    # Set to True when admin creates/resets the account or when a user entity
+    # (PPK/Company) is auto-provisioned with the default password.
+    must_change_password = Column(Boolean, default=False, nullable=False)
+
+    # Marks users that were auto-generated from a PPK / Company creation event,
+    # so the UI can label them and the admin can see who was provisioned vs
+    # created manually.
+    auto_provisioned = Column(Boolean, default=False, nullable=False)
+
     last_login_at = Column(DateTime)
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -239,10 +270,23 @@ class Company(Base):
     contact_person = Column(String(255))
     phone = Column(String(30))
     email = Column(String(255))
+
+    # Typing: distinguishes kontraktor from konsultan so we can assign
+    # the right role automatically when we auto-create a user.
+    # Values: "contractor" | "consultant" | "supplier"
+    company_type = Column(String(30), default="contractor", nullable=False, index=True)
+
+    # 1:1 link to the auto-generated user account.
+    # Nullable because (a) existing rows predate auto-provisioning and
+    # (b) not every company needs a login (e.g. suppliers).
+    default_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     deleted_at = Column(DateTime)
+
+    default_user = relationship("User", foreign_keys=[default_user_id], post_update=True)
 
 
 class PPK(Base):
@@ -255,10 +299,37 @@ class PPK(Base):
     whatsapp_number = Column(String(30))
     email = Column(String(255))
     satker = Column(String(255))
+
+    # 1:1 link to the auto-generated user account for this PPK.
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, unique=True)
+
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     deleted_at = Column(DateTime)
+
+    user = relationship("User", foreign_keys=[user_id], post_update=True)
+
+
+class MasterFacility(Base):
+    """Catalog of standard facility types used across KNMP contracts.
+
+    Facilities inside a Contract -> Location should be picked from this
+    catalog (Gudang Beku, Pabrik Es, Cool Box, Tambatan Perahu, etc.)
+    instead of being typed as free text by the admin. This makes reporting,
+    benchmarking and BOQ-import mapping consistent across sites.
+    """
+    __tablename__ = "master_facilities"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code = Column(String(40), unique=True, nullable=False, index=True)  # "GUDANG_BEKU"
+    name = Column(String(200), nullable=False)                          # "Gudang Beku"
+    facility_type = Column(String(60), nullable=False)                  # "perikanan" / "utilitas" / ...
+    typical_unit = Column(String(20))                                   # "unit", "m²"
+    description = Column(Text)
+    display_order = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class MasterWorkCode(Base):
@@ -285,7 +356,10 @@ class Contract(Base):
     contract_name = Column(String(500), nullable=False)
     company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id"), nullable=False)
     ppk_id = Column(UUID(as_uuid=True), ForeignKey("ppk.id"), nullable=False)
-    konsultan_id = Column(UUID(as_uuid=True), ForeignKey("companies.id"))  # MK / supervisor
+    # DEPRECATED as source of truth: konsultan is now assigned per-location
+    # via Location.konsultan_id. This column remains as a contract-wide default
+    # / fallback for legacy rows and will be phased out of write paths.
+    konsultan_id = Column(UUID(as_uuid=True), ForeignKey("companies.id"))
 
     fiscal_year = Column(Integer, nullable=False)
     original_value = Column(Numeric(18, 2), nullable=False)
@@ -304,6 +378,14 @@ class Contract(Base):
     daily_report_required = Column(Boolean, default=True)
 
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+
+    # Activation tracking. A contract stays DRAFT until explicitly activated
+    # (requires: locations, facilities, an APPROVED CCO-0 BOQ revision, and
+    # total BOQ value <= contract value). Nullable because DRAFT contracts
+    # have never been activated.
+    activated_at = Column(DateTime, nullable=True)
+    activated_by_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     deleted_at = Column(DateTime)
@@ -356,15 +438,24 @@ class Location(Base):
     province = Column(String(255))
     latitude = Column(Numeric(10, 7))
     longitude = Column(Numeric(10, 7))
+
+    # One location = one supervising consultant (MK). This supersedes the
+    # contract-level konsultan_id, which is kept only for backward compat.
+    # Report-visibility queries for the "konsultan" role MUST filter on this,
+    # not on contracts.konsultan_id.
+    konsultan_id = Column(UUID(as_uuid=True), ForeignKey("companies.id"), nullable=True)
+
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     contract = relationship("Contract", back_populates="locations")
     facilities = relationship("Facility", back_populates="location", cascade="all, delete-orphan")
+    konsultan = relationship("Company", foreign_keys=[konsultan_id])
 
     __table_args__ = (
         UniqueConstraint("contract_id", "location_code", name="uq_location_code_per_contract"),
+        Index("idx_location_konsultan", "konsultan_id"),
     )
 
 
@@ -372,6 +463,12 @@ class Facility(Base):
     __tablename__ = "facilities"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     location_id = Column(UUID(as_uuid=True), ForeignKey("locations.id", ondelete="CASCADE"), nullable=False)
+
+    # NEW: pick from master catalog instead of free text.
+    # Nullable to preserve backward compat with existing rows; the API
+    # creation path will require it going forward.
+    master_facility_id = Column(UUID(as_uuid=True), ForeignKey("master_facilities.id"), nullable=True)
+
     facility_code = Column(String(50), nullable=False)  # e.g. "6.GudangBeku"
     facility_type = Column(String(100))  # "gudang_beku", etc.
     facility_name = Column(String(500), nullable=False)
@@ -382,14 +479,89 @@ class Facility(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     location = relationship("Location", back_populates="facilities")
+    master_facility = relationship("MasterFacility")
     boq_items = relationship("BOQItem", back_populates="facility", cascade="all, delete-orphan")
+
+
+class BOQRevision(Base):
+    """A BOQ "version" tied to the original contract or a specific addendum/CCO.
+
+    Rules enforced at the application layer (and one partial unique index):
+      * CCO-0 is auto-created for every contract and represents the original,
+        signed BOQ. It carries `addendum_id = NULL`.
+      * Every approved ContractAddendum whose type touches BOQ (cco,
+        value_change, combined) spawns a new BOQRevision (CCO-1, CCO-2, ...).
+      * Exactly one revision per contract has `is_active=True`. When a new
+        CCO is approved, the previous active one flips to SUPERSEDED and
+        `is_active=False`.
+      * Weekly progress items point at BOQItem.id. When a revision is cloned,
+        items cloned with change_type=UNCHANGED carry a `source_item_id`
+        pointer so the progress_service can migrate accumulated progress
+        from the old item to the new one without data loss.
+    """
+    __tablename__ = "boq_revisions"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    contract_id = Column(UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="CASCADE"), nullable=False)
+
+    # NULL for CCO-0 (original BOQ); non-null for CCO-N revisions that
+    # originate from a formal addendum document.
+    addendum_id = Column(UUID(as_uuid=True), ForeignKey("contract_addenda.id", ondelete="SET NULL"), nullable=True)
+
+    cco_number = Column(Integer, nullable=False)      # 0, 1, 2, ...
+    revision_code = Column(String(20), nullable=False)  # "CCO-0", "CCO-1"
+    name = Column(String(255))                          # optional human label
+    description = Column(Text)
+
+    status = Column(Enum(RevisionStatus), default=RevisionStatus.DRAFT, nullable=False)
+    is_active = Column(Boolean, default=False, nullable=False)
+
+    total_value = Column(Numeric(18, 2), default=0)    # sum of leaf total_prices
+    item_count = Column(Integer, default=0)
+
+    approved_at = Column(DateTime, nullable=True)
+    approved_by_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    contract = relationship("Contract", foreign_keys=[contract_id])
+    addendum = relationship("ContractAddendum", foreign_keys=[addendum_id])
+    items = relationship("BOQItem", back_populates="revision", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint("contract_id", "cco_number", name="uq_revision_cco_per_contract"),
+        Index("idx_revision_contract_active", "contract_id", "is_active"),
+        # DB-level guarantee that at most one revision per contract is active.
+        Index(
+            "uq_one_active_revision_per_contract",
+            "contract_id",
+            unique=True,
+            postgresql_where=text("is_active = TRUE"),
+        ),
+    )
 
 
 class BOQItem(Base):
     __tablename__ = "boq_items"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    # NEW: item belongs to a specific BOQ revision (CCO-0, CCO-1, ...).
+    # Nullable during migration only; the data-fix step in seed.py assigns
+    # every pre-existing row to a synthesized CCO-0 revision before
+    # anything else runs.
+    boq_revision_id = Column(UUID(as_uuid=True), ForeignKey("boq_revisions.id", ondelete="CASCADE"), nullable=True)
+
     facility_id = Column(UUID(as_uuid=True), ForeignKey("facilities.id", ondelete="CASCADE"), nullable=False)
     master_work_code = Column(String(50), ForeignKey("master_work_codes.code"), nullable=True)
+
+    # Cross-revision traceability. When a revision is cloned, each cloned
+    # item points to its predecessor here so the frontend can diff CCO-N
+    # against CCO-(N-1) without a separate "diff" computation.
+    # NULL means: this item was newly added in this revision (or it is
+    # itself in CCO-0 and has no predecessor).
+    source_item_id = Column(UUID(as_uuid=True), ForeignKey("boq_items.id", ondelete="SET NULL"), nullable=True)
+    change_type = Column(Enum(BOQChangeType), nullable=True)
 
     # hierarchy
     parent_id = Column(UUID(as_uuid=True), ForeignKey("boq_items.id"))
@@ -409,22 +581,30 @@ class BOQItem(Base):
     planned_duration_weeks = Column(Integer)
     planned_end_week = Column(Integer)
 
+    # DEPRECATED but kept for backward compat with older rows and
+    # existing service-layer code. New writes should rely on
+    # BOQRevision.cco_number / revision_code instead of these flags.
     version = Column(Integer, default=1)
     is_active = Column(Boolean, default=True)
     is_addendum_item = Column(Boolean, default=False)
+
     is_leaf = Column(Boolean, default=True)  # only leaf items are entered in progress
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    revision = relationship("BOQRevision", back_populates="items", foreign_keys=[boq_revision_id])
     facility = relationship("Facility", back_populates="boq_items")
-    parent = relationship("BOQItem", remote_side=[id])
+    parent = relationship("BOQItem", remote_side=[id], foreign_keys=[parent_id])
+    source_item = relationship("BOQItem", remote_side=[id], foreign_keys=[source_item_id])
     versions = relationship("BOQItemVersion", back_populates="boq_item", cascade="all, delete-orphan")
     progress_entries = relationship("WeeklyProgressItem", back_populates="boq_item")
 
     __table_args__ = (
         Index("idx_boq_facility_active", "facility_id", "is_active"),
         Index("idx_boq_parent", "parent_id"),
+        Index("idx_boq_revision", "boq_revision_id"),
+        Index("idx_boq_source", "source_item_id"),
     )
 
 

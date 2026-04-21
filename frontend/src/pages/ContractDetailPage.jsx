@@ -16,6 +16,8 @@ import {
 } from "../utils/format";
 import BOQGrid from "../components/grids/BOQGrid";
 import BOQImportWizard from "../components/modals/BOQImportWizard";
+import EditContractModal from "../components/modals/EditContractModal";
+import ContractActivationPanel from "../components/ContractActivationPanel";
 
 export default function ContractDetailPage() {
   const { id } = useParams();
@@ -31,6 +33,7 @@ export default function ContractDetailPage() {
   const [boqLocation, setBoqLocation] = useState(null);
   const [showImport, setShowImport] = useState(false);
   const [confirmDel, setConfirmDel] = useState(null);
+  const [showEdit, setShowEdit] = useState(false);
 
   useEffect(() => {
     load();
@@ -87,6 +90,8 @@ export default function ContractDetailPage() {
   const tabs = [
     { id: "overview", label: "Ringkasan" },
     { id: "locations", label: "Lokasi & Fasilitas", count: contract.locations?.length },
+    { id: "rollup", label: "Rekap BOQ Lokasi" },
+    { id: "revisions", label: "CCO Revisions" },
     { id: "addenda", label: "Addendum", count: contract.addenda?.length },
     ...(boqFacility ? [{ id: "boq", label: `BOQ: ${boqFacility.facility_name}` }] : []),
   ];
@@ -118,7 +123,14 @@ export default function ContractDetailPage() {
               {contract.contract_number}
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
+            <button
+              className="btn-secondary"
+              onClick={() => setShowEdit(true)}
+              title="Edit detail kontrak"
+            >
+              <Edit2 size={14} /> Edit
+            </button>
             <button
               className="btn-secondary"
               onClick={() => navigate(`/scurve?contract=${id}`)}
@@ -132,6 +144,11 @@ export default function ContractDetailPage() {
               <Plus size={14} /> Addendum
             </button>
           </div>
+        </div>
+
+        {/* Activation panel — renders only for DRAFT / ACTIVE / ADDENDUM */}
+        <div className="mt-5">
+          <ContractActivationPanel contract={contract} onChange={load} />
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6 pt-5 border-t border-ink-100">
@@ -273,6 +290,16 @@ export default function ContractDetailPage() {
         </div>
       )}
 
+      {/* Rekap BOQ Lokasi (catatan #9c) */}
+      {tab === "rollup" && (
+        <LocationRollupPanel contract={contract} />
+      )}
+
+      {/* CCO Revisions */}
+      {tab === "revisions" && (
+        <RevisionsPanel contract={contract} onChange={load} />
+      )}
+
       {/* Addenda */}
       {tab === "addenda" && (
         <div>
@@ -390,6 +417,15 @@ export default function ContractDetailPage() {
           if (confirmDel.type === "loc") await deleteLocation(confirmDel.loc);
           else await deleteFacility(confirmDel.fac);
           setConfirmDel(null);
+        }}
+      />
+      <EditContractModal
+        open={showEdit}
+        contract={contract}
+        onClose={() => setShowEdit(false)}
+        onSuccess={() => {
+          setShowEdit(false);
+          load();
         }}
       />
     </div>
@@ -923,6 +959,389 @@ function AddAddendumModal({ open, onClose, contract, onSuccess }) {
           />
         </div>
       </div>
+    </Modal>
+  );
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// Location Rollup Panel — consolidated BOQ view across all facilities
+// at a location (catatan #9c)
+// ════════════════════════════════════════════════════════════════════════════
+
+function LocationRollupPanel({ contract }) {
+  const [locationId, setLocationId] = useState(
+    contract.locations?.[0]?.id || ""
+  );
+  const [rollup, setRollup] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!locationId) return;
+    setLoading(true);
+    boqAPI
+      .locationRollup(locationId)
+      .then(({ data }) => setRollup(data))
+      .catch((e) => toast.error(parseApiError(e)))
+      .finally(() => setLoading(false));
+  }, [locationId]);
+
+  if (!contract.locations?.length) {
+    return (
+      <Empty
+        icon={MapPin}
+        title="Belum ada lokasi"
+        description="Tambah lokasi dan fasilitas terlebih dahulu di tab Lokasi & Fasilitas."
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="card p-4 flex items-center gap-3 flex-wrap">
+        <label className="text-xs text-ink-600 font-medium">Pilih Lokasi:</label>
+        <select
+          value={locationId}
+          onChange={(e) => setLocationId(e.target.value)}
+          className="select max-w-md"
+        >
+          {contract.locations.map((loc) => (
+            <option key={loc.id} value={loc.id}>
+              [{loc.location_code}] {loc.name}
+            </option>
+          ))}
+        </select>
+        {rollup && (
+          <div className="ml-auto text-xs text-ink-500">
+            {rollup.groups.length} fasilitas · {rollup.total_leaves} item leaf ·{" "}
+            <span className="font-semibold text-ink-800">
+              Total: {fmtCurrency(rollup.grand_total)}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {loading ? (
+        <PageLoader />
+      ) : !rollup ? null : rollup.groups.length === 0 ? (
+        <Empty
+          icon={Layers}
+          title="Belum ada fasilitas di lokasi ini"
+        />
+      ) : (
+        <div className="space-y-4">
+          {rollup.groups.map((g) => (
+            <div key={g.facility.id} className="card overflow-hidden">
+              <div className="px-5 py-3 bg-ink-50 border-b border-ink-200 flex items-center justify-between">
+                <div>
+                  <p className="font-mono text-[11px] text-brand-600">
+                    {g.facility.facility_code}
+                  </p>
+                  <p className="font-display font-semibold text-ink-900 text-sm">
+                    {g.facility.facility_name}
+                  </p>
+                </div>
+                <div className="text-right text-xs">
+                  <p className="text-ink-500">
+                    {g.item_count} item · {g.leaf_count} leaf
+                  </p>
+                  <p className="font-semibold text-ink-800">
+                    {fmtCurrency(g.facility_total)}
+                  </p>
+                </div>
+              </div>
+              {g.items.length === 0 ? (
+                <div className="px-5 py-4 text-xs text-ink-500">
+                  Fasilitas ini belum memiliki item BOQ.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr>
+                        <th className="table-th">Kode</th>
+                        <th className="table-th">Uraian</th>
+                        <th className="table-th">Satuan</th>
+                        <th className="table-th text-right">Volume</th>
+                        <th className="table-th text-right">Harga</th>
+                        <th className="table-th text-right">Total</th>
+                        <th className="table-th text-right">Bobot %</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {g.items.map((it) => (
+                        <tr key={it.id}>
+                          <td
+                            className="table-td font-mono text-[11px]"
+                            style={{ paddingLeft: 12 + (it.level || 0) * 14 }}
+                          >
+                            {it.original_code}
+                          </td>
+                          <td
+                            className="table-td"
+                            style={{
+                              fontWeight: (it.level ?? 0) <= 1 ? 600 : 400,
+                            }}
+                          >
+                            {it.description}
+                          </td>
+                          <td className="table-td text-xs">{it.unit}</td>
+                          <td className="table-td text-right text-xs font-mono">
+                            {fmtNum(it.volume, 2)}
+                          </td>
+                          <td className="table-td text-right text-xs font-mono">
+                            {fmtNum(it.unit_price, 0)}
+                          </td>
+                          <td className="table-td text-right text-xs font-mono font-semibold">
+                            {fmtNum(it.total_price, 0)}
+                          </td>
+                          <td className="table-td text-right text-[11px] text-ink-500">
+                            {((it.weight_pct || 0) * 100).toFixed(3)}%
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// Revisions Panel — list BOQ revisions (CCO), show status, approve drafts
+// ════════════════════════════════════════════════════════════════════════════
+
+function RevisionsPanel({ contract, onChange }) {
+  const [revisions, setRevisions] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [approving, setApproving] = useState(null);
+  const [diffFor, setDiffFor] = useState(null);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const { data } = await boqAPI.listRevisions(contract.id);
+      setRevisions(data || []);
+    } catch (e) {
+      toast.error(parseApiError(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, [contract.id]);
+
+  const approve = async (rev) => {
+    if (
+      !confirm(
+        `Approve ${rev.revision_code}?\n\n` +
+          `Revisi lama akan di-set SUPERSEDED dan progres existing akan di-migrate otomatis.`
+      )
+    )
+      return;
+    setApproving(rev.id);
+    try {
+      await boqAPI.approveRevision(rev.id);
+      toast.success(`${rev.revision_code} disetujui & aktif`);
+      await load();
+      onChange?.();
+    } catch (e) {
+      toast.error(parseApiError(e));
+    } finally {
+      setApproving(null);
+    }
+  };
+
+  if (loading) return <PageLoader />;
+
+  if (revisions.length === 0) {
+    return (
+      <Empty
+        icon={FileText}
+        title="Belum ada BOQ Revision"
+        description="CCO-0 otomatis dibuat saat kontrak di-create. Coba refresh atau cek data kontrak."
+      />
+    );
+  }
+
+  return (
+    <>
+      <div className="space-y-3">
+        {revisions.map((r) => (
+          <div key={r.id} className="card p-5">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap mb-1">
+                  <span className="font-display font-semibold text-ink-900">
+                    {r.revision_code}
+                  </span>
+                  {r.is_active && (
+                    <span className="badge-green">Aktif</span>
+                  )}
+                  {r.status === "draft" && (
+                    <span className="badge-yellow">Draft</span>
+                  )}
+                  {r.status === "approved" && !r.is_active && (
+                    <span className="badge-gray">Approved (lama)</span>
+                  )}
+                  {r.status === "superseded" && (
+                    <span className="badge-gray">Superseded</span>
+                  )}
+                </div>
+                {r.name && (
+                  <p className="text-sm text-ink-700">{r.name}</p>
+                )}
+                {r.description && (
+                  <p className="text-xs text-ink-500 mt-1 line-clamp-2">
+                    {r.description}
+                  </p>
+                )}
+                <p className="text-[11px] text-ink-400 mt-2">
+                  {r.item_count} item · Total {fmtCurrency(r.total_value)}
+                  {r.approved_at && ` · Approved ${fmtDate(r.approved_at)}`}
+                </p>
+              </div>
+              <div className="flex gap-2 flex-shrink-0">
+                {r.cco_number > 0 && (
+                  <button
+                    className="btn-ghost btn-xs"
+                    onClick={() => setDiffFor(r)}
+                    title="Bandingkan dengan revisi sebelumnya"
+                  >
+                    Compare
+                  </button>
+                )}
+                {r.status === "draft" && (
+                  <button
+                    className="btn-primary btn-xs"
+                    onClick={() => approve(r)}
+                    disabled={approving === r.id}
+                  >
+                    {approving === r.id ? <Spinner size={11} /> : null} Approve
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {diffFor && (
+        <RevisionDiffModal
+          revision={diffFor}
+          onClose={() => setDiffFor(null)}
+        />
+      )}
+    </>
+  );
+}
+
+
+function RevisionDiffModal({ revision, onClose }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    boqAPI
+      .diffRevision(revision.id)
+      .then(({ data }) => setRows(data || []))
+      .catch((e) => toast.error(parseApiError(e)))
+      .finally(() => setLoading(false));
+  }, [revision.id]);
+
+  const changeBadge = (ct) =>
+    ct === "added"
+      ? "badge-green"
+      : ct === "removed"
+      ? "badge-red"
+      : ct === "modified"
+      ? "badge-yellow"
+      : "badge-gray";
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`Diff: ${revision.revision_code} vs Revisi Sebelumnya`}
+      size="xl"
+      footer={
+        <button className="btn-secondary" onClick={onClose}>
+          Tutup
+        </button>
+      }
+    >
+      {loading ? (
+        <PageLoader />
+      ) : rows.length === 0 ? (
+        <Empty
+          title="Tidak ada item untuk dibandingkan"
+          description="Revisi kosong atau tidak punya pendahulu."
+        />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr>
+                <th className="table-th">Change</th>
+                <th className="table-th">Uraian</th>
+                <th className="table-th text-right">Vol Lama</th>
+                <th className="table-th text-right">Vol Baru</th>
+                <th className="table-th text-right">Harga Lama</th>
+                <th className="table-th text-right">Harga Baru</th>
+                <th className="table-th text-right">Δ Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i}>
+                  <td className="table-td">
+                    <span className={changeBadge(r.change_type)}>
+                      {r.change_type || "-"}
+                    </span>
+                  </td>
+                  <td className="table-td">{r.description}</td>
+                  <td className="table-td text-right font-mono">
+                    {r.old_volume != null ? fmtNum(r.old_volume, 2) : "—"}
+                  </td>
+                  <td className="table-td text-right font-mono">
+                    {fmtNum(r.new_volume, 2)}
+                  </td>
+                  <td className="table-td text-right font-mono">
+                    {r.old_unit_price != null
+                      ? fmtNum(r.old_unit_price, 0)
+                      : "—"}
+                  </td>
+                  <td className="table-td text-right font-mono">
+                    {fmtNum(r.new_unit_price, 0)}
+                  </td>
+                  <td
+                    className={`table-td text-right font-mono font-semibold ${
+                      r.delta_total > 0
+                        ? "text-emerald-700"
+                        : r.delta_total < 0
+                        ? "text-red-700"
+                        : "text-ink-500"
+                    }`}
+                  >
+                    {r.delta_total === 0
+                      ? "0"
+                      : (r.delta_total > 0 ? "+" : "") +
+                        fmtNum(r.delta_total, 0)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </Modal>
   );
 }

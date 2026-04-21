@@ -98,8 +98,17 @@ def create_daily(
 ):
     if not user_can_access_contract(db, current_user, str(data.contract_id)):
         raise HTTPException(403, "Akses ditolak")
-    if not db.query(Contract).filter(Contract.id == data.contract_id).first():
+    c = db.query(Contract).filter(Contract.id == data.contract_id).first()
+    if not c:
         raise HTTPException(404, "Kontrak tidak ditemukan")
+
+    # Status gate. DRAFT allowed (catatan #6); completed/terminated blocked.
+    status_value = c.status.value if hasattr(c.status, "value") else str(c.status)
+    if status_value in ("completed", "terminated"):
+        raise HTTPException(
+            400,
+            f"Kontrak berstatus '{status_value}' tidak menerima laporan baru.",
+        )
 
     r = DailyReport(
         contract_id=data.contract_id,

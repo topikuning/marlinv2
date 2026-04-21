@@ -10,6 +10,7 @@ from app.core.security import get_password_hash
 from app.models.models import (
     Role, Permission, RolePermission, MenuItem, RoleMenu, User,
     MasterWorkCode, WorkCategory, NotificationRule, NotificationChannel,
+    MasterFacility, Contract,
 )
 
 
@@ -167,6 +168,45 @@ MASTER_WORK_CODES = [
     ("KHS-DPT",         WorkCategory.KHUSUS,       "Struktur",    "Dinding Penahan Tanah",           "m³"),
     ("KHS-IPAL",        WorkCategory.KHUSUS,       "Sanitasi",    "IPAL (Instalasi Pengolahan Air Limbah)", "unit"),
 ]
+
+
+# Master catalog of facility types observed across KNMP BOQ files
+# (Ampean, Nisombalia, Tanete, Malang). The `display_order` follows the
+# numbering convention used in the original BOQ sheets so the UI can
+# show facilities in the same order field engineers are used to.
+# Format: (code, name, facility_type, typical_unit, display_order, description)
+MASTER_FACILITIES = [
+    ("PERSIAPAN",        "Persiapan",                        "umum",       "ls",   1,  "Mobilisasi, direksi keet, papan nama, uitzet"),
+    ("REVETMEN",         "Revetmen",                         "perikanan",  "m³",   2,  "Revetmen / pengaman pantai"),
+    ("TAMBATAN_PERAHU",  "Tambatan Perahu",                  "perikanan",  "m",    3,  "Tambatan & sandar perahu nelayan"),
+    ("DPT",              "Dinding Penahan Tanah (DPT)",      "struktur",   "m³",   4,  "DPT / retaining wall"),
+    ("PENDARATAN_IKAN",  "Tangga Pendaratan Ikan",           "perikanan",  "unit", 5,  "Tangga pendaratan ikan"),
+    ("GUDANG_BEKU",      "Gudang Beku Portable",             "perikanan",  "unit", 6,  "Gudang beku portable / cold storage"),
+    ("PABRIK_ES",        "Pabrik Es",                        "perikanan",  "unit", 7,  "Pabrik es mini"),
+    ("AREA_PARKIR",      "Area Parkir",                      "utilitas",   "m²",   8,  "Area parkir kendaraan"),
+    ("COOL_BOX",         "Cool Box",                         "perikanan",  "unit", 9,  "Kotak pendingin hasil tangkapan"),
+    ("KIOS",             "Kios",                             "utilitas",   "unit", 10, "Kios pedagang"),
+    ("BENGKEL",          "Bengkel",                          "utilitas",   "unit", 11, "Bengkel alat tangkap / mesin"),
+    ("KANTOR",           "Kantor",                           "utilitas",   "unit", 12, "Kantor pengelola kampung nelayan"),
+    ("TOILET",           "Toilet Umum",                      "sanitasi",   "unit", 13, "Toilet umum"),
+    ("TANGKI",           "Tangki Air",                       "utilitas",   "unit", 14, "Tangki air bersih"),
+    ("PENERANGAN",       "Penerangan Kawasan",               "utilitas",   "ls",   15, "Lampu jalan & penerangan kawasan"),
+    ("TPS",              "TPS (Tempat Pembuangan Sampah)",   "sanitasi",   "unit", 16, "Tempat pembuangan sampah sementara"),
+    ("GENSET",           "Genset / Rumah Genset",            "utilitas",   "unit", 17, "Generator set & rumah genset"),
+    ("SALURAN_JALAN",    "Saluran & Jalan",                  "sitework",   "m",    18, "Drainase, saluran air, jalan kawasan"),
+    ("GAPURA",           "Gapura",                           "sitework",   "unit", 19, "Gapura / gerbang kawasan"),
+    ("POS_JAGA",         "Pos Jaga",                         "utilitas",   "unit", 20, "Pos jaga keamanan"),
+    ("LEVELLING",        "Leveling",                         "sitework",   "m²",   21, "Leveling / urugan tanah"),
+    ("DOCKING",          "Docking Kapal",                    "perikanan",  "unit", 22, "Tempat perbaikan kapal"),
+    ("PAGAR",            "Pagar Kawasan",                    "sitework",   "m",    23, "Pagar kawasan"),
+    ("SHELTER_JARING",   "Shelter Jaring",                   "perikanan",  "unit", 24, "Tempat simpan & perbaikan jaring"),
+    ("SENKUL_R",         "Sentra Kuliner",                   "utilitas",   "unit", 26, "Sentra kuliner / R"),
+    ("BALAI",            "Balai Pertemuan",                  "utilitas",   "unit", 27, "Balai pertemuan nelayan"),
+    ("PASAR_IKAN",       "Pasar Ikan",                       "perikanan",  "unit", 28, "Pasar ikan"),
+    ("IPAL",             "IPAL",                             "sanitasi",   "unit", 29, "Instalasi Pengolahan Air Limbah"),
+    ("TURAP",            "Turap",                            "perikanan",  "m",    30, "Turap pantai"),
+]
+
 
 NOTIFICATION_RULES = [
     {
@@ -386,6 +426,46 @@ def seed():
                 db.add(NotificationRule(**rule))
                 created_rules += 1
         print(f"  ✓ Notification rules: +{created_rules}")
+
+        # Master Facilities (new in v2.1) — pick-list for Facility dropdown.
+        # Derived from the real BOQ files (Ampean, Nisombalia, Tanete, Malang);
+        # you can extend this list via the Master Data UI.
+        created_facilities = 0
+        for code, name, ftype, unit, order, desc in MASTER_FACILITIES:
+            existing = db.query(MasterFacility).filter(MasterFacility.code == code).first()
+            if not existing:
+                db.add(MasterFacility(
+                    code=code,
+                    name=name,
+                    facility_type=ftype,
+                    typical_unit=unit,
+                    display_order=order,
+                    description=desc,
+                    is_active=True,
+                ))
+                created_facilities += 1
+        print(f"  ✓ Master facilities: +{created_facilities}")
+
+        db.flush()
+
+        # ── Data-fix step: CCO-0 bootstrap for existing contracts ─────────
+        # Runs only if there are Contracts that don't yet have a BOQRevision.
+        # Idempotent: safe to re-run. This makes the CCO versioning work
+        # transparently for upgrades from v2.0 -> v2.1.
+        from app.services import boq_revision_service
+        contracts = db.query(Contract).filter(Contract.deleted_at.is_(None)).all()
+        migrated = 0
+        for c in contracts:
+            # auto_approve=True only when contract is already ACTIVE — those
+            # contracts already have production BOQ that should be treated
+            # as a signed-off CCO-0.
+            status_val = c.status.value if hasattr(c.status, "value") else str(c.status)
+            auto_approve = status_val in ("active", "addendum", "completed")
+            rev = boq_revision_service.ensure_cco_zero(
+                db, c, auto_approve=auto_approve,
+            )
+            migrated += 1
+        print(f"  ✓ BOQ CCO-0 revisions ensured for {migrated} contract(s)")
 
         db.commit()
         print("\n✓ Seed complete.")
