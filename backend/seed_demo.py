@@ -472,7 +472,14 @@ def run():
             )
             db.add(rev); db.flush()
 
-            # Lokasi
+            # Lokasi — kumpulkan semua BOQ items di scope KONTRAK agar bobot
+            # bisa dihitung lintas-lokasi (jumlah bobot semua leaf = 100% per
+            # kontrak). Weekly reports dibuat SEKALI per kontrak, BUKAN per
+            # lokasi (karena contract_id+week_number unik, pernah bikin dua
+            # kali untuk lokasi ke-2 akan bentrok unique constraint).
+            contract_all_items = []  # lintas semua lokasi di kontrak ini
+            contract_all_facs  = []
+
             for loc_idx, loc_data in enumerate(cfg["lokasi"]):
                 code, name, vill, dist, city, prov, lat, lon = loc_data
                 profile = cfg["fac_profiles"][loc_idx]
@@ -490,12 +497,8 @@ def run():
                 db.add(loc); db.flush()
                 total_lokasi += 1
 
-                # Fasilitas + BOQ
-                fac_list = FAC_TEMPLATE[profile]
-                all_items = []
-                facs = []
-
-                for fac_code, fac_name, fac_type, fac_order in fac_list:
+                # Fasilitas + BOQ per lokasi
+                for fac_code, fac_name, fac_type, fac_order in FAC_TEMPLATE[profile]:
                     fac = Facility(
                         location_id=loc.id,
                         facility_code=fac_code, facility_name=fac_name,
@@ -503,10 +506,9 @@ def run():
                         is_active=True,
                     )
                     db.add(fac); db.flush()
-                    facs.append(fac)
+                    contract_all_facs.append(fac)
 
                     items_def = BOQ_TEMPLATE.get(fac_name, BOQ_TEMPLATE["Saluran & Jalan"])
-                    fac_items = []
                     for order_i, (desc, unit, vol, up, level, is_leaf) in enumerate(items_def):
                         item = BOQItem(
                             boq_revision_id=rev.id,
@@ -514,7 +516,7 @@ def run():
                             original_code=f"{fac_code}.{order_i+1}",
                             full_code=f"{fac_code}.{order_i+1}",
                             level=level,
-                            display_order=len(all_items) + order_i,
+                            display_order=len(contract_all_items) + order_i,
                             description=desc.strip(),
                             unit=unit,
                             volume=Decimal(str(vol)),
@@ -523,47 +525,42 @@ def run():
                             is_leaf=is_leaf, is_active=True,
                         )
                         db.add(item); db.flush()
-                        fac_items.append(item)
-                    all_items.extend(fac_items)
+                        contract_all_items.append(item)
 
-                # Hitung bobot leaf items
-                leaf_items = [it for it in all_items if it.is_leaf]
-                leaf_total = sum(it.volume * it.unit_price for it in leaf_items)
-                for it in leaf_items:
-                    it.weight_pct = (
-                        (it.volume * it.unit_price) / leaf_total
-                        if leaf_total > 0 else Decimal("0")
-                    )
+            # ── Hitung bobot leaf items CONTRACT-WIDE ─────────────────────────
+            leaf_items  = [it for it in contract_all_items if it.is_leaf]
+            leaf_total  = sum(it.volume * it.unit_price for it in leaf_items)
+            for it in leaf_items:
+                it.weight_pct = (
+                    (it.volume * it.unit_price) / leaf_total
+                    if leaf_total > 0 else Decimal("0")
+                )
 
-                # Update facility totals
-                for fac in facs:
-                    fac.total_value = sum(
-                        it.volume * it.unit_price
-                        for it in all_items
-                        if it.facility_id == fac.id and it.is_leaf
-                    )
+            # Update facility totals (sum of leaf items per facility)
+            facility_totals = {}
+            for it in leaf_items:
+                facility_totals[it.facility_id] = (
+                    facility_totals.get(it.facility_id, Decimal("0"))
+                    + (it.volume * it.unit_price)
+                )
+            for fac in contract_all_facs:
+                fac.total_value = facility_totals.get(fac.id, Decimal("0"))
 
-                rev.total_value = (rev.total_value or Decimal("0")) + leaf_total
-                rev.item_count  = (rev.item_count or 0) + len(all_items)
-                total_boq += len(all_items)
+            rev.total_value = leaf_total
+            rev.item_count  = len(contract_all_items)
+            total_boq += len(contract_all_items)
 
-                # Weekly reports (hanya untuk kontrak aktif, per lokasi)
-                if not is_active or cfg["current_week"] == 0:
-                    continue
+            db.flush()
 
+            # ── Weekly reports: SEKALI per kontrak ────────────────────────────
+            if is_active and cfg["current_week"] > 0:
                 for week in range(1, cfg["current_week"] + 1):
-                    plan = Decimal(str(round(planned_pct(week, cfg["total_weeks"]), 6)))
-                    plan_prev = Decimal(str(round(
-                        planned_pct(week - 1, cfg["total_weeks"]), 6
-                    )))
-                    act = Decimal(str(round(
-                        actual_pct(week, cfg["total_weeks"], cfg["profil"]), 6
-                    )))
-                    act_prev = Decimal(str(round(
-                        actual_pct(week - 1, cfg["total_weeks"], cfg["profil"]), 6
-                    )))
-                    dev  = act - plan
-                    spi  = (act / plan) if plan > 0 else Decimal("1")
+                    plan      = Decimal(str(round(planned_pct(week, cfg["total_weeks"]), 6)))
+                    plan_prev = Decimal(str(round(planned_pct(week - 1, cfg["total_weeks"]), 6)))
+                    act       = Decimal(str(round(actual_pct(week, cfg["total_weeks"], cfg["profil"]), 6)))
+                    act_prev  = Decimal(str(round(actual_pct(week - 1, cfg["total_weeks"], cfg["profil"]), 6)))
+                    dev       = act - plan
+                    spi       = (act / plan) if plan > 0 else Decimal("1")
 
                     period_start = start_date + timedelta(weeks=week - 1)
                     period_end   = period_start + timedelta(days=6)
@@ -601,7 +598,7 @@ def run():
                     db.add(report); db.flush()
                     total_weekly += 1
 
-                    # Progress items (hanya minggu terakhir agar tidak terlalu besar)
+                    # Progress items hanya pada minggu terakhir
                     if week == cfg["current_week"]:
                         for item in leaf_items:
                             vol_cum = float(item.volume) * float(act)
