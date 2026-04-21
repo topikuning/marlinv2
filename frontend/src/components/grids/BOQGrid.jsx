@@ -1,203 +1,129 @@
 import { useMemo, useRef, useState, useCallback } from "react";
 import { AgGridReact } from "ag-grid-react";
-import { Plus, Save, Trash2 } from "lucide-react";
+import { Plus, Save, Trash2, Tag } from "lucide-react";
 import { boqAPI } from "@/api";
 import toast from "react-hot-toast";
 import { parseApiError, fmtNum } from "@/utils/format";
 import { Spinner } from "@/components/ui";
+import BOQItemPickerModal from "@/components/modals/BOQItemPickerModal";
 
-/**
- * Editable BOQ grid for a single Facility.
- *
- * Fixes applied (catatan #9):
- *   - AUTO-CALC: total_price = volume × unit_price, always, real-time.
- *     The column is NOT editable anymore (read-only derived value) so the
- *     old "_manualTotal" escape hatch is gone. If an engineer needs a
- *     different total they have to adjust volume or unit_price — that is
- *     the honest input anyway.
- *   - DELETE BUG: row selection was not working because the grid ran with
- *     suppressRowClickSelection=true AND had no checkbox column, so there
- *     was literally no UI to select a row. Added a checkbox as the first
- *     column + header-checkbox for "select all". Delete now reads
- *     selectedNodes directly (not getSelectedRows which can silently
- *     return []).
- */
 export default function BOQGrid({ facilityId, items, onChange, readonly = false }) {
   const gridRef = useRef();
   const [saving, setSaving] = useState(false);
   const [rows, setRows] = useState(items);
   const [selectedCount, setSelectedCount] = useState(0);
+  const [showPicker, setShowPicker] = useState(false);
 
-  // Derived total always equals volume * unit_price. Called from the
-  // column's valueGetter AND from onCellValueChanged so the cached
-  // `total_price` on the row stays consistent for save payloads.
   const computeTotal = (row) => {
     const v = parseFloat(row.volume) || 0;
     const p = parseFloat(row.unit_price) || 0;
     return v * p;
   };
 
-  const columns = useMemo(
-    () => [
-      {
-        // Selection checkbox column (fixes delete bug).
-        headerName: "",
-        field: "__select",
-        width: 40,
-        pinned: "left",
-        checkboxSelection: !readonly,
-        headerCheckboxSelection: !readonly,
-        headerCheckboxSelectionFilteredOnly: true,
-        resizable: false,
-        sortable: false,
-        suppressMovable: true,
-        editable: false,
-      },
-      {
-        headerName: "Level",
-        field: "level",
-        width: 75,
-        editable: !readonly,
-        cellEditor: "agSelectCellEditor",
-        cellEditorParams: { values: [0, 1, 2, 3] },
-        cellStyle: (p) => ({
-          paddingLeft: `${8 + (p.value || 0) * 12}px`,
-          fontFamily: "JetBrains Mono",
-          color: "#64748b",
-        }),
-      },
-      {
-        headerName: "Kode",
-        field: "original_code",
-        width: 90,
-        editable: !readonly,
-        cellStyle: { fontFamily: "JetBrains Mono", fontSize: "12px" },
-      },
-      {
-        headerName: "Uraian Pekerjaan",
-        field: "description",
-        flex: 2,
-        minWidth: 260,
-        editable: !readonly,
-        cellStyle: (p) => ({
-          fontWeight: (p.data?.level ?? 0) <= 1 ? 600 : 400,
-        }),
-      },
-      { headerName: "Satuan", field: "unit", width: 80, editable: !readonly },
-      {
-        headerName: "Volume",
-        field: "volume",
-        width: 100,
-        editable: !readonly,
-        type: "numericColumn",
-        valueParser: (p) => parseFloat(p.newValue) || 0,
-        valueFormatter: (p) => fmtNum(p.value, 2),
-      },
-      {
-        headerName: "Harga Satuan",
-        field: "unit_price",
-        width: 130,
-        editable: !readonly,
-        type: "numericColumn",
-        valueParser: (p) => parseFloat(p.newValue) || 0,
-        valueFormatter: (p) => fmtNum(p.value, 0),
-      },
-      {
-        // READ-ONLY DERIVED. Always volume * unit_price, live.
-        headerName: "Total",
-        field: "total_price",
-        width: 140,
-        editable: false,
-        type: "numericColumn",
-        valueGetter: (p) => computeTotal(p.data),
-        valueFormatter: (p) => fmtNum(p.value, 0),
-        cellStyle: {
-          fontWeight: 600,
-          backgroundColor: "#f8fafc",
-          color: "#0f172a",
-        },
-      },
-      {
-        headerName: "Bobot %",
-        field: "weight_pct",
-        width: 100,
-        editable: false,
-        valueFormatter: (p) => ((p.value || 0) * 100).toFixed(3) + "%",
-        cellStyle: { color: "#64748b", fontSize: "11px" },
-      },
-      {
-        headerName: "M. Mulai",
-        field: "planned_start_week",
-        width: 90,
-        editable: !readonly,
-        type: "numericColumn",
-      },
-      {
-        headerName: "Durasi",
-        field: "planned_duration_weeks",
-        width: 90,
-        editable: !readonly,
-        type: "numericColumn",
-      },
-      {
-        headerName: "Leaf",
-        field: "is_leaf",
-        width: 70,
-        editable: !readonly,
-        cellEditor: "agCheckboxCellEditor",
-        cellRenderer: "agCheckboxCellRenderer",
-      },
-    ],
-    [readonly]
-  );
-
-  const addRow = () => {
-    const newRow = {
-      id: `new-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      facility_id: facilityId,
-      _new: true,
-      level: 2,
-      original_code: "",
-      description: "",
-      unit: "",
-      volume: 0,
-      unit_price: 0,
-      total_price: 0,
-      weight_pct: 0,
-      planned_start_week: null,
-      planned_duration_weeks: null,
-      is_leaf: true,
-    };
-    setRows((r) => [...r, newRow]);
+  // Badge: kode master (brand) atau "custom" (abu)
+  const MasterCodeRenderer = ({ value, data }) => {
+    if (value) {
+      return (
+        <span style={{
+          display:"inline-flex", alignItems:"center", gap:3,
+          padding:"1px 6px", borderRadius:4, fontSize:10,
+          fontFamily:"monospace", fontWeight:700,
+          background:"#eff6ff", color:"#1d4ed8", border:"1px solid #bfdbfe"
+        }}>
+          {value}
+        </span>
+      );
+    }
+    if (data?.description) {
+      return (
+        <span style={{
+          padding:"1px 6px", borderRadius:4, fontSize:10,
+          background:"#f1f5f9", color:"#64748b"
+        }}>
+          custom
+        </span>
+      );
+    }
+    return null;
   };
+
+  const columns = useMemo(() => [
+    {
+      headerName: "", field: "__select", width: 40, pinned: "left",
+      checkboxSelection: !readonly, headerCheckboxSelection: !readonly,
+      headerCheckboxSelectionFilteredOnly: true,
+      resizable: false, sortable: false, suppressMovable: true, editable: false,
+    },
+    {
+      headerName: "Kode Master", field: "master_work_code", width: 130,
+      editable: false, cellRenderer: MasterCodeRenderer,
+    },
+    {
+      headerName: "Level", field: "level", width: 68, editable: !readonly,
+      cellEditor: "agSelectCellEditor",
+      cellEditorParams: { values: [0, 1, 2, 3] },
+      cellStyle: { fontFamily: "monospace", color: "#64748b", fontSize: 12 },
+    },
+    {
+      headerName: "Kode Item", field: "original_code", width: 88, editable: !readonly,
+      cellStyle: { fontFamily: "monospace", fontSize: 12 },
+    },
+    {
+      headerName: "Uraian Pekerjaan", field: "description", flex: 2, minWidth: 230,
+      editable: !readonly,
+      cellStyle: (p) => ({
+        fontWeight: (p.data?.level ?? 0) <= 1 ? 600 : 400,
+        paddingLeft: `${8 + (p.data?.level ?? 0) * 10}px`,
+      }),
+    },
+    { headerName: "Satuan", field: "unit", width: 72, editable: !readonly },
+    {
+      headerName: "Volume", field: "volume", width: 90, editable: !readonly,
+      type: "numericColumn",
+      valueParser: (p) => parseFloat(p.newValue) || 0,
+      valueFormatter: (p) => fmtNum(p.value, 2),
+    },
+    {
+      headerName: "Harga Satuan", field: "unit_price", width: 122, editable: !readonly,
+      type: "numericColumn",
+      valueParser: (p) => parseFloat(p.newValue) || 0,
+      valueFormatter: (p) => fmtNum(p.value, 0),
+    },
+    {
+      headerName: "Total", field: "total_price", width: 130, editable: false,
+      type: "numericColumn",
+      valueGetter: (p) => computeTotal(p.data),
+      valueFormatter: (p) => fmtNum(p.value, 0),
+      cellStyle: { fontWeight: 600, backgroundColor: "#f8fafc", color: "#0f172a" },
+    },
+    {
+      headerName: "Bobot %", field: "weight_pct", width: 88, editable: false,
+      valueFormatter: (p) => ((p.value || 0) * 100).toFixed(3) + "%",
+      cellStyle: { color: "#64748b", fontSize: 11 },
+    },
+  ], [readonly]);
+
+  // Dipanggil oleh modal (kedua jalur: master & manual)
+  const handlePickerAdd = useCallback((newRow) => {
+    setRows((r) => [...r, newRow]);
+  }, []);
 
   const deleteSelected = useCallback(async () => {
     const api = gridRef.current?.api;
     if (!api) return;
-
-    // Read from selectedNodes so the selection truth is always accurate
-    // even mid-edit. .getSelectedRows() returns the row DATA which can be
-    // stale; selectedNodes gives us live references plus the id (handy
-    // for new-but-unsaved rows that share "new-*" ids).
     const nodes = api.getSelectedNodes();
     if (!nodes.length) {
-      toast.error(
-        "Pilih baris terlebih dahulu (centang kotak di kolom pertama)."
-      );
+      toast.error("Centang baris yang ingin dihapus terlebih dahulu.");
       return;
     }
     const selectedIds = new Set(nodes.map((n) => n.data.id));
-    const toDelete = nodes.map((n) => n.data);
-
-    if (!confirm(`Hapus ${toDelete.length} item BOQ?`)) return;
-
+    if (!confirm(`Hapus ${nodes.length} item BOQ?`)) return;
     try {
-      // Unsaved rows: just drop from local state. Saved rows: hit API.
-      for (const row of toDelete) {
-        if (!row._new) await boqAPI.remove(row.id);
+      for (const node of nodes) {
+        if (!node.data._new) await boqAPI.remove(node.data.id);
       }
       setRows((rs) => rs.filter((r) => !selectedIds.has(r.id)));
-      toast.success(`${toDelete.length} item dihapus`);
+      toast.success(`${nodes.length} item dihapus`);
       onChange?.();
     } catch (e) {
       toast.error(parseApiError(e));
@@ -207,48 +133,34 @@ export default function BOQGrid({ facilityId, items, onChange, readonly = false 
   const saveAll = async () => {
     setSaving(true);
     try {
-      const newOnes = rows
-        .filter((r) => r._new && r.description)
-        .map((r) => ({
-          facility_id: facilityId,
-          parent_id: null,
-          original_code: r.original_code,
-          level: parseInt(r.level) || 0,
-          display_order: 0,
-          description: r.description,
-          unit: r.unit,
-          volume: parseFloat(r.volume) || 0,
-          unit_price: parseFloat(r.unit_price) || 0,
-          total_price: computeTotal(r),
-          weight_pct: 0,
-          planned_start_week: r.planned_start_week
-            ? parseInt(r.planned_start_week)
-            : null,
-          planned_duration_weeks: r.planned_duration_weeks
-            ? parseInt(r.planned_duration_weeks)
-            : null,
-          is_leaf: !!r.is_leaf,
-        }));
+      const newOnes = rows.filter((r) => r._new && r.description).map((r) => ({
+        facility_id:      facilityId,
+        master_work_code: r.master_work_code || null,
+        parent_id:        null,
+        original_code:    r.original_code || null,
+        level:            parseInt(r.level) || 0,
+        display_order:    0,
+        description:      r.description,
+        unit:             r.unit,
+        volume:           parseFloat(r.volume) || 0,
+        unit_price:       parseFloat(r.unit_price) || 0,
+        total_price:      computeTotal(r),
+        weight_pct:       0,
+        is_leaf:          !!r.is_leaf,
+      }));
       if (newOnes.length) await boqAPI.bulk(newOnes);
 
       for (const r of rows) {
         if (!r._new && r._dirty) {
           await boqAPI.update(r.id, {
-            description: r.description,
-            unit: r.unit,
+            description: r.description, unit: r.unit,
             volume: parseFloat(r.volume) || 0,
             unit_price: parseFloat(r.unit_price) || 0,
             total_price: computeTotal(r),
-            planned_start_week: r.planned_start_week
-              ? parseInt(r.planned_start_week)
-              : null,
-            planned_duration_weeks: r.planned_duration_weeks
-              ? parseInt(r.planned_duration_weeks)
-              : null,
           });
         }
       }
-      toast.success("Tersimpan");
+      toast.success("BOQ tersimpan");
       onChange?.();
     } catch (e) {
       toast.error(parseApiError(e));
@@ -266,39 +178,54 @@ export default function BOQGrid({ facilityId, items, onChange, readonly = false 
     e.api.refreshCells({ rowNodes: [e.node], force: true });
   };
 
-  const total = rows.reduce((a, r) => a + computeTotal(r), 0);
+  const total       = rows.reduce((a, r) => a + computeTotal(r), 0);
+  const masterCount = rows.filter((r) => r.master_work_code).length;
+  const customCount = rows.filter((r) => !r.master_work_code && r.description).length;
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <div className="text-xs text-ink-500">
-          {rows.length} item ·{" "}
-          {selectedCount > 0 && (
-            <span className="text-brand-600 font-medium">
-              {selectedCount} dipilih ·{" "}
-            </span>
-          )}
-          Total <span className="font-semibold text-ink-800">{fmtNum(total)}</span>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="text-xs text-ink-500 flex items-center gap-3">
+          <span>
+            {rows.length} item ·{" "}
+            {selectedCount > 0 && (
+              <span className="text-brand-600 font-medium">{selectedCount} dipilih · </span>
+            )}
+            Total <span className="font-semibold text-ink-800">{fmtNum(total)}</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            {masterCount > 0 && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                <Tag size={8} className="inline mr-0.5" />{masterCount} master
+              </span>
+            )}
+            {customCount > 0 && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500">
+                {customCount} custom
+              </span>
+            )}
+          </span>
         </div>
         {!readonly && (
           <div className="flex gap-2">
-            <button className="btn-secondary btn-xs" onClick={addRow}>
-              <Plus size={11} /> Baris
+            <button className="btn-primary btn-xs" onClick={() => setShowPicker(true)}>
+              <Plus size={11} /> Tambah Item
             </button>
             <button
               className="btn-ghost btn-xs text-red-600 disabled:opacity-40"
               onClick={deleteSelected}
               disabled={selectedCount === 0}
             >
-              <Trash2 size={11} /> Hapus {selectedCount > 0 ? `(${selectedCount})` : ""}
+              <Trash2 size={11} /> Hapus{selectedCount > 0 ? ` (${selectedCount})` : ""}
             </button>
-            <button className="btn-primary btn-xs" onClick={saveAll} disabled={saving}>
+            <button className="btn-secondary btn-xs" onClick={saveAll} disabled={saving}>
               {saving ? <Spinner size={11} /> : <Save size={11} />} Simpan
             </button>
           </div>
         )}
       </div>
-      <div className="ag-theme-quartz" style={{ height: 520 }}>
+
+      <div className="ag-theme-quartz" style={{ height: 460 }}>
         <AgGridReact
           ref={gridRef}
           rowData={rows}
@@ -309,13 +236,19 @@ export default function BOQGrid({ facilityId, items, onChange, readonly = false 
           singleClickEdit={true}
           onCellValueChanged={onCellValueChanged}
           onSelectionChanged={() => {
-            const n = gridRef.current?.api.getSelectedNodes().length || 0;
-            setSelectedCount(n);
+            setSelectedCount(gridRef.current?.api.getSelectedNodes().length || 0);
           }}
           getRowId={(p) => p.data.id}
           defaultColDef={{ resizable: true, sortable: false }}
         />
       </div>
+
+      <BOQItemPickerModal
+        open={showPicker}
+        facilityId={facilityId}
+        onAdd={handlePickerAdd}
+        onClose={() => setShowPicker(false)}
+      />
     </div>
   );
 }

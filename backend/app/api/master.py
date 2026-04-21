@@ -217,14 +217,35 @@ def delete_ppk(
 
 @router.get("/work-codes", response_model=List[MasterWorkCodeOut])
 def list_work_codes(
+    q: Optional[str] = None,
     category: Optional[str] = None,
+    page_size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    q = db.query(MasterWorkCode).filter(MasterWorkCode.is_active == True)
+    """
+    List master work codes. Supports fuzzy search via `q` (searches code,
+    description, keywords, sub_category) so the BOQ item picker can show
+    relevant results as the user types.
+    """
+    query = db.query(MasterWorkCode).filter(MasterWorkCode.is_active == True)  # noqa: E712
     if category:
-        q = q.filter(MasterWorkCode.category == category)
-    return q.order_by(MasterWorkCode.category, MasterWorkCode.code).all()
+        query = query.filter(MasterWorkCode.category == category)
+    if q:
+        term = f"%{q}%"
+        from sqlalchemy import or_
+        query = query.filter(or_(
+            MasterWorkCode.code.ilike(term),
+            MasterWorkCode.description.ilike(term),
+            MasterWorkCode.keywords.ilike(term),
+            MasterWorkCode.sub_category.ilike(term),
+        ))
+    return (
+        query
+        .order_by(MasterWorkCode.category, MasterWorkCode.code)
+        .limit(page_size)
+        .all()
+    )
 
 
 @router.post("/work-codes", response_model=dict)
