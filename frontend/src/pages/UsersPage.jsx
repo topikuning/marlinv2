@@ -105,13 +105,25 @@ export default function UsersPage() {
               {filtered.map((u) => (
                 <tr key={u.id}>
                   <td className="table-td">
-                    <p className="font-medium">{u.full_name}</p>
+                    <p className="font-medium flex items-center gap-2">
+                      {u.full_name}
+                      {u.auto_provisioned && (
+                        <span className="badge-gray text-[10px]" title="Dibuat otomatis dari PPK/Perusahaan">
+                          Auto
+                        </span>
+                      )}
+                      {u.must_change_password && (
+                        <span className="badge-yellow text-[10px]" title="Harus ganti password saat login">
+                          Ganti PW
+                        </span>
+                      )}
+                    </p>
                     <p className="text-xs text-ink-500">
                       {u.email} · @{u.username}
                     </p>
                   </td>
                   <td className="table-td">
-                    <span className="badge-blue">{u.role?.name || "—"}</span>
+                    <span className="badge-blue">{u.role?.name || u.role_name || "—"}</span>
                   </td>
                   <td className="table-td text-xs">
                     {u.assigned_contract_ids?.length

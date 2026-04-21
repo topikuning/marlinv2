@@ -48,9 +48,33 @@ export default function RolesPage() {
 
   const save = async (form) => {
     try {
-      if (form.id) await rbacAPI.updateRole(form.id, form);
-      else await rbacAPI.createRole(form);
-      toast.success("Tersimpan");
+      if (form.id) {
+        // PUT /rbac/roles/{id} — send only the fields backend update_role
+        // understands. Strip internal UI state (_dirty etc) and the
+        // object-shape fields (permissions[], menus[]) that came from the
+        // server; send the flat UUID arrays instead.
+        await rbacAPI.updateRole(form.id, {
+          name: form.name,
+          description: form.description,
+          is_active: form.is_active,
+          permission_ids: form.permission_ids || [],
+          menu_ids: form.menu_ids || [],
+        });
+      } else {
+        // POST /rbac/roles — backend create_role still uses codes; convert.
+        // The full permission objects are in the `permissions` prop of the
+        // modal, so we need to reverse-lookup code from id. Simplest: pass
+        // ids as permission_ids and let backend handle it (update_role
+        // logic now accepts ids; mirror that in create too):
+        await rbacAPI.createRole({
+          code: form.code,
+          name: form.name,
+          description: form.description,
+          permission_ids: form.permission_ids || [],
+          menu_ids: form.menu_ids || [],
+        });
+      }
+      toast.success("Role berhasil disimpan");
       setEditing(null);
       refresh();
     } catch (e) {
