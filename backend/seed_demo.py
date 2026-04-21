@@ -1,0 +1,683 @@
+"""
+seed_demo.py — Data demo profesional untuk presentasi MARLIN.
+
+Jalankan seed_master.py DULU, lalu baru file ini:
+    python seed_master.py
+    python seed_demo.py
+
+Isi demo:
+  6 kontrak tersebar di 4 provinsi:
+    K1 — Makassar (6 lokasi, AKTIF minggu 10/16, sedikit terlambat)
+    K2 — NTB / Mataram (5 lokasi, AKTIF minggu 7/20, on-track)
+    K3 — Sulawesi Tenggara / Kendari (4 lokasi, AKTIF minggu 4/12, cepat)
+    K4 — Sulawesi Selatan / Pare-Pare (3 lokasi, AKTIF minggu 12/16, kritis)
+    K5 — Kalimantan Selatan / Banjarmasin (2 lokasi, DRAFT siap aktivasi)
+    K6 — Jawa Timur / Surabaya (1 lokasi, DRAFT baru dibuat)
+
+  Total: 21 lokasi aktif + 3 draft = 24 ... tapi karena K1-K4 punya
+  sub-lokasi per kelurahan, totalnya 6+5+4+3+2+1 = 21 lokasi. Tambahan
+  9 lokasi dari kontrak ke-7 (multi-lokasi 9 buah) = 30 total.
+
+  Setiap lokasi aktif punya:
+    - 2–5 fasilitas (revetmen, tambatan, gudang beku, kantor, dll)
+    - BOQ per fasilitas dengan leaf items + bobot %
+    - CCO-0 revision (APPROVED untuk aktif, DRAFT untuk draft)
+    - Weekly reports (sesuai minggu berjalan)
+    - Progress items per BOQ
+    - Daily reports 7 hari terakhir (khusus kontrak aktif)
+
+  Demo users:
+    konsultan.demo@knmp.id  / Demo@123!
+    ppk.demo@knmp.id        / Demo@123!
+    kontraktor.demo@knmp.id / Demo@123!
+    manager.demo@knmp.id    / Demo@123!
+"""
+import sys
+import random
+from datetime import date, datetime, timedelta
+from decimal import Decimal
+
+from sqlalchemy import text
+from app.core.database import SessionLocal, engine
+from app.core.security import get_password_hash
+from app.models.models import (
+    Role, User, Company, PPK, Contract, ContractStatus,
+    Location, Facility, BOQRevision, BOQItem, RevisionStatus,
+    WeeklyReport, WeeklyProgressItem, DailyReport, DeviationStatus,
+)
+
+random.seed(2025)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Data Master Lokasi Nyata (nama kampung nelayan asli / fiktif realistis)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Setiap entry: (location_code, name, village, district, city, province, lat, lon)
+LOCATIONS_K1 = [  # 6 lokasi — Makassar
+    ("K1-LOK01", "Kel. Tallo",          "Tallo",          "Tallo",        "Makassar",  "Sulawesi Selatan",  -5.1108, 119.4175),
+    ("K1-LOK02", "Kel. Cambaya",        "Cambaya",        "Ujung Tanah",  "Makassar",  "Sulawesi Selatan",  -5.1023, 119.4021),
+    ("K1-LOK03", "Kel. Tamparang Keke", "Tamparang Keke", "Mariso",       "Makassar",  "Sulawesi Selatan",  -5.1334, 119.4087),
+    ("K1-LOK04", "Kel. Balang Baru",    "Balang Baru",    "Tamalate",     "Makassar",  "Sulawesi Selatan",  -5.1872, 119.4023),
+    ("K1-LOK05", "Kel. Lette",          "Lette",          "Mariso",       "Makassar",  "Sulawesi Selatan",  -5.1412, 119.4102),
+    ("K1-LOK06", "Kel. Pattingalloang", "Pattingalloang", "Ujung Tanah",  "Makassar",  "Sulawesi Selatan",  -5.0934, 119.3987),
+]
+LOCATIONS_K2 = [  # 5 lokasi — NTB
+    ("K2-LOK01", "Kel. Bintaro",        "Bintaro",        "Ampenan",      "Mataram",   "Nusa Tenggara Barat", -8.5800, 116.0634),
+    ("K2-LOK02", "Kel. Ampenan Tengah", "Ampenan Tengah", "Ampenan",      "Mataram",   "Nusa Tenggara Barat", -8.5878, 116.0598),
+    ("K2-LOK03", "Kel. Tanjung Karang", "Tanjung Karang", "Sekarbela",    "Mataram",   "Nusa Tenggara Barat", -8.5712, 116.0521),
+    ("K2-LOK04", "Kel. Mapak",          "Mapak",          "Sekarbela",    "Mataram",   "Nusa Tenggara Barat", -8.5645, 116.0478),
+    ("K2-LOK05", "Kel. Meninting",      "Meninting",      "Batulayar",    "Lombok Barat","Nusa Tenggara Barat",-8.4932, 116.0312),
+]
+LOCATIONS_K3 = [  # 4 lokasi — Sultra
+    ("K3-LOK01", "Kel. Purirano",       "Purirano",       "Kendari",      "Kendari",   "Sulawesi Tenggara",  -3.9453, 122.5128),
+    ("K3-LOK02", "Kel. Kampung Salo",   "Kampung Salo",   "Kendari Barat","Kendari",   "Sulawesi Tenggara",  -3.9612, 122.4923),
+    ("K3-LOK03", "Kel. Gunung Jati",    "Gunung Jati",    "Abeli",        "Kendari",   "Sulawesi Tenggara",  -4.0234, 122.5567),
+    ("K3-LOK04", "Kel. Anggalomalaka",  "Anggalomalaka",  "Mandonga",     "Kendari",   "Sulawesi Tenggara",  -3.9781, 122.5312),
+]
+LOCATIONS_K4 = [  # 3 lokasi — Pare-Pare
+    ("K4-LOK01", "Kel. Cappa Galung",   "Cappa Galung",   "Bacukiki Barat","Pare-Pare","Sulawesi Selatan",   -4.0123, 119.6234),
+    ("K4-LOK02", "Kel. Sumpang Minangae","Sumpang Minangae","Bacukiki",    "Pare-Pare", "Sulawesi Selatan",   -4.0345, 119.6198),
+    ("K4-LOK03", "Kel. Lakessi",        "Lakessi",        "Soreang",      "Pare-Pare", "Sulawesi Selatan",   -4.0567, 119.6321),
+]
+LOCATIONS_K5 = [  # 2 lokasi — Banjarmasin
+    ("K5-LOK01", "Kel. Alalak Utara",   "Alalak Utara",   "Banjarmasin Utara","Banjarmasin","Kalimantan Selatan",-3.3054,114.5812),
+    ("K5-LOK02", "Kel. Kuin Utara",     "Kuin Utara",     "Banjarmasin Utara","Banjarmasin","Kalimantan Selatan",-3.2987,114.5734),
+]
+LOCATIONS_K6 = [  # 1 lokasi — Surabaya
+    ("K6-LOK01", "Kel. Wonokusumo",     "Wonokusumo",     "Semampir",     "Surabaya",  "Jawa Timur",         -7.2287, 112.7488),
+]
+# Kontrak ke-7: 9 lokasi untuk genapi 30 total
+LOCATIONS_K7 = [  # 9 lokasi — Sulawesi Barat
+    ("K7-LOK01", "Kel. Bambu",          "Bambu",          "Mamuju",       "Mamuju",    "Sulawesi Barat",    -2.6743, 118.8912),
+    ("K7-LOK02", "Kel. Binanga",        "Binanga",        "Mamuju",       "Mamuju",    "Sulawesi Barat",    -2.6812, 118.9034),
+    ("K7-LOK03", "Kel. Karema",         "Karema",         "Mamuju",       "Mamuju",    "Sulawesi Barat",    -2.6934, 118.8867),
+    ("K7-LOK04", "Kel. Rangas",         "Rangas",         "Simboro",      "Mamuju",    "Sulawesi Barat",    -2.7012, 118.8723),
+    ("K7-LOK05", "Kel. Beru-Beru",      "Beru-Beru",      "Simboro",      "Mamuju",    "Sulawesi Barat",    -2.7134, 118.8645),
+    ("K7-LOK06", "Kel. Kalukku",        "Kalukku",        "Kalukku",      "Mamuju",    "Sulawesi Barat",    -2.7891, 118.8412),
+    ("K7-LOK07", "Kel. Tadui",          "Tadui",          "Mamuju",       "Mamuju",    "Sulawesi Barat",    -2.6621, 118.9156),
+    ("K7-LOK08", "Kel. Rimuku",         "Rimuku",         "Mamuju",       "Mamuju",    "Sulawesi Barat",    -2.6512, 118.9278),
+    ("K7-LOK09", "Kel. Mamunyu",        "Mamunyu",        "Mamuju Utara", "Mamuju",    "Sulawesi Barat",    -2.6234, 118.9534),
+]
+# Total: 6+5+4+3+2+1+9 = 30 lokasi ✓
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Fasilitas template per profil lokasi
+# (facility_code, facility_name, facility_type, display_order)
+# ─────────────────────────────────────────────────────────────────────────────
+FAC_TEMPLATE = {
+    "lengkap": [  # 5 fasilitas
+        ("F-01", "Tambatan Perahu",      "perikanan",  1),
+        ("F-02", "Gudang Beku Portable", "perikanan",  2),
+        ("F-03", "Revetmen",             "perikanan",  3),
+        ("F-04", "Saluran & Jalan",      "sitework",   4),
+        ("F-05", "Kantor & Toilet",      "utilitas",   5),
+    ],
+    "sedang": [   # 3 fasilitas
+        ("F-01", "Tambatan Perahu",      "perikanan",  1),
+        ("F-02", "Revetmen",             "perikanan",  2),
+        ("F-03", "Kantor & Toilet",      "utilitas",   3),
+    ],
+    "minimal": [  # 2 fasilitas
+        ("F-01", "Tambatan Perahu",      "perikanan",  1),
+        ("F-02", "Saluran & Jalan",      "sitework",   2),
+    ],
+}
+
+# BOQ items per tipe fasilitas
+# (desc, unit, volume, unit_price, level, is_leaf)
+BOQ_TEMPLATE = {
+    "Tambatan Perahu": [
+        ("Pekerjaan Persiapan",              "ls",   1,  45_000_000, 0, False),
+        ("  Mobilisasi & Direksi Keet",      "ls",   1,  45_000_000, 1, True),
+        ("Pekerjaan Pondasi & Struktur",     "ls",   1, 380_000_000, 0, False),
+        ("  Tiang Pancang Beton Pracetak",   "m",   40,   2_200_000, 1, True),
+        ("  Balok & Pelat Beton K-300",      "m³",  75,   2_500_000, 1, True),
+        ("  Pengecatan Anti Karat",          "m²", 180,      95_000, 1, True),
+    ],
+    "Gudang Beku Portable": [
+        ("Pekerjaan Persiapan & Pondasi",    "ls",   1,  35_000_000, 0, False),
+        ("  Pondasi Telapak Beton K-250",    "m³",  10,   4_200_000, 1, True),
+        ("Unit Gudang Beku 10 Ton",          "unit", 1, 1_200_000_000, 1, True),
+        ("Instalasi Listrik 3 Phase",        "ls",   1,  95_000_000, 1, True),
+    ],
+    "Revetmen": [
+        ("Galian & Urugan",                  "m³", 200,      90_000, 0, False),
+        ("  Galian Tanah",                   "m³", 120,      75_000, 1, True),
+        ("  Urugan Batu Gunung",             "m³",  80,     115_000, 1, True),
+        ("Pasang Batu Revetmen",             "m³", 380,     880_000, 1, True),
+        ("Batu Pelindung Armor Rock",        "m³",  65,   1_250_000, 1, True),
+    ],
+    "Saluran & Jalan": [
+        ("Saluran Drainase Beton U-40",      "m",  180,     450_000, 1, True),
+        ("Jalan Beton K-250 t.15cm",         "m²", 320,     680_000, 1, True),
+        ("Paving Block Area Parkir",         "m²", 150,     350_000, 1, True),
+    ],
+    "Kantor & Toilet": [
+        ("Bangunan Kantor 6x8m",             "m²",  48,   2_900_000, 1, True),
+        ("Toilet Umum 2 Unit",               "unit", 2,  38_000_000, 1, True),
+        ("Instalasi Air Bersih & Kotor",     "ls",   1,  25_000_000, 1, True),
+        ("Instalasi Listrik",                "ls",   1,  18_000_000, 1, True),
+    ],
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Kontrak configuration
+# ─────────────────────────────────────────────────────────────────────────────
+# (nomor, nama, total_weeks, current_week, status, nilai, profil_progress,
+#  lokasi_list, fac_profile_list)
+#
+# profil_progress: "normal" | "warning" | "critical" | "fast"
+# fac_profile_list: satu per lokasi, pilih dari "lengkap"/"sedang"/"minimal"
+
+TODAY = date.today()
+
+CONTRACTS = [
+    {
+        "nomor":   "KKP-DEMO-2025-001",
+        "nama":    "Pembangunan KNMP Kota Makassar Paket I",
+        "provinsi":"Sulawesi Selatan",
+        "nilai":   Decimal("18_500_000_000"),
+        "total_weeks": 16, "current_week": 10,
+        "status":  ContractStatus.ACTIVE,
+        "profil":  "warning",   # sedikit terlambat
+        "lokasi":  LOCATIONS_K1,
+        "fac_profiles": ["lengkap","lengkap","sedang","sedang","minimal","minimal"],
+        "kontraktor": "PT Bangun Bahari Nusantara",
+        "konsultan":  "PT Konsultan Kelautan Indonesia",
+        "ppk":        "Drs. Ahmad Fauzi, M.Si",
+    },
+    {
+        "nomor":   "KKP-DEMO-2025-002",
+        "nama":    "Pembangunan KNMP Kota Mataram NTB",
+        "provinsi":"Nusa Tenggara Barat",
+        "nilai":   Decimal("12_750_000_000"),
+        "total_weeks": 20, "current_week": 7,
+        "status":  ContractStatus.ACTIVE,
+        "profil":  "normal",
+        "lokasi":  LOCATIONS_K2,
+        "fac_profiles": ["lengkap","sedang","sedang","minimal","minimal"],
+        "kontraktor": "CV Karya Laut Mandiri",
+        "konsultan":  "PT Konsultan Kelautan Indonesia",
+        "ppk":        "Ir. Dewi Permatasari, M.Sc",
+    },
+    {
+        "nomor":   "KKP-DEMO-2025-003",
+        "nama":    "Pembangunan KNMP Kota Kendari Sultra",
+        "provinsi":"Sulawesi Tenggara",
+        "nilai":   Decimal("9_200_000_000"),
+        "total_weeks": 12, "current_week": 4,
+        "status":  ContractStatus.ACTIVE,
+        "profil":  "fast",      # lebih cepat dari rencana
+        "lokasi":  LOCATIONS_K3,
+        "fac_profiles": ["lengkap","sedang","sedang","minimal"],
+        "kontraktor": "PT Tirta Samudera Konstruksi",
+        "konsultan":  "CV Mitra Teknik Bahari",
+        "ppk":        "Drs. Ahmad Fauzi, M.Si",
+    },
+    {
+        "nomor":   "KKP-DEMO-2025-004",
+        "nama":    "Pembangunan KNMP Kota Pare-Pare Sulsel",
+        "provinsi":"Sulawesi Selatan",
+        "nilai":   Decimal("7_600_000_000"),
+        "total_weeks": 16, "current_week": 12,
+        "status":  ContractStatus.ACTIVE,
+        "profil":  "critical",  # sangat terlambat
+        "lokasi":  LOCATIONS_K4,
+        "fac_profiles": ["lengkap","sedang","minimal"],
+        "kontraktor": "PT Bangun Bahari Nusantara",
+        "konsultan":  "PT Konsultan Kelautan Indonesia",
+        "ppk":        "Ir. Dewi Permatasari, M.Sc",
+    },
+    {
+        "nomor":   "KKP-DEMO-2025-005",
+        "nama":    "Pembangunan KNMP Kota Banjarmasin Kalsel",
+        "provinsi":"Kalimantan Selatan",
+        "nilai":   Decimal("5_400_000_000"),
+        "total_weeks": 14, "current_week": 0,
+        "status":  ContractStatus.DRAFT,
+        "profil":  None,
+        "lokasi":  LOCATIONS_K5,
+        "fac_profiles": ["sedang","minimal"],
+        "kontraktor": "PT Barito Konstruksi Bahari",
+        "konsultan":  "CV Mitra Teknik Bahari",
+        "ppk":        "Drs. Ahmad Fauzi, M.Si",
+    },
+    {
+        "nomor":   "KKP-DEMO-2025-006",
+        "nama":    "Pembangunan KNMP Kota Surabaya Jatim",
+        "provinsi":"Jawa Timur",
+        "nilai":   Decimal("4_100_000_000"),
+        "total_weeks": 16, "current_week": 0,
+        "status":  ContractStatus.DRAFT,
+        "profil":  None,
+        "lokasi":  LOCATIONS_K6,
+        "fac_profiles": ["sedang"],
+        "kontraktor": "CV Karya Laut Mandiri",
+        "konsultan":  "PT Konsultan Kelautan Indonesia",
+        "ppk":        "Ir. Dewi Permatasari, M.Sc",
+    },
+    {
+        "nomor":   "KKP-DEMO-2025-007",
+        "nama":    "Pembangunan KNMP Kabupaten Mamuju Sulawesi Barat",
+        "provinsi":"Sulawesi Barat",
+        "nilai":   Decimal("22_300_000_000"),
+        "total_weeks": 24, "current_week": 3,
+        "status":  ContractStatus.ACTIVE,
+        "profil":  "normal",
+        "lokasi":  LOCATIONS_K7,
+        "fac_profiles": ["lengkap","lengkap","sedang","sedang","sedang",
+                         "minimal","minimal","minimal","minimal"],
+        "kontraktor": "PT Tirta Samudera Konstruksi",
+        "konsultan":  "PT Konsultan Kelautan Indonesia",
+        "ppk":        "Drs. Ahmad Fauzi, M.Si",
+    },
+]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Progress curve per profil
+# ─────────────────────────────────────────────────────────────────────────────
+def planned_pct(week, total_weeks):
+    """Linear S-curve: ramp up slow, main body, taper."""
+    x = week / total_weeks
+    if x <= 0.15:
+        return x / 0.15 * 0.10
+    elif x <= 0.85:
+        return 0.10 + (x - 0.15) / 0.70 * 0.80
+    else:
+        return 0.90 + (x - 0.85) / 0.15 * 0.10
+
+
+def actual_pct(week, total_weeks, profil):
+    base = planned_pct(week, total_weeks)
+    if profil == "normal":
+        return min(1.0, base * random.uniform(0.97, 1.01))
+    if profil == "fast":
+        return min(1.0, base * random.uniform(1.04, 1.10))
+    if profil == "warning":
+        factor = 0.88 if week <= total_weeks * 0.5 else 0.93
+        return min(1.0, base * random.uniform(factor - 0.02, factor + 0.01))
+    if profil == "critical":
+        factor = 0.72 if week <= total_weeks * 0.5 else 0.78
+        return min(1.0, base * random.uniform(factor - 0.02, factor + 0.02))
+    return base
+
+
+def deviation_status(dev):
+    if dev >= 0:       return DeviationStatus.FAST
+    if dev >= -0.05:   return DeviationStatus.NORMAL
+    if dev >= -0.10:   return DeviationStatus.WARNING
+    return DeviationStatus.CRITICAL
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAIN
+# ─────────────────────────────────────────────────────────────────────────────
+def run():
+    db = SessionLocal()
+    try:
+        # Guard
+        if db.query(Contract).filter(
+            Contract.contract_number == "KKP-DEMO-2025-001"
+        ).first():
+            print("Demo data sudah ada. Hapus kontrak KKP-DEMO-* dulu jika ingin seed ulang.")
+            return
+
+        # ── Demo users ────────────────────────────────────────────────────────
+        print("▸ Demo users...")
+        roles = {r.code: r for r in db.query(Role).all()}
+
+        def _user(email, uname, name, role_code):
+            if not db.query(User).filter(User.email == email).first():
+                db.add(User(
+                    email=email, username=uname, full_name=name,
+                    hashed_password=get_password_hash("Demo@123!"),
+                    role_id=roles[role_code].id,
+                    is_active=True, must_change_password=False, auto_provisioned=False,
+                ))
+
+        _user("konsultan.demo@knmp.id",  "konsultan.demo",  "Arif Wibowo, ST",           "konsultan")
+        _user("ppk.demo@knmp.id",        "ppk.demo",        "Drs. Ahmad Fauzi, M.Si",    "ppk")
+        _user("kontraktor.demo@knmp.id", "kontraktor.demo", "Budi Santoso, ST",           "kontraktor")
+        _user("manager.demo@knmp.id",    "manager.demo",    "Rachmat Hidayat, SE",        "manager")
+        db.flush()
+        print("  ✓ 4 demo users (password: Demo@123!)\n")
+
+        # ── Perusahaan & PPK ──────────────────────────────────────────────────
+        print("▸ Perusahaan & PPK...")
+
+        def _company(name, ctype, npwp, addr, city, prov, cp, phone, email):
+            c = db.query(Company).filter(Company.name == name).first()
+            if not c:
+                c = Company(name=name, company_type=ctype, npwp=npwp, address=addr,
+                            city=city, province=prov, contact_person=cp,
+                            phone=phone, email=email, is_active=True)
+                db.add(c); db.flush()
+            return c
+
+        def _ppk(name, nip, jabatan, satker, phone, wa, email):
+            p = db.query(PPK).filter(PPK.name == name).first()
+            if not p:
+                p = PPK(name=name, nip=nip, jabatan=jabatan, satker=satker,
+                        phone=phone, whatsapp_number=wa, email=email, is_active=True)
+                db.add(p); db.flush()
+            return p
+
+        companies = {
+            "PT Bangun Bahari Nusantara": _company(
+                "PT Bangun Bahari Nusantara", "contractor",
+                "01.234.567.8-901.000",
+                "Jl. Pelabuhan Baru No. 12, Makassar",
+                "Makassar", "Sulawesi Selatan",
+                "Ir. Hendra Kusuma, MT", "0411-887766", "hendra@bbn.co.id"),
+            "CV Karya Laut Mandiri": _company(
+                "CV Karya Laut Mandiri", "contractor",
+                "02.345.678.9-012.000",
+                "Jl. Nelayan Raya No. 45, Mataram",
+                "Mataram", "Nusa Tenggara Barat",
+                "Budi Santoso, ST", "0370-663344", "budi@klm.co.id"),
+            "PT Tirta Samudera Konstruksi": _company(
+                "PT Tirta Samudera Konstruksi", "contractor",
+                "03.456.789.0-123.000",
+                "Jl. Samudera No. 8, Kendari",
+                "Kendari", "Sulawesi Tenggara",
+                "Amir Husain, ST", "0401-334455", "amir@tsk.co.id"),
+            "PT Barito Konstruksi Bahari": _company(
+                "PT Barito Konstruksi Bahari", "contractor",
+                "04.567.890.1-234.000",
+                "Jl. Barito No. 21, Banjarmasin",
+                "Banjarmasin", "Kalimantan Selatan",
+                "Suharto, ST, MT", "0511-556677", "suharto@bkb.co.id"),
+            "PT Konsultan Kelautan Indonesia": _company(
+                "PT Konsultan Kelautan Indonesia", "consultant",
+                "05.678.901.2-345.000",
+                "Jl. Gatot Subroto Kav. 56, Jakarta Selatan",
+                "Jakarta", "DKI Jakarta",
+                "Dr. Siti Rahayu, ST, MT", "021-52907788", "siti@kki.co.id"),
+            "CV Mitra Teknik Bahari": _company(
+                "CV Mitra Teknik Bahari", "consultant",
+                "06.789.012.3-456.000",
+                "Jl. Pantai Losari No. 3, Makassar",
+                "Makassar", "Sulawesi Selatan",
+                "Yusuf Darmawan, ST", "0411-224433", "yusuf@mtb.co.id"),
+        }
+
+        ppks = {
+            "Drs. Ahmad Fauzi, M.Si": _ppk(
+                "Drs. Ahmad Fauzi, M.Si", "197508152003121004",
+                "PPK Satker BPBL Makassar", "BPBL Makassar — KKP",
+                "081234567890", "6281234567890", "ahmad.fauzi@kkp.go.id"),
+            "Ir. Dewi Permatasari, M.Sc": _ppk(
+                "Ir. Dewi Permatasari, M.Sc", "198003102005012003",
+                "PPK Satker SKIPM NTB", "SKIPM Mataram — KKP",
+                "081298765432", "6281298765432", "dewi.permata@kkp.go.id"),
+        }
+        print(f"  ✓ {len(companies)} perusahaan, {len(ppks)} PPK\n")
+
+        # ── Kontrak + Lokasi + Fasilitas + BOQ + Laporan ──────────────────────
+        total_lokasi = 0
+        total_boq    = 0
+        total_weekly = 0
+        total_daily  = 0
+
+        for cfg in CONTRACTS:
+            print(f"▸ Kontrak {cfg['nomor']}...")
+            start_date = TODAY - timedelta(weeks=cfg["current_week"])
+            end_date   = start_date + timedelta(weeks=cfg["total_weeks"])
+            is_active  = cfg["status"] == ContractStatus.ACTIVE
+
+            contract = Contract(
+                contract_number=cfg["nomor"],
+                contract_name=cfg["nama"],
+                company_id=companies[cfg["kontraktor"]].id,
+                ppk_id=ppks[cfg["ppk"]].id,
+                konsultan_id=companies[cfg["konsultan"]].id,
+                fiscal_year=2025,
+                original_value=cfg["nilai"],
+                current_value=cfg["nilai"],
+                start_date=start_date,
+                original_end_date=end_date,
+                end_date=end_date,
+                duration_days=(end_date - start_date).days,
+                status=cfg["status"],
+                description=(
+                    f"Pembangunan dan peningkatan infrastruktur Kampung Nelayan "
+                    f"Merah Putih di wilayah {cfg['provinsi']}. Lingkup pekerjaan "
+                    f"meliputi tambatan perahu, gudang beku, revetmen, saluran, "
+                    f"jalan kawasan, dan fasilitas penunjang."
+                ),
+                daily_report_required=True,
+                weekly_report_due_day=1,
+                activated_at=(
+                    datetime.combine(start_date, datetime.min.time())
+                    if is_active else None
+                ),
+            )
+            db.add(contract); db.flush()
+
+            # Revision CCO-0
+            rev = BOQRevision(
+                contract_id=contract.id,
+                cco_number=0, revision_code="CCO-0",
+                name="BOQ Kontrak Awal",
+                status=RevisionStatus.APPROVED if is_active else RevisionStatus.DRAFT,
+                is_active=is_active,
+                approved_at=(
+                    datetime.combine(start_date, datetime.min.time())
+                    if is_active else None
+                ),
+            )
+            db.add(rev); db.flush()
+
+            # Lokasi
+            for loc_idx, loc_data in enumerate(cfg["lokasi"]):
+                code, name, vill, dist, city, prov, lat, lon = loc_data
+                profile = cfg["fac_profiles"][loc_idx]
+
+                loc = Location(
+                    contract_id=contract.id,
+                    location_code=code, name=name,
+                    village=vill, district=dist,
+                    city=city, province=prov,
+                    latitude=Decimal(str(lat)),
+                    longitude=Decimal(str(lon)),
+                    konsultan_id=companies[cfg["konsultan"]].id,
+                    is_active=True,
+                )
+                db.add(loc); db.flush()
+                total_lokasi += 1
+
+                # Fasilitas + BOQ
+                fac_list = FAC_TEMPLATE[profile]
+                all_items = []
+                facs = []
+
+                for fac_code, fac_name, fac_type, fac_order in fac_list:
+                    fac = Facility(
+                        location_id=loc.id,
+                        facility_code=fac_code, facility_name=fac_name,
+                        facility_type=fac_type, display_order=fac_order,
+                        is_active=True,
+                    )
+                    db.add(fac); db.flush()
+                    facs.append(fac)
+
+                    items_def = BOQ_TEMPLATE.get(fac_name, BOQ_TEMPLATE["Saluran & Jalan"])
+                    fac_items = []
+                    for order_i, (desc, unit, vol, up, level, is_leaf) in enumerate(items_def):
+                        item = BOQItem(
+                            boq_revision_id=rev.id,
+                            facility_id=fac.id,
+                            original_code=f"{fac_code}.{order_i+1}",
+                            full_code=f"{fac_code}.{order_i+1}",
+                            level=level,
+                            display_order=len(all_items) + order_i,
+                            description=desc.strip(),
+                            unit=unit,
+                            volume=Decimal(str(vol)),
+                            unit_price=Decimal(str(up)),
+                            total_price=Decimal(str(vol * up)),
+                            is_leaf=is_leaf, is_active=True,
+                        )
+                        db.add(item); db.flush()
+                        fac_items.append(item)
+                    all_items.extend(fac_items)
+
+                # Hitung bobot leaf items
+                leaf_items = [it for it in all_items if it.is_leaf]
+                leaf_total = sum(it.volume * it.unit_price for it in leaf_items)
+                for it in leaf_items:
+                    it.weight_pct = (
+                        (it.volume * it.unit_price) / leaf_total
+                        if leaf_total > 0 else Decimal("0")
+                    )
+
+                # Update facility totals
+                for fac in facs:
+                    fac.total_value = sum(
+                        it.volume * it.unit_price
+                        for it in all_items
+                        if it.facility_id == fac.id and it.is_leaf
+                    )
+
+                rev.total_value = (rev.total_value or Decimal("0")) + leaf_total
+                rev.item_count  = (rev.item_count or 0) + len(all_items)
+                total_boq += len(all_items)
+
+                # Weekly reports (hanya untuk kontrak aktif, per lokasi)
+                if not is_active or cfg["current_week"] == 0:
+                    continue
+
+                for week in range(1, cfg["current_week"] + 1):
+                    plan = Decimal(str(round(planned_pct(week, cfg["total_weeks"]), 6)))
+                    plan_prev = Decimal(str(round(
+                        planned_pct(week - 1, cfg["total_weeks"]), 6
+                    )))
+                    act = Decimal(str(round(
+                        actual_pct(week, cfg["total_weeks"], cfg["profil"]), 6
+                    )))
+                    act_prev = Decimal(str(round(
+                        actual_pct(week - 1, cfg["total_weeks"], cfg["profil"]), 6
+                    )))
+                    dev  = act - plan
+                    spi  = (act / plan) if plan > 0 else Decimal("1")
+
+                    period_start = start_date + timedelta(weeks=week - 1)
+                    period_end   = period_start + timedelta(days=6)
+
+                    report = WeeklyReport(
+                        contract_id=contract.id,
+                        week_number=week,
+                        period_start=period_start,
+                        period_end=period_end,
+                        report_date=period_end,
+                        planned_weekly_pct=plan - plan_prev,
+                        planned_cumulative_pct=plan,
+                        actual_weekly_pct=act - act_prev,
+                        actual_cumulative_pct=act,
+                        deviation_pct=dev,
+                        deviation_status=deviation_status(float(dev)),
+                        spi=round(spi, 4),
+                        manpower_count=random.randint(25, 50),
+                        manpower_skilled=random.randint(8, 18),
+                        manpower_unskilled=random.randint(15, 32),
+                        rain_days=random.randint(0, 3),
+                        obstacles=(
+                            "Material terlambat tiba dari supplier, pengiriman "
+                            "dialihkan melalui jalur darat karena cuaca buruk."
+                            if week % 4 == 0 else ""
+                        ),
+                        solutions=(
+                            "Penambahan jam kerja dan koordinasi dengan "
+                            "supplier alternatif."
+                            if week % 4 == 0 else ""
+                        ),
+                        is_locked=(week < cfg["current_week"]),
+                        submitted_by="Arif Wibowo, ST",
+                    )
+                    db.add(report); db.flush()
+                    total_weekly += 1
+
+                    # Progress items (hanya minggu terakhir agar tidak terlalu besar)
+                    if week == cfg["current_week"]:
+                        for item in leaf_items:
+                            vol_cum = float(item.volume) * float(act)
+                            vol_wk  = float(item.volume) * float(act - act_prev)
+                            db.add(WeeklyProgressItem(
+                                weekly_report_id=report.id,
+                                boq_item_id=item.id,
+                                volume_this_week=Decimal(str(round(max(0, vol_wk), 4))),
+                                volume_cumulative=Decimal(str(round(max(0, vol_cum), 4))),
+                                progress_cumulative_pct=Decimal(str(round(float(act), 6))),
+                                weighted_progress_pct=Decimal(str(
+                                    round(float(act) * float(item.weight_pct), 8)
+                                )),
+                            ))
+
+            # Daily reports (7 hari terakhir, hanya kontrak aktif)
+            if is_active and cfg["current_week"] > 0:
+                weather = ["Cerah", "Berawan", "Mendung", "Gerimis"]
+                for day_i in range(6, -1, -1):
+                    rep_date = TODAY - timedelta(days=day_i)
+                    if rep_date.weekday() == 6:
+                        continue
+                    db.add(DailyReport(
+                        contract_id=contract.id,
+                        location_id=None,  # contract-level
+                        report_date=rep_date,
+                        activities=(
+                            f"Pekerjaan pasang batu revetmen lanjutan. "
+                            f"Pengecoran balok tambatan perahu segmen {day_i+1}. "
+                            f"Pemasangan besi tulangan pelat lantai."
+                        ),
+                        manpower_count=random.randint(28, 48),
+                        manpower_skilled=random.randint(10, 16),
+                        manpower_unskilled=random.randint(18, 32),
+                        equipment_used="Excavator 1 unit, Concrete mixer 2 unit",
+                        materials_received=(
+                            "Batu split 15 m³, Besi D16 2 ton"
+                            if day_i % 3 == 0 else ""
+                        ),
+                        weather_morning=random.choice(weather),
+                        weather_afternoon=random.choice(weather),
+                        rain_hours=Decimal(str(random.choice([0, 0, 0, 1.5, 2.0]))),
+                        submitted_by="Arif Wibowo, ST",
+                    ))
+                total_daily += 6
+
+            db.flush()
+            n_lok = len(cfg["lokasi"])
+            print(f"  ✓ {n_lok} lokasi, {len(cfg['lokasi']) * 3:.0f}±  fasilitas")
+
+        db.commit()
+
+        print()
+        print("═" * 60)
+        print("✓ seed_demo selesai")
+        print(f"  Total lokasi  : {total_lokasi}")
+        print(f"  Total BOQ item: {total_boq}")
+        print(f"  Weekly reports: {total_weekly}")
+        print(f"  Daily reports : {total_daily}")
+        print()
+        print("  Demo users:")
+        print("    admin@knmp.id            / Admin@123!")
+        print("    konsultan.demo@knmp.id   / Demo@123!")
+        print("    ppk.demo@knmp.id         / Demo@123!")
+        print("    kontraktor.demo@knmp.id  / Demo@123!")
+        print("    manager.demo@knmp.id     / Demo@123!")
+        print("═" * 60)
+
+    except Exception as e:
+        db.rollback()
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+    finally:
+        db.close()
+
+
+if __name__ == "__main__":
+    run()
