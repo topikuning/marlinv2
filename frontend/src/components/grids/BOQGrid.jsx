@@ -1,10 +1,10 @@
 import { useMemo, useRef, useState, useCallback } from "react";
 import { AgGridReact } from "ag-grid-react";
 import { Plus, Save, Trash2 } from "lucide-react";
-import { boqAPI } from "../../api";
+import { boqAPI } from "@/api";
 import toast from "react-hot-toast";
-import { parseApiError, fmtNum } from "../../utils/format";
-import { Spinner } from "../ui";
+import { parseApiError, fmtNum } from "@/utils/format";
+import { Spinner } from "@/components/ui";
 
 /**
  * Editable BOQ grid for a single Facility.

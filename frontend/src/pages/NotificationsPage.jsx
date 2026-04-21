@@ -3,12 +3,12 @@ import toast from "react-hot-toast";
 import {
   Plus, Edit2, Trash2, Bell, Play, Send, CheckCircle, AlertCircle, Clock,
 } from "lucide-react";
-import { notificationsAPI } from "../api";
+import { notificationsAPI } from "@/api";
 import {
   PageHeader, PageLoader, Modal, Empty, Spinner,
   ConfirmDialog, Tabs,
-} from "../components/ui";
-import { fmtDate, parseApiError } from "../utils/format";
+} from "@/components/ui";
+import { fmtDate, parseApiError } from "@/utils/format";
 
 const TRIGGER_LABEL = {
   daily_report_missing: "Laporan Harian Telat",

@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { useAuthStore } from "../../store/auth";
+import { useAuthStore } from "@/store/auth";
 import {
   Menu, LogOut, Bell, User,
   LayoutDashboard, FileText, CalendarDays, CalendarRange,

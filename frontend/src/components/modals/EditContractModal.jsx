@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { Info, Lock } from "lucide-react";
-import { contractsAPI, masterAPI } from "../../api";
-import { Modal, Spinner } from "../ui";
-import { parseApiError } from "../../utils/format";
+import { contractsAPI, masterAPI } from "@/api";
+import { Modal, Spinner } from "@/components/ui";
+import { parseApiError } from "@/utils/format";
 
 /**
  * Edit an existing Contract. Backend enforces the edit matrix:

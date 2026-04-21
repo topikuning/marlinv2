@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAuthStore } from "../store/auth";
+import { useAuthStore } from "@/store/auth";
 import toast from "react-hot-toast";
-import { Spinner } from "../components/ui";
-import { parseApiError } from "../utils/format";
+import { Spinner } from "@/components/ui";
+import { parseApiError } from "@/utils/format";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("admin@knmp.id");

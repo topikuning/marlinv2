@@ -3,12 +3,12 @@ import toast from "react-hot-toast";
 import {
   Plus, Edit2, Trash2, KeyRound, UserCheck, UserX, Users as UsersIcon,
 } from "lucide-react";
-import { usersAPI, rbacAPI, contractsAPI } from "../api";
+import { usersAPI, rbacAPI, contractsAPI } from "@/api";
 import {
   PageHeader, PageLoader, Modal, Empty, Spinner,
   ConfirmDialog, SearchInput,
-} from "../components/ui";
-import { fmtDate, parseApiError } from "../utils/format";
+} from "@/components/ui";
+import { fmtDate, parseApiError } from "@/utils/format";
 
 export default function UsersPage() {
   const [items, setItems] = useState([]);

@@ -4,11 +4,11 @@ import toast from "react-hot-toast";
 import {
   AlertTriangle, CheckCircle, Clock, Zap,
 } from "lucide-react";
-import { notificationsAPI } from "../api";
+import { notificationsAPI } from "@/api";
 import {
   PageHeader, PageLoader, Empty, Tabs, Spinner,
-} from "../components/ui";
-import { fmtDate, parseApiError } from "../utils/format";
+} from "@/components/ui";
+import { fmtDate, parseApiError } from "@/utils/format";
 
 const TYPE_ICON = {
   deviation: AlertTriangle,

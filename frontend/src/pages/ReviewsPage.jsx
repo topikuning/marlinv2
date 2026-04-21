@@ -3,11 +3,11 @@ import toast from "react-hot-toast";
 import {
   Plus, ClipboardCheck, AlertCircle, CheckCircle, Clock, Edit2, Trash2, Upload, Image,
 } from "lucide-react";
-import { contractsAPI, reviewsAPI } from "../api";
+import { contractsAPI, reviewsAPI } from "@/api";
 import {
   PageHeader, PageLoader, Modal, Empty, Spinner, ConfirmDialog,
-} from "../components/ui";
-import { fmtDate, parseApiError, assetUrl } from "../utils/format";
+} from "@/components/ui";
+import { fmtDate, parseApiError, assetUrl } from "@/utils/format";
 
 const SEVERITY_BADGE = {
   low: "badge-gray",

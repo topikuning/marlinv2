@@ -6,13 +6,13 @@ import {
 } from "lucide-react";
 import {
   contractsAPI, weeklyAPI, downloadBlob,
-} from "../api";
+} from "@/api";
 import {
   PageHeader, PageLoader, Modal, Empty, Spinner,
-} from "../components/ui";
+} from "@/components/ui";
 import {
   fmtPct, fmtDate, deviationBadge, parseApiError,
-} from "../utils/format";
+} from "@/utils/format";
 
 export default function WeeklyReportsPage() {
   const [contracts, setContracts] = useState([]);

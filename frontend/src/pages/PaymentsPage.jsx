@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { Plus, Edit2, Trash2, Upload, FileText, Wallet } from "lucide-react";
-import { contractsAPI, paymentsAPI } from "../api";
+import { contractsAPI, paymentsAPI } from "@/api";
 import {
   PageHeader, PageLoader, Modal, Empty, Spinner, ConfirmDialog,
-} from "../components/ui";
-import { fmtCurrency, fmtPct, fmtDate, parseApiError } from "../utils/format";
+} from "@/components/ui";
+import { fmtCurrency, fmtPct, fmtDate, parseApiError } from "@/utils/format";
 
 const STATUS_BADGE = {
   planned: "badge-gray",

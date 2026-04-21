@@ -5,13 +5,13 @@ import toast from "react-hot-toast";
 import {
   ChevronRight, Save, Image, Upload, Trash2, X, Lock, Unlock,
 } from "lucide-react";
-import { weeklyAPI, boqAPI } from "../api";
+import { weeklyAPI, boqAPI } from "@/api";
 import {
   PageLoader, Modal, Spinner, Tabs, Empty,
-} from "../components/ui";
+} from "@/components/ui";
 import {
   fmtPct, fmtDate, deviationBadge, parseApiError, fmtNum, assetUrl,
-} from "../utils/format";
+} from "@/utils/format";
 
 export default function WeeklyReportDetailPage() {
   const { id } = useParams();

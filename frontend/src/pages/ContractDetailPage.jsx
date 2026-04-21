@@ -7,17 +7,17 @@ import {
 } from "lucide-react";
 import {
   contractsAPI, locationsAPI, facilitiesAPI, boqAPI, templatesAPI, downloadBlob,
-} from "../api";
+} from "@/api";
 import {
   PageLoader, Modal, Tabs, Empty, Spinner, ConfirmDialog,
-} from "../components/ui";
+} from "@/components/ui";
 import {
   fmtCurrency, fmtDate, contractStatusBadge, parseApiError, fmtNum,
-} from "../utils/format";
-import BOQGrid from "../components/grids/BOQGrid";
-import BOQImportWizard from "../components/modals/BOQImportWizard";
-import EditContractModal from "../components/modals/EditContractModal";
-import ContractActivationPanel from "../components/ContractActivationPanel";
+} from "@/utils/format";
+import BOQGrid from "@/components/grids/BOQGrid";
+import BOQImportWizard from "@/components/modals/BOQImportWizard";
+import EditContractModal from "@/components/modals/EditContractModal";
+import ContractActivationPanel from "@/components/ContractActivationPanel";
 
 export default function ContractDetailPage() {
   const { id } = useParams();

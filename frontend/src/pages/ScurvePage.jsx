@@ -5,9 +5,9 @@ import {
   CartesianGrid, Tooltip, Legend, ReferenceLine,
 } from "recharts";
 import { TrendingUp } from "lucide-react";
-import { contractsAPI, analyticsAPI } from "../api";
-import { PageHeader, PageLoader, Empty } from "../components/ui";
-import { fmtPct } from "../utils/format";
+import { contractsAPI, analyticsAPI } from "@/api";
+import { PageHeader, PageLoader, Empty } from "@/components/ui";
+import { fmtPct } from "@/utils/format";
 
 export default function ScurvePage() {
   const [params] = useSearchParams();

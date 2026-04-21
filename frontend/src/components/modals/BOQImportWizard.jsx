@@ -1,9 +1,9 @@
 import { useState } from "react";
 import toast from "react-hot-toast";
 import { Upload, FileSpreadsheet, CheckCircle, AlertTriangle, Download } from "lucide-react";
-import { Modal, Spinner } from "../ui";
-import { boqAPI, templatesAPI, downloadBlob } from "../../api";
-import { parseApiError, fmtNum } from "../../utils/format";
+import { Modal, Spinner } from "@/components/ui";
+import { boqAPI, templatesAPI, downloadBlob } from "@/api";
+import { parseApiError, fmtNum } from "@/utils/format";
 
 /**
  * Wizard flow:

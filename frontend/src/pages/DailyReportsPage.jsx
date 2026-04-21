@@ -3,11 +3,11 @@ import toast from "react-hot-toast";
 import {
   Plus, Calendar, Upload, Trash2, Image, Edit2,
 } from "lucide-react";
-import { contractsAPI, dailyAPI } from "../api";
+import { contractsAPI, dailyAPI } from "@/api";
 import {
   PageHeader, PageLoader, Modal, Empty, Spinner, ConfirmDialog,
-} from "../components/ui";
-import { fmtDate, parseApiError, assetUrl } from "../utils/format";
+} from "@/components/ui";
+import { fmtDate, parseApiError, assetUrl } from "@/utils/format";
 
 export default function DailyReportsPage() {
   const [contracts, setContracts] = useState([]);

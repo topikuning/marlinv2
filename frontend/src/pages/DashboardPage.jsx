@@ -4,13 +4,13 @@ import {
   Building2, Wallet, Activity, AlertTriangle, TrendingUp,
   CalendarX, MapPin, ChevronRight, CheckCircle,
 } from "lucide-react";
-import { analyticsAPI, notificationsAPI } from "../api";
+import { analyticsAPI, notificationsAPI } from "@/api";
 import {
   PageHeader, PageLoader, StatCard, SearchInput, Empty,
-} from "../components/ui";
+} from "@/components/ui";
 import {
   fmtCurrency, fmtPct, deviationBadge, contractStatusBadge,
-} from "../utils/format";
+} from "@/utils/format";
 
 const STATUS_LABEL = {
   draft: "Draft", active: "Aktif", addendum: "Addendum",

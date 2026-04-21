@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { Plus, Edit2, Trash2, Building2, UserCog, Tags, Copy, UserCheck } from "lucide-react";
-import { masterAPI } from "../api";
+import { masterAPI } from "@/api";
 import {
   PageHeader, PageLoader, Modal, Empty, Spinner,
   ConfirmDialog, SearchInput,
-} from "../components/ui";
-import { parseApiError } from "../utils/format";
+} from "@/components/ui";
+import { parseApiError } from "@/utils/format";
 
 
 /**

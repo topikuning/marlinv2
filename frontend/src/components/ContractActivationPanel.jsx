@@ -3,9 +3,9 @@ import toast from "react-hot-toast";
 import {
   CheckCircle2, XCircle, Play, Flag, Loader2, AlertTriangle,
 } from "lucide-react";
-import { contractsAPI } from "../../api";
-import { Spinner } from "../ui";
-import { parseApiError, fmtCurrency } from "../../utils/format";
+import { contractsAPI } from "@/api";
+import { Spinner } from "@/components/ui";
+import { parseApiError, fmtCurrency } from "@/utils/format";
 
 /**
  * Contract activation panel.

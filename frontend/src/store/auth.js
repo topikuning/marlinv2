@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { authAPI, rbacAPI } from "../api";
+import { authAPI, rbacAPI } from "@/api";
 
 export const useAuthStore = create((set, get) => ({
   user: null,

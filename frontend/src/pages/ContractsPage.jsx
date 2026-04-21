@@ -6,13 +6,13 @@ import {
 } from "lucide-react";
 import {
   contractsAPI, masterAPI, locationsAPI, templatesAPI, downloadBlob,
-} from "../api";
+} from "@/api";
 import {
   PageHeader, PageLoader, Modal, Empty, SearchInput, Spinner,
-} from "../components/ui";
+} from "@/components/ui";
 import {
   fmtCurrency, fmtDate, contractStatusBadge, parseApiError,
-} from "../utils/format";
+} from "@/utils/format";
 
 const STATUS_LABEL = {
   draft: "Draft", active: "Aktif", addendum: "Addendum",
