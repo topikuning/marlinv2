@@ -361,8 +361,17 @@ def _expand(globs, all_codes):
 def run():
     db = SessionLocal()
     try:
-        # Step 0 — Migration
-        print("▸ Migration...")
+        # Step 0 — Buat semua tabel dari model SQLAlchemy DULU,
+        # baru jalankan ALTER TABLE untuk kolom tambahan v2.1+.
+        # Urutan ini penting: CREATE TABLE tidak bisa dijalankan
+        # setelah ALTER TABLE pada tabel yang belum ada.
+        print("▸ Membuat tabel dari model (create_all)...")
+        Base.metadata.create_all(bind=engine)
+        print("  ✓ Tabel tersedia\n")
+
+        # Step 0b — Migration: tambah kolom v2.1+ yang tidak ada di
+        # model awal. IF NOT EXISTS membuat ini idempotent.
+        print("▸ Migration kolom tambahan (idempotent)...")
         for sql in MIGRATION_SQL:
             try:
                 db.execute(text(sql))
@@ -370,7 +379,6 @@ def run():
             except Exception as e:
                 db.rollback()
                 print(f"  ⚠  {str(e)[:80]}")
-        Base.metadata.create_all(bind=engine)
         print("  ✓ Selesai\n")
 
         # Step 1 — Permissions
