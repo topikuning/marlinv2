@@ -128,37 +128,44 @@ FAC_TEMPLATE = {
 # BOQ items per tipe fasilitas
 # (desc, unit, volume, unit_price, level, is_leaf)
 BOQ_TEMPLATE = {
+    # Format: (desc, unit, volume, unit_price, level, is_leaf, master_work_code)
+    # master_work_code = None → item custom (tidak ada di master)
     "Tambatan Perahu": [
-        ("Pekerjaan Persiapan",              "ls",   1,  45_000_000, 0, False),
-        ("  Mobilisasi & Direksi Keet",      "ls",   1,  45_000_000, 1, True),
-        ("Pekerjaan Pondasi & Struktur",     "ls",   1, 380_000_000, 0, False),
-        ("  Tiang Pancang Beton Pracetak",   "m",   40,   2_200_000, 1, True),
-        ("  Balok & Pelat Beton K-300",      "m³",  75,   2_500_000, 1, True),
-        ("  Pengecatan Anti Karat",          "m²", 180,      95_000, 1, True),
+        ("Pekerjaan Persiapan",             "ls",    1,  45_000_000, 0, False, None),
+        ("  Mobilisasi & Demobilisasi",     "ls",    1,  30_000_000, 1, True,  "PER-001"),
+        ("  Direksi Keet & Papan Nama",     "ls",    1,  15_000_000, 1, True,  "PER-002"),
+        ("Pekerjaan Pondasi & Struktur",    "ls",    1, 380_000_000, 0, False, None),
+        ("  Tiang Pancang Beton Pracetak",  "m",    40,   2_200_000, 1, True,  "STR-P04"),
+        ("  Balok & Pelat Beton K-300",     "m³",   75,   2_500_000, 1, True,  "STR-B04"),
+        ("  Pengecatan Anti Karat",         "m²",  180,      95_000, 1, True,  "ARS-F02"),
+        ("  Fender Karet Tipe V 150x150",   "unit", 12,   4_500_000, 1, True,  None),
+        ("  Bollard Baja 10 Ton",           "unit",  6,   8_200_000, 1, True,  None),
     ],
     "Gudang Beku Portable": [
-        ("Pekerjaan Persiapan & Pondasi",    "ls",   1,  35_000_000, 0, False),
-        ("  Pondasi Telapak Beton K-250",    "m³",  10,   4_200_000, 1, True),
-        ("Unit Gudang Beku 10 Ton",          "unit", 1, 1_200_000_000, 1, True),
-        ("Instalasi Listrik 3 Phase",        "ls",   1,  95_000_000, 1, True),
+        ("Pekerjaan Persiapan & Pondasi",   "ls",    1,  35_000_000, 0, False, None),
+        ("  Mobilisasi Unit Gudang Beku",   "ls",    1,  20_000_000, 1, True,  "PER-001"),
+        ("  Pondasi Telapak Beton K-250",   "m³",   10,   4_200_000, 1, True,  "STR-P02"),
+        ("Unit Gudang Beku Portable 10 Ton","unit",  1, 1_200_000_000, 1, True, "KHS-005"),
+        ("Instalasi Listrik 3 Phase",       "ls",    1,  95_000_000, 1, True,  "MEP-E05"),
     ],
     "Revetmen": [
-        ("Galian & Urugan",                  "m³", 200,      90_000, 0, False),
-        ("  Galian Tanah",                   "m³", 120,      75_000, 1, True),
-        ("  Urugan Batu Gunung",             "m³",  80,     115_000, 1, True),
-        ("Pasang Batu Revetmen",             "m³", 380,     880_000, 1, True),
-        ("Batu Pelindung Armor Rock",        "m³",  65,   1_250_000, 1, True),
+        ("Pekerjaan Tanah",                 "ls",    1,  28_000_000, 0, False, None),
+        ("  Galian Tanah",                  "m³",  120,      75_000, 1, True,  "PER-006"),
+        ("  Urugan Batu Gunung",            "m³",   80,     115_000, 1, True,  "PER-008"),
+        ("Pemasangan Batu Revetmen",        "m³",  380,     880_000, 1, True,  "KHS-010"),
+        ("Batu Pelindung Armor Rock",       "m³",   65,   1_250_000, 1, True,  None),
+        ("Geotextile Woven 200 gr/m²",      "m²",  420,      45_000, 1, True,  None),
     ],
     "Saluran & Jalan": [
-        ("Saluran Drainase Beton U-40",      "m",  180,     450_000, 1, True),
-        ("Jalan Beton K-250 t.15cm",         "m²", 320,     680_000, 1, True),
-        ("Paving Block Area Parkir",         "m²", 150,     350_000, 1, True),
+        ("Saluran Drainase Beton U-40",     "m",   180,     450_000, 1, True,  "SW-001"),
+        ("Jalan Beton K-250 t.15cm",        "m²",  320,     680_000, 1, True,  "SW-003"),
+        ("Perkerasan Paving Block",         "m²",  150,     350_000, 1, True,  "SW-005"),
     ],
     "Kantor & Toilet": [
-        ("Bangunan Kantor 6x8m",             "m²",  48,   2_900_000, 1, True),
-        ("Toilet Umum 2 Unit",               "unit", 2,  38_000_000, 1, True),
-        ("Instalasi Air Bersih & Kotor",     "ls",   1,  25_000_000, 1, True),
-        ("Instalasi Listrik",                "ls",   1,  18_000_000, 1, True),
+        ("Bangunan Kantor 6x8m",            "m²",   48,   2_900_000, 1, True,  "ARS-L03"),
+        ("Toilet Umum 2 Unit",              "unit",  2,  38_000_000, 1, True,  "MEP-S01"),
+        ("Instalasi Air Bersih & Kotor",    "ls",    1,  25_000_000, 1, True,  "MEP-P01"),
+        ("Instalasi Listrik",               "ls",    1,  18_000_000, 1, True,  "MEP-E01"),
     ],
 }
 
@@ -509,12 +516,13 @@ def run():
                     contract_all_facs.append(fac)
 
                     items_def = BOQ_TEMPLATE.get(fac_name, BOQ_TEMPLATE["Saluran & Jalan"])
-                    for order_i, (desc, unit, vol, up, level, is_leaf) in enumerate(items_def):
+                    for order_i, (desc, unit, vol, up, level, is_leaf, mwc) in enumerate(items_def):
                         item = BOQItem(
                             boq_revision_id=rev.id,
                             facility_id=fac.id,
-                            original_code=f"{fac_code}.{order_i+1}",
-                            full_code=f"{fac_code}.{order_i+1}",
+                            master_work_code=mwc,
+                            original_code=mwc if mwc else f"{fac_code}.{order_i+1}",
+                            full_code=mwc if mwc else f"{fac_code}.{order_i+1}",
                             level=level,
                             display_order=len(contract_all_items) + order_i,
                             description=desc.strip(),
