@@ -65,8 +65,37 @@ export function assetUrl(path) {
 
 export function parseApiError(err) {
   const detail = err?.response?.data?.detail;
+
+  // Plain string detail (most common FastAPI HTTPException)
   if (typeof detail === "string") return detail;
-  if (Array.isArray(detail))
-    return detail.map((d) => d.msg || JSON.stringify(d)).join(", ");
-  return err?.message || "Terjadi kesalahan";
+
+  // Validation errors from Pydantic — array of {loc, msg, type}
+  if (Array.isArray(detail)) {
+    return detail
+      .map((d) => {
+        if (typeof d === "string") return d;
+        // Pretty-print validation errors: "body.page_size: less than or equal to 200"
+        const loc = Array.isArray(d.loc) ? d.loc.filter(Boolean).join(".") : "";
+        const msg = d.msg || d.type || JSON.stringify(d);
+        return loc ? `${loc}: ${msg}` : msg;
+      })
+      .join(", ");
+  }
+
+  // Structured error: {message, code, ...extras} — used by BOQ write-guard,
+  // contract activation errors, etc. Return the human-readable message.
+  if (detail && typeof detail === "object") {
+    if (typeof detail.message === "string") return detail.message;
+    // Matrix editor error shape
+    if (detail.rejected_fields) {
+      return `Field tidak bisa diubah: ${detail.rejected_fields.join(", ")}`;
+    }
+    // Last resort for unexpected dict shape
+    return JSON.stringify(detail);
+  }
+
+  // Network / no-response errors
+  if (err?.code === "ERR_NETWORK") return "Gagal terhubung ke server.";
+
+  return err?.response?.statusText || err?.message || "Terjadi kesalahan";
 }

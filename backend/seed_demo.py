@@ -430,6 +430,11 @@ def run():
         total_weekly = 0
         total_daily  = 0
 
+        # Track kontrak yang dibuat, dipakai nanti untuk auto-assign ke demo
+        # users (STRICT access policy — konsultan/ppk/kontraktor harus ada
+        # di assigned_contract_ids, kalau kosong tidak bisa akses apapun).
+        created_contract_ids = []
+
         for cfg in CONTRACTS:
             print(f"▸ Kontrak {cfg['nomor']}...")
             start_date = TODAY - timedelta(weeks=cfg["current_week"])
@@ -464,8 +469,7 @@ def run():
                 ),
             )
             db.add(contract); db.flush()
-
-            # Revision CCO-0
+            created_contract_ids.append(contract.id)
             rev = BOQRevision(
                 contract_id=contract.id,
                 cco_number=0, revision_code="CCO-0",
@@ -656,6 +660,28 @@ def run():
             db.flush()
             n_lok = len(cfg["lokasi"])
             print(f"  ✓ {n_lok} lokasi, {len(cfg['lokasi']) * 3:.0f}±  fasilitas")
+
+        # ── Auto-assign demo users ke semua kontrak demo ─────────────────────
+        # Konsekuensi STRICT contract access: konsultan/ppk/kontraktor yang
+        # tidak punya assigned_contract_ids → tidak bisa akses kontrak
+        # apapun. Untuk demo, assign semuanya ke semua kontrak supaya tester
+        # bisa login dengan 4 demo user dan langsung melihat data.
+        print("\n▸ Auto-assign demo users ke kontrak demo...")
+        demo_emails = [
+            "konsultan.demo@knmp.id",
+            "ppk.demo@knmp.id",
+            "kontraktor.demo@knmp.id",
+            "manager.demo@knmp.id",
+        ]
+        assigned_count = 0
+        for email in demo_emails:
+            u = db.query(User).filter(User.email == email).first()
+            if u:
+                # stringify karena kolom JSON string array
+                u.assigned_contract_ids = [str(cid) for cid in created_contract_ids]
+                assigned_count += 1
+        db.flush()
+        print(f"  ✓ {assigned_count} demo user → {len(created_contract_ids)} kontrak\n")
 
         db.commit()
 

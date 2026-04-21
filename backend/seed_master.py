@@ -130,6 +130,7 @@ MENUS = [
     ("master_companies",    "Perusahaan",          "Building2",       "/master/companies",    "master", 91),
     ("master_ppk",          "PPK",                 "UserCog",         "/master/ppk",          "master", 92),
     ("master_work_codes",   "Kode Pekerjaan",      "Tags",            "/master/work-codes",   "master", 93),
+    ("master_facilities",   "Fasilitas",           "Layers",          "/master/facilities",   "master", 94),
     ("admin",               "Administrasi",        "Settings",        None,                   None,   100),
     ("admin_users",         "User",                "Users",           "/admin/users",         "admin", 101),
     ("admin_roles",         "Role & Permission",   "ShieldCheck",     "/admin/roles",         "admin", 102),
@@ -151,7 +152,7 @@ ROLES = [
      ["master.*","contract.*","report.*","payment.*","review.*","notification.read"],
      ["dashboard","contracts","reports_daily","reports_weekly","scurve",
       "payments","reviews","warnings",
-      "master","master_companies","master_ppk","master_work_codes"]),
+      "master","master_companies","master_ppk","master_work_codes","master_facilities"]),
 
     ("ppk",       "PPK (Pejabat Pembuat Komitmen)",
      "PPK yang membawahi kontrak tertentu", False,

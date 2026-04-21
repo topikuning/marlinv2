@@ -6,7 +6,8 @@ import {
   Trash2, Edit2, Download, Building2,
 } from "lucide-react";
 import {
-  contractsAPI, locationsAPI, facilitiesAPI, boqAPI, templatesAPI, downloadBlob,
+  contractsAPI, locationsAPI, facilitiesAPI, boqAPI, masterAPI,
+  templatesAPI, downloadBlob,
 } from "@/api";
 import {
   PageLoader, Modal, Tabs, Empty, Spinner, ConfirmDialog,
@@ -362,6 +363,18 @@ export default function ContractDetailPage() {
           <BOQGrid
             facilityId={boqFacility.id}
             items={boqItems}
+            revisionLocked={
+              // Kontrak DRAFT → BOQ bebas diedit (CCO-0 masih DRAFT).
+              // Kontrak ACTIVE / ADDENDUM → CCO-0/CCO-N yang aktif sudah
+              // APPROVED, editing harus via Addendum. Banner lock muncul.
+              // COMPLETED / TERMINATED → readonly total (ditangani via
+              // readonly prop di bawah).
+              contract.status === "active" || contract.status === "addendum"
+            }
+            readonly={
+              contract.status === "completed" ||
+              contract.status === "terminated"
+            }
             onChange={() => {
               boqAPI.listByFacility(boqFacility.id).then(({ data }) => setBoqItems(data));
               load();
@@ -646,12 +659,34 @@ function AddFacilityModal({ open, onClose, location, onSuccess }) {
   const [mode, setMode] = useState("bulk");
   const [loading, setLoading] = useState(false);
 
+  // Master Fasilitas untuk autocomplete (opsi C — hybrid, boleh pilih
+  // atau ketik manual). Diload sekali saat modal dibuka.
+  const [masterFacilities, setMasterFacilities] = useState([]);
+
   useEffect(() => {
     if (open) {
       setRows([blankFac()]);
       setFile(null);
+      masterAPI.facilities({ page_size: 200, is_active: true })
+        .then(({ data }) => setMasterFacilities(data.items || []))
+        .catch(() => setMasterFacilities([]));
     }
   }, [open]);
+
+  // Helper: saat user pilih / ketik nama master, autofill code/type/unit
+  const applyMasterMatch = (row, nameValue) => {
+    const match = masterFacilities.find(
+      (m) => m.name.toLowerCase() === nameValue.toLowerCase()
+    );
+    if (!match) return { ...row, facility_name: nameValue };
+    return {
+      ...row,
+      facility_name: match.name,
+      facility_code: row.facility_code || match.code.replace(/_/g, "-"),
+      facility_type: match.facility_type,
+      master_facility_id: match.id,
+    };
+  };
 
   const submit = async () => {
     if (!location) return;
@@ -718,6 +753,25 @@ function AddFacilityModal({ open, onClose, location, onSuccess }) {
 
       {mode === "bulk" && (
         <div>
+          {/* Datalist global untuk semua input nama fasilitas di bawah.
+              Browser akan tampil dropdown otomatis saat user fokus input
+              yang list="master-facility-options". Tetap allow ketik
+              manual jika tidak ada yang cocok (hybrid mode). */}
+          <datalist id="master-facility-options">
+            {masterFacilities.map((m) => (
+              <option key={m.id} value={m.name}>
+                {m.code} · {m.typical_unit || ""}
+              </option>
+            ))}
+          </datalist>
+
+          {masterFacilities.length > 0 && (
+            <p className="text-[11px] text-ink-500 mb-2 px-1">
+              💡 Klik kolom nama → muncul dropdown {masterFacilities.length} master
+              fasilitas, atau ketik bebas untuk fasilitas custom.
+            </p>
+          )}
+
           <div className="space-y-2 max-h-96 overflow-y-auto">
             {rows.map((r, i) => (
               <div key={i} className="grid grid-cols-12 gap-2 items-end">
@@ -735,12 +789,13 @@ function AddFacilityModal({ open, onClose, location, onSuccess }) {
                 />
                 <input
                   className="input col-span-5"
-                  placeholder="Nama fasilitas (Gudang Beku, Pabrik Es, ...)"
+                  list="master-facility-options"
+                  placeholder="Pilih dari master atau ketik bebas..."
                   value={r.facility_name}
                   onChange={(e) =>
                     setRows((rs) =>
                       rs.map((x, idx) =>
-                        idx === i ? { ...x, facility_name: e.target.value } : x
+                        idx === i ? applyMasterMatch(x, e.target.value) : x
                       )
                     )
                   }

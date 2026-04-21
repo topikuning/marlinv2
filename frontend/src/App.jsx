@@ -14,7 +14,7 @@ import ScurvePage from "@/pages/ScurvePage";
 import PaymentsPage from "@/pages/PaymentsPage";
 import ReviewsPage from "@/pages/ReviewsPage";
 import WarningsPage from "@/pages/WarningsPage";
-import { CompaniesPage, PPKPage, WorkCodesPage } from "@/pages/MasterPages";
+import { CompaniesPage, PPKPage, WorkCodesPage, MasterFacilitiesPage } from "@/pages/MasterPages";
 import UsersPage from "@/pages/UsersPage";
 import RolesPage from "@/pages/RolesPage";
 import NotificationsPage from "@/pages/NotificationsPage";
@@ -51,6 +51,7 @@ export default function App() {
       <Route path="/master/companies" element={<ProtectedRoute><CompaniesPage /></ProtectedRoute>} />
       <Route path="/master/ppk" element={<ProtectedRoute><PPKPage /></ProtectedRoute>} />
       <Route path="/master/work-codes" element={<ProtectedRoute><WorkCodesPage /></ProtectedRoute>} />
+      <Route path="/master/facilities" element={<ProtectedRoute><MasterFacilitiesPage /></ProtectedRoute>} />
       <Route path="/admin/users" element={<ProtectedRoute><UsersPage /></ProtectedRoute>} />
       <Route path="/admin/roles" element={<ProtectedRoute><RolesPage /></ProtectedRoute>} />
       <Route path="/admin/notifications" element={<ProtectedRoute><NotificationsPage /></ProtectedRoute>} />

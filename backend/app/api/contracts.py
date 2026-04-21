@@ -172,12 +172,21 @@ def list_contracts(
             allowed.append(ContractStatus.DRAFT)
         query = query.filter(Contract.status.in_(allowed))
 
-    # Scope by assigned contracts for konsultan/kontraktor
+    # ── STRICT contract access control ───────────────────────────────────────
+    # For roles ppk/konsultan/kontraktor, only contracts in their
+    # assigned_contract_ids are visible. Empty assignment → empty list
+    # (consistent with user_can_access_contract rejecting detail access).
+    # This prevents the paradox where users could see contracts in the
+    # list but get 403 when clicking them.
+    #
+    # Roles that always see all: superadmin, admin_pusat, itjen, viewer, manager.
     role = current_user.role_obj
-    if role and role.code in ("konsultan", "kontraktor", "ppk"):
+    if role and role.code in ("ppk", "konsultan", "kontraktor"):
         assigned = [str(c) for c in (current_user.assigned_contract_ids or [])]
-        if assigned:
-            query = query.filter(Contract.id.in_(assigned))
+        if not assigned:
+            # No assignments → no contracts. Short-circuit to empty result.
+            return {"total": 0, "page": page, "page_size": page_size, "items": []}
+        query = query.filter(Contract.id.in_(assigned))
 
     total = query.count()
     items = query.order_by(Contract.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()

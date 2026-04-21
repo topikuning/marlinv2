@@ -750,3 +750,212 @@ function WorkCodeModal({ initial, onClose, onSave }) {
     </Modal>
   );
 }
+
+
+// ════════════════════════════════════════════════════════════════════════════
+//  MASTER FASILITAS — katalog tipe bangunan (Tambatan, Gudang Beku, dll)
+//
+//  Kode di sini dipakai sebagai pilihan saat user menambah Facility ke
+//  sebuah Lokasi (hybrid: boleh pilih dari master, boleh manual).
+// ════════════════════════════════════════════════════════════════════════════
+export function MasterFacilitiesPage() {
+  const c = useCrudPage({
+    listFn: masterAPI.facilities,
+    createFn: masterAPI.createFacility,
+    updateFn: (id, d) => masterAPI.updateFacility(id, d),
+    deleteFn: (id) => masterAPI.deleteFacility(id),
+    idField: "id",
+  });
+
+  return (
+    <div className="p-6 max-w-screen-xl mx-auto">
+      <PageHeader
+        title="Master Fasilitas"
+        description="Katalog tipe bangunan & infrastruktur KNMP"
+        actions={
+          <>
+            <SearchInput value={c.search} onChange={c.setSearch} />
+            <button className="btn-primary" onClick={() => c.setEditing({})}>
+              <Plus size={14} /> Fasilitas Baru
+            </button>
+          </>
+        }
+      />
+      {c.loading ? (
+        <PageLoader />
+      ) : c.items.length === 0 ? (
+        <Empty icon={Building2} title="Belum ada master fasilitas" />
+      ) : (
+        <div className="card overflow-hidden">
+          <table className="w-full">
+            <thead>
+              <tr>
+                <th className="table-th">Kode</th>
+                <th className="table-th">Nama Fasilitas</th>
+                <th className="table-th">Tipe</th>
+                <th className="table-th">Satuan Baku</th>
+                <th className="table-th">Urutan</th>
+                <th className="table-th">Status</th>
+                <th className="table-th"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {c.items.map((it) => (
+                <tr key={it.id}>
+                  <td className="table-td font-mono text-xs">{it.code}</td>
+                  <td className="table-td font-medium">{it.name}</td>
+                  <td className="table-td">
+                    <span className="badge-gray text-xs">{it.facility_type}</span>
+                  </td>
+                  <td className="table-td text-xs">{it.typical_unit || "—"}</td>
+                  <td className="table-td text-xs text-ink-500">{it.display_order}</td>
+                  <td className="table-td">
+                    {it.is_active ? (
+                      <span className="badge-green text-xs">Aktif</span>
+                    ) : (
+                      <span className="badge-gray text-xs">Nonaktif</span>
+                    )}
+                  </td>
+                  <td className="table-td">
+                    <div className="flex gap-1">
+                      <button className="btn-ghost btn-xs" onClick={() => c.setEditing(it)}>
+                        <Edit2 size={11} />
+                      </button>
+                      <button
+                        className="btn-ghost btn-xs text-red-600"
+                        onClick={() => c.setConfirmDel(it)}
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {c.editing !== null && (
+        <FacilityMasterModal
+          initial={c.editing.id ? c.editing : null}
+          onClose={() => c.setEditing(null)}
+          onSave={c.save}
+        />
+      )}
+      <ConfirmDialog
+        open={!!c.confirmDel}
+        danger
+        title="Nonaktifkan master fasilitas?"
+        description={
+          `"${c.confirmDel?.name}" akan dinonaktifkan. Data Facility yang ` +
+          `sudah pakai referensi ini tidak akan terpengaruh, tapi master ini ` +
+          `tidak akan muncul di pilihan form baru.`
+        }
+        onCancel={() => c.setConfirmDel(null)}
+        onConfirm={c.del}
+      />
+    </div>
+  );
+}
+
+function FacilityMasterModal({ initial, onClose, onSave }) {
+  const [form, setForm] = useState(
+    initial || {
+      code: "",
+      name: "",
+      facility_type: "perikanan",
+      typical_unit: "unit",
+      description: "",
+      display_order: 0,
+      is_active: true,
+    }
+  );
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    setSaving(true);
+    await onSave(form);
+    setSaving(false);
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={initial ? `Edit: ${initial.name}` : "Master Fasilitas Baru"}
+      size="md"
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose}>Batal</button>
+          <button className="btn-primary" onClick={submit} disabled={saving}>
+            {saving && <Spinner size={14} />} Simpan
+          </button>
+        </>
+      }
+    >
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="label">Kode *</label>
+          <input
+            className="input font-mono uppercase"
+            placeholder="GUDANG_BEKU"
+            value={form.code}
+            onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })}
+            disabled={!!initial}
+          />
+        </div>
+        <div>
+          <label className="label">Urutan Tampil</label>
+          <input
+            type="number"
+            className="input"
+            value={form.display_order}
+            onChange={(e) => setForm({ ...form, display_order: parseInt(e.target.value) || 0 })}
+          />
+        </div>
+        <div className="col-span-2">
+          <label className="label">Nama Fasilitas *</label>
+          <input
+            className="input"
+            placeholder="Gudang Beku Portable"
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+          />
+        </div>
+        <div>
+          <label className="label">Tipe</label>
+          <select
+            className="select"
+            value={form.facility_type}
+            onChange={(e) => setForm({ ...form, facility_type: e.target.value })}
+          >
+            <option value="perikanan">Perikanan</option>
+            <option value="utilitas">Utilitas</option>
+            <option value="sanitasi">Sanitasi</option>
+            <option value="struktur">Struktur</option>
+            <option value="sitework">Site Work</option>
+            <option value="umum">Umum</option>
+          </select>
+        </div>
+        <div>
+          <label className="label">Satuan Baku</label>
+          <input
+            className="input"
+            placeholder="unit / m / m²"
+            value={form.typical_unit || ""}
+            onChange={(e) => setForm({ ...form, typical_unit: e.target.value })}
+          />
+        </div>
+        <div className="col-span-2">
+          <label className="label">Deskripsi</label>
+          <textarea
+            className="textarea h-16 resize-none"
+            value={form.description || ""}
+            onChange={(e) => setForm({ ...form, description: e.target.value })}
+          />
+        </div>
+      </div>
+    </Modal>
+  );
+}

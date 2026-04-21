@@ -351,6 +351,29 @@ def update_boq_item(
     if not item:
         raise HTTPException(404, "Item tidak ditemukan")
 
+    # ── Write-guard: APPROVED revision is read-only ───────────────────────────
+    # Symmetric with create_boq_item/bulk_create guard. Editing in place would
+    # break audit trail and change_type diff generation across CCO revisions.
+    # The only way to modify a BOQ in an active contract is to create an
+    # Addendum, which clones the active revision into a new DRAFT one.
+    if item.boq_revision_id:
+        from app.models.models import BOQRevision, RevisionStatus
+        rev = db.query(BOQRevision).filter(BOQRevision.id == item.boq_revision_id).first()
+        if rev and rev.status == RevisionStatus.APPROVED and rev.is_active:
+            raise HTTPException(
+                400,
+                {
+                    "message": (
+                        f"BOQ tidak dapat diubah karena revisi {rev.revision_code} "
+                        f"sudah disetujui dan kontrak aktif. Buat Addendum untuk "
+                        f"mengubah BOQ di kontrak yang sudah berjalan."
+                    ),
+                    "code": "revision_approved_readonly",
+                    "active_revision_id": str(rev.id),
+                    "active_revision_code": rev.revision_code,
+                },
+            )
+
     # Snapshot for addendum history
     if data.addendum_id:
         snapshot = {
@@ -399,6 +422,25 @@ def delete_boq_item(
     item = db.query(BOQItem).filter(BOQItem.id == item_id).first()
     if not item:
         raise HTTPException(404, "Item tidak ditemukan")
+
+    # Write-guard: same as update (see update_boq_item for rationale)
+    if item.boq_revision_id:
+        from app.models.models import BOQRevision, RevisionStatus
+        rev = db.query(BOQRevision).filter(BOQRevision.id == item.boq_revision_id).first()
+        if rev and rev.status == RevisionStatus.APPROVED and rev.is_active:
+            raise HTTPException(
+                400,
+                {
+                    "message": (
+                        f"Item BOQ tidak dapat dihapus karena revisi {rev.revision_code} "
+                        f"sudah disetujui dan kontrak aktif. Buat Addendum untuk "
+                        f"menghapus item."
+                    ),
+                    "code": "revision_approved_readonly",
+                    "active_revision_code": rev.revision_code,
+                },
+            )
+
     item.is_active = False  # soft delete
     db.flush()
     recalculate_facility_weights(db, str(item.facility_id))

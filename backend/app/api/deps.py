@@ -86,8 +86,29 @@ def get_user_role_code(db: Session, user: User) -> Optional[str]:
 
 
 def user_can_access_contract(db: Session, user: User, contract_id: str) -> bool:
+    """
+    Decide whether the given user can read a specific contract.
+
+    Access matrix — must stay in lockstep with list_contracts filtering,
+    otherwise the UI shows the list-vs-detail paradox (user sees contract
+    in list but gets 403 on detail).
+
+      Role                 → Scope
+      ──────────────────────────────────────────────────────────────
+      superadmin           → all contracts
+      admin_pusat          → all contracts
+      itjen                → all contracts (read-only inspectorate)
+      viewer               → all contracts (read-only)
+      manager              → all contracts (supervisor across satker)
+      ppk                  → must be in assigned_contract_ids
+      konsultan            → must be in assigned_contract_ids
+      kontraktor           → must be in assigned_contract_ids
+      (unknown role)       → deny
+    """
     role_code = get_user_role_code(db, user)
-    if role_code in ("superadmin", "admin_pusat", "itjen", "viewer"):
+    if role_code in ("superadmin", "admin_pusat", "itjen", "viewer", "manager"):
         return True
-    assigned = user.assigned_contract_ids or []
-    return str(contract_id) in [str(c) for c in assigned]
+    if role_code in ("ppk", "konsultan", "kontraktor"):
+        assigned = [str(c) for c in (user.assigned_contract_ids or [])]
+        return str(contract_id) in assigned
+    return False

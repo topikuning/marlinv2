@@ -219,7 +219,7 @@ def delete_ppk(
 def list_work_codes(
     q: Optional[str] = None,
     category: Optional[str] = None,
-    page_size: int = Query(50, ge=1, le=200),
+    page_size: int = Query(50, ge=1, le=1000),
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
