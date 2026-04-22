@@ -168,8 +168,8 @@ def _contract_to_detail(c: Contract, db: Session) -> dict:
         "daily_report_required": c.daily_report_required,
         "activated_at": c.activated_at.isoformat() if c.activated_at else None,
         "activated_by_id": str(c.activated_by_id) if c.activated_by_id else None,
-        "unlocked_at": c.unlocked_at.isoformat() if c.unlocked_at else None,
-        "unlock_until": c.unlock_until.isoformat() if c.unlock_until else None,
+        "unlocked_at": (c.unlocked_at.isoformat() + "Z") if c.unlocked_at else None,
+        "unlock_until": (c.unlock_until.isoformat() + "Z") if c.unlock_until else None,
         "unlocked_by_id": str(c.unlocked_by_id) if c.unlocked_by_id else None,
         "unlock_reason": c.unlock_reason,
         "active_revision": active_rev_payload,
@@ -788,8 +788,8 @@ def unlock_contract(
     )
     return {
         "success": True,
-        "unlocked_at": c.unlocked_at.isoformat(),
-        "unlock_until": c.unlock_until.isoformat(),
+        "unlocked_at": c.unlocked_at.isoformat() + "Z",
+        "unlock_until": c.unlock_until.isoformat() + "Z",
         "unlocked_by_id": str(c.unlocked_by_id),
         "unlock_reason": c.unlock_reason,
     }
