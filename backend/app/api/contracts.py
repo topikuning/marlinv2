@@ -329,12 +329,31 @@ def create_contract(
     # membuat kontrak langsung terkunci dari kontraknya sendiri — paradoks
     # yang membingungkan user. Admin pusat / superadmin tidak perlu
     # di-assign karena mereka sudah bypass access control.
-    ppk_row = db.query(PPK).filter(PPK.id == data.ppk_id).first()
     assigned_notes = []
+
+    # 1. PPK → user_id
+    ppk_row = db.query(PPK).filter(PPK.id == data.ppk_id).first()
     if ppk_row and ppk_row.user_id:
         ppk_user = db.query(User).filter(User.id == ppk_row.user_id).first()
         if _assign_contract_to_user(db, ppk_user, contract.id):
-            assigned_notes.append(f"ppk_user:{ppk_user.id}")
+            assigned_notes.append(f"ppk:{ppk_user.id}")
+
+    # 2. Kontraktor (company_id) → default_user_id
+    contractor = db.query(Company).filter(Company.id == data.company_id).first()
+    if contractor and contractor.default_user_id:
+        contractor_user = db.query(User).filter(User.id == contractor.default_user_id).first()
+        if _assign_contract_to_user(db, contractor_user, contract.id):
+            assigned_notes.append(f"kontraktor:{contractor_user.id}")
+
+    # 3. Konsultan (konsultan_id) → default_user_id
+    if data.konsultan_id:
+        konsultan = db.query(Company).filter(Company.id == data.konsultan_id).first()
+        if konsultan and konsultan.default_user_id:
+            konsultan_user = db.query(User).filter(User.id == konsultan.default_user_id).first()
+            if _assign_contract_to_user(db, konsultan_user, contract.id):
+                assigned_notes.append(f"konsultan:{konsultan_user.id}")
+
+    # 4. Pembuat kontrak sendiri (bila role scoped: ppk/konsultan/kontraktor)
     creator_role = get_user_role_code(db, current_user)
     if creator_role in _SCOPED_ROLES:
         if _assign_contract_to_user(db, current_user, contract.id):
