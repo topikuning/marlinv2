@@ -77,31 +77,34 @@ const WorkCodePopupEditor = forwardRef(function WorkCodePopupEditor(props, ref) 
   }, [filtered.length, activeIdx]);
 
   const commitPick = (w) => {
-    // Untuk kolom sibling (bukan yang sedang diedit), pakai setDataValue
-    // — ini official AG Grid API yang otomatis men-fire cellValueChanged
-    // sehingga _dirty ter-set dan grid re-render.
+    // Isi SEMUA kolom terkait — termasuk description, walau itu kolom
+    // yang sedang diedit — via setDataValue. Iterasi sebelumnya hanya
+    // men-set sibling (master_work_code/unit/original_code) dan
+    // menyerahkan description ke flow getValue(). Ternyata editor
+    // kadang sudah di-unmount oleh cascade refreshCells sebelum AG Grid
+    // sempat memanggil getValue() → description tetap kosong walau
+    // sibling sudah terisi. setDataValue langsung ke row data jauh
+    // lebih reliable.
+    currentValueRef.current = w.description;
+    pickedValueRef.current = w.description;
+    node.setDataValue("description", w.description);
     node.setDataValue("master_work_code", w.code);
     node.setDataValue("original_code", w.code);
     if (w.default_unit) {
       node.setDataValue("unit", w.default_unit);
     }
-    // Untuk kolom description (yang sedang diedit), biarkan flow normal:
-    // simpan nilai ke ref → getValue() mengembalikannya → AG Grid memanggil
-    // setDataValue sendiri saat stopEditing. Ini mencegah double-fire.
-    pickedValueRef.current = w.description;
-    currentValueRef.current = w.description;
-    stopEditing();
+    try { stopEditing(); } catch {}
   };
 
   const commitFreeText = () => {
-    // Kalau user hanya mengetik (tidak klik item), value yang dipakai
-    // adalah query teks. Master-link dilepas supaya tidak menyesatkan
-    // (badge "custom" akan muncul di kolom Kode Master).
+    // Enter pada teks yang tidak cocok master — simpan sebagai custom.
+    // Sama seperti commitPick: tulis description lewat setDataValue
+    // supaya tidak bergantung pada getValue yang mungkin tidak
+    // ter-trigger kalau editor keburu unmount.
     currentValueRef.current = query;
-    if (query !== value) {
-      node.setDataValue("master_work_code", null);
-    }
-    stopEditing();
+    node.setDataValue("description", query);
+    node.setDataValue("master_work_code", null);
+    try { stopEditing(); } catch {}
   };
 
   useImperativeHandle(ref, () => ({
