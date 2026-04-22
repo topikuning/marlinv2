@@ -358,14 +358,24 @@ class ContractCreate(BaseModel):
 
 
 class ContractUpdate(BaseModel):
+    # Field yang selalu editable
     contract_name: Optional[str] = None
+    description: Optional[str] = None
+    weekly_report_due_day: Optional[int] = None
+    daily_report_required: Optional[bool] = None
+    # Field DRAFT-only — backend menolak pemakaiannya saat status != draft
+    # dan kontrak belum Unlock Mode. Tanpa mendeklarasikannya di schema,
+    # Pydantic akan men-drop-nya dari payload sehingga guard + edit DRAFT
+    # sama-sama tidak bekerja.
+    contract_number: Optional[str] = None
     company_id: Optional[UUID] = None
     ppk_id: Optional[UUID] = None
     konsultan_id: Optional[UUID] = None
     fiscal_year: Optional[int] = None
-    description: Optional[str] = None
-    weekly_report_due_day: Optional[int] = None
-    daily_report_required: Optional[bool] = None
+    original_value: Optional[Decimal] = None
+    current_value: Optional[Decimal] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
     status: Optional[ContractStatus] = None
 
 

@@ -105,6 +105,11 @@ export const contractsAPI = {
   readiness: (id) => api.get(`/contracts/${id}/readiness`),
   activate: (id) => api.post(`/contracts/${id}/activate`),
   complete: (id) => api.post(`/contracts/${id}/complete`),
+
+  // Unlock Mode (safety valve superadmin)
+  unlock: (id, reason) => api.post(`/contracts/${id}/unlock`, { reason }),
+  lock: (id) => api.post(`/contracts/${id}/lock`),
+  syncStatus: (id) => api.get(`/contracts/${id}/sync-status`),
 };
 
 export const locationsAPI = {

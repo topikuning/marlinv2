@@ -19,6 +19,7 @@ import BOQGrid from "@/components/grids/BOQGrid";
 import BOQImportWizard from "@/components/modals/BOQImportWizard";
 import EditContractModal from "@/components/modals/EditContractModal";
 import ContractActivationPanel from "@/components/ContractActivationPanel";
+import UnlockModePanel from "@/components/UnlockModePanel";
 
 export default function ContractDetailPage() {
   const { id } = useParams();
@@ -110,6 +111,13 @@ export default function ContractDetailPage() {
         </span>
       </div>
 
+      {/* Unlock-mode banner (hanya saat contract.unlocked_at aktif).
+          Ditaruh di atas header agar user selalu sadar kontrak sedang
+          dalam mode edit bypass. */}
+      {contract.unlocked_at && (
+        <UnlockModePanel contract={contract} onChange={load} />
+      )}
+
       {/* Header Card */}
       <div className="card p-6 mb-6">
         <div className="flex items-start justify-between flex-wrap gap-4">
@@ -124,7 +132,11 @@ export default function ContractDetailPage() {
               {contract.contract_number}
             </p>
           </div>
-          <div className="flex gap-2 flex-wrap">
+          <div className="flex gap-2 flex-wrap items-center">
+            {/* Tombol "Buka Unlock Mode" (superadmin only, saat terkunci) */}
+            {!contract.unlocked_at && (
+              <UnlockModePanel contract={contract} onChange={load} />
+            )}
             <button
               className="btn-secondary"
               onClick={() => setShowEdit(true)}
@@ -369,11 +381,16 @@ export default function ContractDetailPage() {
               // APPROVED, editing harus via Addendum. Banner lock muncul.
               // COMPLETED / TERMINATED → readonly total (ditangani via
               // readonly prop di bawah).
-              contract.status === "active" || contract.status === "addendum"
+              // Unlock Mode → bypass: BOQ boleh diedit walau revisi APPROVED.
+              !contract.unlocked_at &&
+              (contract.status === "active" || contract.status === "addendum")
             }
             readonly={
-              contract.status === "completed" ||
-              contract.status === "terminated"
+              // COMPLETED / TERMINATED normalnya readonly, tapi Unlock Mode
+              // membuka juga untuk koreksi retroaktif.
+              !contract.unlocked_at &&
+              (contract.status === "completed" ||
+                contract.status === "terminated")
             }
             onChange={() => {
               boqAPI.listByFacility(boqFacility.id).then(({ data }) => setBoqItems(data));

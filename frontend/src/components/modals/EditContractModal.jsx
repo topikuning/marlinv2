@@ -44,7 +44,12 @@ export default function EditContractModal({ open, contract, onClose, onSuccess }
 
   const status = contract?.status || "draft";
   const isDraft = status === "draft";
-  const isLocked = status === "completed" || status === "terminated";
+  const isUnlocked = !!contract?.unlocked_at;
+  // COMPLETED/TERMINATED normally read-only. Unlock Mode membuka juga —
+  // inti safety valve adalah koreksi retroaktif pada kontrak yang sudah
+  // selesai sekalipun.
+  const isLocked =
+    (status === "completed" || status === "terminated") && !isUnlocked;
 
   useEffect(() => {
     if (!open || !contract) return;
@@ -74,7 +79,10 @@ export default function EditContractModal({ open, contract, onClose, onSuccess }
 
   const isFieldDisabled = (field) => {
     if (isLocked) return true;
-    if (!isDraft && DRAFT_ONLY_FIELDS.has(field)) return true;
+    // Unlock Mode membuka field DRAFT-only juga (ppk_id, original_value,
+    // start/end_date, dll). Backend memvalidasi pada save dan menolak jika
+    // bukan unlock/draft.
+    if (!isDraft && !isUnlocked && DRAFT_ONLY_FIELDS.has(field)) return true;
     return false;
   };
 
@@ -144,7 +152,9 @@ export default function EditContractModal({ open, contract, onClose, onSuccess }
       {/* Status hint */}
       <div
         className={`flex items-start gap-2 p-3 rounded-xl mb-4 text-xs ${
-          isDraft
+          isUnlocked
+            ? "bg-red-50 text-red-800 border border-red-300"
+            : isDraft
             ? "bg-brand-50 text-brand-800 border border-brand-200"
             : isLocked
             ? "bg-red-50 text-red-800 border border-red-200"
@@ -160,13 +170,16 @@ export default function EditContractModal({ open, contract, onClose, onSuccess }
           <p className="font-medium mb-0.5">
             Status kontrak:{" "}
             <span className="uppercase">{STATUS_LABEL[status] || status}</span>
+            {isUnlocked && " · UNLOCK MODE"}
           </p>
           <p>
-            {isLocked
-              ? "Kontrak yang sudah Selesai/Diputus tidak bisa diedit. Gunakan Addendum jika ada revisi."
+            {isUnlocked
+              ? "Unlock Mode aktif — semua field, termasuk nilai/tanggal/PPK, bisa diedit untuk koreksi kesalahan input. Setelah selesai, tutup Unlock Mode di halaman kontrak; sistem akan memvalidasi total BOQ = nilai kontrak."
+              : isLocked
+              ? "Kontrak yang sudah Selesai/Diputus tidak bisa diedit. Gunakan Addendum jika ada revisi, atau Unlock Mode (superadmin) untuk koreksi retroaktif."
               : isDraft
               ? "Semua field bisa diedit karena kontrak masih Draft. Pastikan data benar sebelum diaktifkan."
-              : "Hanya nama, deskripsi, dan pengaturan laporan yang bisa diedit. Perubahan nilai/tanggal/nomor kontrak memerlukan Addendum."}
+              : "Hanya nama, deskripsi, dan pengaturan laporan yang bisa diedit. Perubahan nilai/tanggal/nomor kontrak memerlukan Addendum, atau Unlock Mode untuk koreksi kesalahan input."}
           </p>
         </div>
       </div>
