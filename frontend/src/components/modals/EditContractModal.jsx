@@ -69,12 +69,16 @@ export default function EditContractModal({ open, contract, onClose, onSuccess }
       daily_report_required: !!contract.daily_report_required,
     });
     (async () => {
-      const [{ data: cs }, { data: ps }] = await Promise.all([
-        masterAPI.companies({ page_size: 1000, is_active: true }),
-        masterAPI.ppk({ page_size: 1000, is_active: true }),
-      ]);
-      setCompanies(cs.items || []);
-      setPpks(ps.items || []);
+      try {
+        const [{ data: cs }, { data: ps }] = await Promise.all([
+          masterAPI.companies({ page_size: 500, is_active: true }),
+          masterAPI.ppk({ page_size: 500, is_active: true }),
+        ]);
+        setCompanies(cs.items || []);
+        setPpks(ps.items || []);
+      } catch (e) {
+        console.error("Gagal memuat dropdown perusahaan/PPK", e);
+      }
     })();
   }, [open, contract]);
 

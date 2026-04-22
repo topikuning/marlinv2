@@ -158,6 +158,9 @@ def _contract_to_detail(c: Contract, db: Session) -> dict:
         "fiscal_year": c.fiscal_year,
         "original_value": float(c.original_value),
         "current_value": float(c.current_value),
+        # Live sum BOQ revisi aktif. Bisa beda dari current_value selama
+        # editing — UI menampilkan keduanya supaya selisih kelihatan.
+        "boq_total": _sum_active_boq(db, c),
         "start_date": c.start_date.isoformat() if c.start_date else None,
         "original_end_date": c.original_end_date.isoformat() if c.original_end_date else None,
         "end_date": c.end_date.isoformat() if c.end_date else None,
