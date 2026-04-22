@@ -1,15 +1,20 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, Query
+import io
+import os
+import tempfile
+from fastapi import APIRouter, Depends, HTTPException, Request, Query, UploadFile, File
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from typing import Optional, List
 from datetime import datetime
 
 from app.core.database import get_db
-from app.models.models import Company, PPK, MasterWorkCode, User
+from app.models.models import Company, PPK, MasterWorkCode, User, WorkCategory
 from app.schemas.schemas import (
     CompanyCreate, CompanyUpdate, CompanyOut,
     PPKCreate, PPKUpdate, PPKOut,
     MasterWorkCodeCreate, MasterWorkCodeOut,
+    ExcelImportResult,
 )
 from app.api.deps import get_current_user, require_permission
 from app.services.audit_service import log_audit
@@ -293,6 +298,214 @@ def delete_work_code(
     db.commit()
     log_audit(db, current_user, "delete", "master_work_code", code, request=request, commit=True)
     return {"success": True}
+
+
+# ═══════════════════════════════════════════ TEMPLATE + BULK IMPORT ══════════
+
+_WORK_CODE_COLUMNS = [
+    ("code",         True,  "Kode unik (mis. PER-001). Huruf kapital + angka/dash."),
+    ("category",     True,  "persiapan | struktural | arsitektural | mep | site_work | khusus"),
+    ("sub_category", False, "Label sub-kategori opsional (mis. Pondasi, Dinding)."),
+    ("description",  True,  "Uraian pekerjaan — yang muncul di picker BOQ."),
+    ("default_unit", False, "Satuan umum (mis. m2, m3, kg, ls)."),
+    ("keywords",     False, "Kata kunci tambahan untuk pencarian, dipisah koma."),
+    ("notes",        False, "Catatan internal opsional."),
+]
+
+
+def _build_work_code_template_bytes() -> bytes:
+    """
+    Bangun template .xlsx dua-sheet untuk import Master Kode Pekerjaan.
+    Sheet 1 "Kode" — header + 3 baris contoh siap ditimpa.
+    Sheet 2 "Petunjuk" — penjelasan per-kolom + daftar kategori valid.
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Kode"
+
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="1E40AF")
+    for idx, (name, required, _) in enumerate(_WORK_CODE_COLUMNS, start=1):
+        cell = ws.cell(row=1, column=idx, value=name + (" *" if required else ""))
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+        ws.column_dimensions[cell.column_letter].width = max(14, len(name) + 6)
+
+    # 3 baris contoh dari 3 kategori berbeda supaya user tahu bentuk data.
+    examples = [
+        ("PER-001", "persiapan", "Mobilisasi", "Mobilisasi alat berat dan personil",
+         "ls", "mob, demob", "Termasuk demobilisasi"),
+        ("STR-B03", "struktural", "Beton", "Pengecoran kolom beton bertulang K-300",
+         "m3", "kolom, beton, K-300", ""),
+        ("MEP-L02", "mep", "Listrik", "Instalasi kabel NYY 4x10mm dalam conduit",
+         "m", "kabel, listrik, nyy", ""),
+    ]
+    for r_idx, row in enumerate(examples, start=2):
+        for c_idx, val in enumerate(row, start=1):
+            ws.cell(row=r_idx, column=c_idx, value=val)
+
+    ws.freeze_panes = "A2"
+
+    # Sheet petunjuk
+    guide = wb.create_sheet("Petunjuk")
+    guide.column_dimensions["A"].width = 20
+    guide.column_dimensions["B"].width = 12
+    guide.column_dimensions["C"].width = 80
+    guide.append(["Kolom", "Wajib?", "Keterangan"])
+    for cell in guide[1]:
+        cell.font = header_font
+        cell.fill = header_fill
+    for name, required, desc in _WORK_CODE_COLUMNS:
+        guide.append([name, "Ya" if required else "—", desc])
+
+    guide.append([])
+    guide.append(["Aturan umum:"])
+    for rule in [
+        "• Baris kosong diabaikan.",
+        "• Kolom header tidak boleh diubah namanya (huruf kecil, persis seperti di atas).",
+        "• Kalau kode sudah ada, baris akan di-skip (bukan update) — hapus dulu kalau ingin mengganti.",
+        "• Kategori harus salah satu dari nilai enum yang tertera; huruf besar/kecil tidak masalah.",
+    ]:
+        guide.append([rule])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+@router.get("/work-codes/template")
+def download_work_code_template(
+    _: User = Depends(get_current_user),
+):
+    """
+    Download template xlsx dua-sheet untuk mengisi Master Kode Pekerjaan
+    secara massal. Pakai endpoint import-excel untuk meng-upload kembali.
+    """
+    data = _build_work_code_template_bytes()
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": 'attachment; filename="template_master_kode_pekerjaan.xlsx"',
+        },
+    )
+
+
+@router.post("/work-codes/import-excel", response_model=ExcelImportResult)
+async def import_work_codes_excel(
+    file: UploadFile = File(...),
+    request: Request = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("master.create")),
+):
+    """
+    Import massal Master Kode Pekerjaan dari file xlsx hasil template.
+
+    Perilaku:
+      - Kode yang sudah ada di DB → skip (dihitung di items_skipped),
+        agar pengguna tidak kaget datanya tertimpa.
+      - Baris dengan field wajib kosong (code, category, description) →
+        skip + dicatat di errors[] supaya user tahu baris mana yang
+        dilewati dan kenapa.
+      - Kategori dinormalisasi ke lowercase dan divalidasi terhadap enum
+        WorkCategory. Kategori tidak valid → skip + error.
+    """
+    import pandas as pd
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+        tmp.write(await file.read())
+        tmp_path = tmp.name
+
+    result = ExcelImportResult(success=False)
+    valid_categories = {c.value for c in WorkCategory}
+
+    try:
+        # Sheet pertama diambil, header = row 1. Pakai dtype=object agar
+        # angka yang kebetulan dipakai sebagai kode (jarang, tapi mungkin)
+        # tidak berubah jadi float.
+        df = pd.read_excel(tmp_path, sheet_name=0, dtype=object)
+        cols = [str(c).strip().lower().rstrip(" *") for c in df.columns]
+        required = {"code", "category", "description"}
+        missing = required - set(cols)
+        if missing:
+            result.errors.append(
+                f"Kolom wajib tidak ditemukan: {', '.join(sorted(missing))}. "
+                f"Pakai template dari tombol Template."
+            )
+            return result
+
+        created_codes: list[str] = []
+        for idx, row in df.iterrows():
+            rec = {cols[i]: row.iloc[i] for i in range(len(cols))}
+
+            def _s(key):
+                v = rec.get(key)
+                if v is None:
+                    return ""
+                s = str(v).strip()
+                return "" if s.lower() == "nan" else s
+
+            code = _s("code").upper()
+            raw_cat = _s("category").lower()
+            description = _s("description")
+
+            if not code and not description:
+                # Baris benar-benar kosong, diam-diam skip tanpa error.
+                continue
+            if not code:
+                result.items_skipped += 1
+                result.errors.append(f"Baris {idx + 2}: code kosong — skip.")
+                continue
+            if not description:
+                result.items_skipped += 1
+                result.errors.append(f"Baris {idx + 2}: description kosong — skip.")
+                continue
+            if raw_cat not in valid_categories:
+                result.items_skipped += 1
+                result.errors.append(
+                    f"Baris {idx + 2}: kategori '{raw_cat}' tidak valid. "
+                    f"Gunakan salah satu: {', '.join(sorted(valid_categories))}."
+                )
+                continue
+
+            if db.query(MasterWorkCode).filter(MasterWorkCode.code == code).first():
+                result.items_skipped += 1
+                continue
+
+            db.add(MasterWorkCode(
+                code=code,
+                category=WorkCategory(raw_cat),
+                sub_category=_s("sub_category") or None,
+                description=description,
+                default_unit=_s("default_unit") or None,
+                keywords=_s("keywords") or None,
+                notes=_s("notes") or None,
+            ))
+            created_codes.append(code)
+            result.items_imported += 1
+
+        if created_codes:
+            db.commit()
+            log_audit(
+                db, current_user, "bulk_create", "master_work_code",
+                entity_id=None,
+                changes={"imported_count": len(created_codes), "codes": created_codes[:50]},
+                request=request, commit=True,
+            )
+        result.success = True
+    except Exception as e:
+        result.errors.append(f"Gagal membaca file: {e}")
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+    return result
 
 
 # ═══════════════════════════════════════════ MASTER FACILITIES ═══════════════
