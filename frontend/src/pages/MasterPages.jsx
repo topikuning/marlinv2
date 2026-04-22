@@ -112,7 +112,11 @@ function useCrudPage({ listFn, createFn, updateFn, deleteFn, idField = "id", onP
     setLoading(true);
     try {
       const { data } = await listFn({ page_size: 500, q: search });
-      setItems(data.items || []);
+      // Endpoint master tidak seragam: Companies/PPK membungkus
+      // ({items, total, ...}); Work Codes/Facilities mengembalikan list
+      // datar. Terima dua-duanya supaya bug "data tidak muncul" tidak
+      // terulang saat endpoint baru ditambah dengan bentuk berbeda.
+      setItems(Array.isArray(data) ? data : data?.items || []);
     } catch (e) {
       toast.error(parseApiError(e));
     } finally {
