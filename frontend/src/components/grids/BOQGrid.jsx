@@ -12,45 +12,226 @@ import BOQItemPickerModal from "@/components/modals/BOQItemPickerModal";
 
 
 /**
- * Cell editor uraian — <input list="..."> native HTML yang terhubung ke
- * <datalist>. Diperlakukan sebagai uncontrolled input: value dibaca
- * langsung dari DOM saat AG Grid memanggil getValue(), bukan dari
- * state React. Ini menghindari race timing — saat user memilih dari
- * dropdown native, browser menulis ke input sebelum React sempat
- * menjadwalkan re-render, jadi state-based getValue sering kembali
- * kosong (bug "value hilang saat pindah kolom").
+ * Popup cell editor untuk kolom Uraian BOQ.
  *
- * Kalau value yang ditulis cocok persis dengan sebuah master work code,
- * onCellValueChanged di parent akan auto-isi master_work_code + satuan.
+ * Render sebuah popup di atas cell (cellEditorPopup: true) berisi:
+ *   - input pencarian yang langsung auto-focus
+ *   - daftar master work code yang ter-filter saat user mengetik
+ *   - setiap item menampilkan deskripsi (baris utama) + kode & kategori
+ *     (baris kecil di bawah) — user selalu melihat uraian sebagai fokus
+ *
+ * Saat user memilih item, SEMUA kolom terkait diisi sekaligus lewat
+ * node.setDataValue: description, master_work_code, original_code,
+ * unit. Itu memicu cellValueChanged untuk setiap field → parent
+ * menandai row sebagai _dirty → saat Simpan, edit benar-benar dikirim
+ * ke backend (tidak lagi silent-success tanpa data tersimpan).
+ *
+ * User tetap boleh mengetik uraian kustom: kalau tidak ada item yang
+ * dipilih (hanya mengetik + pindah fokus), nilai input dipakai apa
+ * adanya → item tersimpan sebagai "custom" tanpa master_work_code.
  */
-const DatalistCellEditor = forwardRef(function DatalistCellEditor(props, ref) {
-  const { value, listId } = props;
+const WorkCodePopupEditor = forwardRef(function WorkCodePopupEditor(props, ref) {
+  const {
+    value, api, node,
+    workCodes = [], unitOptions: _unused,
+    stopEditing,
+  } = props;
+
+  const [query, setQuery] = useState(value || "");
+  const [activeIdx, setActiveIdx] = useState(0);
   const inputRef = useRef(null);
+  const listRef = useRef(null);
+  // Tandai kalau user sudah eksplisit memilih item dari daftar, supaya
+  // getValue() mengembalikan deskripsi hasil pilih daripada apa yang
+  // sedang ada di input ketik (keduanya memang biasanya sama persis,
+  // tapi kita ingin semantik "pilih" jelas beda dari "ketik manual").
+  const pickedValueRef = useRef(null);
+  const currentValueRef = useRef(value || "");
 
   useEffect(() => {
-    const el = inputRef.current;
-    if (!el) return;
-    el.focus();
-    el.select();
+    // Fokuskan input supaya user bisa langsung mengetik atau navigasi.
+    setTimeout(() => {
+      const el = inputRef.current;
+      if (el) {
+        el.focus();
+        el.select();
+      }
+    }, 0);
   }, []);
 
+  const filtered = useMemo(() => {
+    const q = (query || "").trim().toLowerCase();
+    if (!q) return workCodes.slice(0, 200);
+    return workCodes
+      .filter((w) =>
+        w.description?.toLowerCase().includes(q) ||
+        w.code?.toLowerCase().includes(q) ||
+        w.keywords?.toLowerCase()?.includes(q) ||
+        w.sub_category?.toLowerCase()?.includes(q)
+      )
+      .slice(0, 200);
+  }, [workCodes, query]);
+
+  useEffect(() => {
+    if (activeIdx >= filtered.length) setActiveIdx(Math.max(0, filtered.length - 1));
+  }, [filtered.length, activeIdx]);
+
+  const commitPick = (w) => {
+    // Untuk kolom sibling (bukan yang sedang diedit), pakai setDataValue
+    // — ini official AG Grid API yang otomatis men-fire cellValueChanged
+    // sehingga _dirty ter-set dan grid re-render.
+    node.setDataValue("master_work_code", w.code);
+    node.setDataValue("original_code", w.code);
+    if (w.default_unit) {
+      node.setDataValue("unit", w.default_unit);
+    }
+    // Untuk kolom description (yang sedang diedit), biarkan flow normal:
+    // simpan nilai ke ref → getValue() mengembalikannya → AG Grid memanggil
+    // setDataValue sendiri saat stopEditing. Ini mencegah double-fire.
+    pickedValueRef.current = w.description;
+    currentValueRef.current = w.description;
+    stopEditing();
+  };
+
+  const commitFreeText = () => {
+    // Kalau user hanya mengetik (tidak klik item), value yang dipakai
+    // adalah query teks. Master-link dilepas supaya tidak menyesatkan
+    // (badge "custom" akan muncul di kolom Kode Master).
+    currentValueRef.current = query;
+    if (query !== value) {
+      node.setDataValue("master_work_code", null);
+    }
+    stopEditing();
+  };
+
   useImperativeHandle(ref, () => ({
-    getValue: () => inputRef.current?.value ?? "",
-    isCancelBeforeStart: () => false,
-    isCancelAfterEnd: () => false,
+    getValue: () => currentValueRef.current,
+    // Popup editor: isPopup bisa ditentukan lewat cellEditorPopup di
+    // colDef; method ini sebagai safety net untuk versi AG Grid yang
+    // mengecek di sini.
+    isPopup: () => true,
+    getPopupPosition: () => "under",
   }));
 
+  const onKeyDown = (e) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIdx((i) => Math.min(filtered.length - 1, i + 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIdx((i) => Math.max(0, i - 1));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const picked = filtered[activeIdx];
+      if (picked) commitPick(picked);
+      else commitFreeText();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      currentValueRef.current = value || "";
+      api.stopEditing(true); // cancel
+    } else if (e.key === "Tab") {
+      // Tab berarti user ingin pindah kolom; jangan intercept — biarkan
+      // grid memanggil stopEditing. Commit free-text apapun yang ada.
+      currentValueRef.current = query;
+    }
+  };
+
+  useEffect(() => {
+    // Scroll item aktif ke dalam viewport saat navigasi keyboard.
+    const list = listRef.current;
+    if (!list) return;
+    const active = list.querySelector(`[data-idx="${activeIdx}"]`);
+    if (active) active.scrollIntoView({ block: "nearest" });
+  }, [activeIdx]);
+
   return (
-    <input
-      ref={inputRef}
-      list={listId}
-      className="ag-input-field-input ag-text-field-input"
+    <div
       style={{
-        width: "100%", height: "100%",
-        border: "none", outline: "none", padding: "0 8px",
+        minWidth: 480, maxWidth: 640, width: "max-content",
+        background: "#fff", borderRadius: 8,
+        boxShadow: "0 10px 30px rgba(15,23,42,.18)",
+        border: "1px solid #e2e8f0",
+        overflow: "hidden",
       }}
-      defaultValue={value || ""}
-    />
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <div style={{ padding: 8, borderBottom: "1px solid #eef2f6" }}>
+        <input
+          ref={inputRef}
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            currentValueRef.current = e.target.value;
+            setActiveIdx(0);
+          }}
+          onKeyDown={onKeyDown}
+          placeholder="Ketik untuk mencari kode/uraian…"
+          style={{
+            width: "100%", padding: "8px 10px",
+            border: "1px solid #cbd5e1", borderRadius: 6,
+            outline: "none", fontSize: 13,
+          }}
+        />
+      </div>
+      <div
+        ref={listRef}
+        style={{
+          maxHeight: 300, overflowY: "auto",
+          fontSize: 12,
+        }}
+      >
+        {filtered.length === 0 ? (
+          <div style={{ padding: 14, color: "#64748b", textAlign: "center" }}>
+            Tidak ada kode yang cocok — <em>Enter</em> untuk menyimpan
+            uraian sebagai <strong>custom</strong>.
+          </div>
+        ) : (
+          filtered.map((w, idx) => (
+            <div
+              key={w.code}
+              data-idx={idx}
+              onMouseEnter={() => setActiveIdx(idx)}
+              onMouseDown={(e) => {
+                // onMouseDown supaya click ter-commit sebelum blur event
+                // mem-trigger stopEditing dengan value yang masih kosong.
+                e.preventDefault();
+                commitPick(w);
+              }}
+              style={{
+                padding: "8px 12px",
+                background: idx === activeIdx ? "#eff6ff" : "transparent",
+                borderLeft: `3px solid ${idx === activeIdx ? "#2563eb" : "transparent"}`,
+                cursor: "pointer",
+                display: "flex", flexDirection: "column", gap: 2,
+              }}
+            >
+              <div style={{ color: "#0f172a", lineHeight: 1.3 }}>
+                {w.description}
+              </div>
+              <div style={{
+                fontSize: 10, color: "#64748b",
+                display: "flex", gap: 8, fontFamily: "monospace",
+              }}>
+                <span style={{ fontWeight: 600, color: "#1d4ed8" }}>{w.code}</span>
+                <span>·</span>
+                <span>{w.category}</span>
+                {w.sub_category && <><span>·</span><span>{w.sub_category}</span></>}
+                {w.default_unit && <><span>·</span><span>{w.default_unit}</span></>}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+      <div style={{
+        padding: "6px 10px",
+        borderTop: "1px solid #eef2f6", background: "#f8fafc",
+        fontSize: 10, color: "#64748b",
+        display: "flex", justifyContent: "space-between",
+      }}>
+        <span>↑/↓ navigasi · Enter pilih · Esc batal</span>
+        <span>{filtered.length} dari {workCodes.length}</span>
+      </div>
+    </div>
   );
 });
 
@@ -69,11 +250,11 @@ const DatalistCellEditor = forwardRef(function DatalistCellEditor(props, ref) {
  *   1. Inline edit di grid (uraian / satuan / volume / harga) — cepat
  *   2. Tombol "+ Tambah Item" → modal picker (master atau manual)
  *
- * Kolom Uraian & Satuan dibuat dropdown:
- *   - Uraian: custom cell editor yang terikat ke <datalist> berisi
- *     seluruh master work code. Click → lihat daftar; ketik → filter.
- *     Pilih dari daftar → master_work_code, satuan, original_code
- *     otomatis terisi. Tetap bisa ketik manual (custom item).
+ * Kolom Uraian & Satuan dropdown:
+ *   - Uraian: WorkCodePopupEditor (popup cell editor). User bisa
+ *     search, navigasi dengan keyboard, pilih → deskripsi + kode
+ *     master + kode item + satuan otomatis terisi via setDataValue.
+ *     Tetap bisa ketik manual (custom item) kalau kode tidak ada.
  *   - Satuan: agSelectCellEditor dengan nilai yang diambil dari
  *     default_unit master + set standar sebagai fallback.
  */
@@ -101,13 +282,6 @@ export default function BOQGrid({
       .catch(() => setWorkCodes([]));
   }, [canEdit]);
 
-  // Quick-lookup map: description → MasterWorkCode
-  const descToCode = useMemo(() => {
-    const m = new Map();
-    workCodes.forEach((w) => m.set(w.description, w));
-    return m;
-  }, [workCodes]);
-
   // Daftar unit unik dari master (buat dropdown Satuan). Fallback ke set
   // standar kalau master belum loaded, supaya dropdown tetap berguna
   // pada kontrak pertama yang seed belum tersinkron.
@@ -118,12 +292,6 @@ export default function BOQGrid({
     fallback.forEach((u) => set.add(u));
     return Array.from(set).sort();
   }, [workCodes]);
-
-  // ID unik per instance grid supaya datalist tidak bentrok bila ada
-  // beberapa grid di halaman yang sama.
-  const descListId = useRef(
-    `boq-desc-${Math.random().toString(36).slice(2, 8)}`
-  ).current;
 
   const computeTotal = (row) => {
     const v = parseFloat(row.volume) || 0;
@@ -202,9 +370,10 @@ export default function BOQGrid({
       flex: 2,
       minWidth: 240,
       editable: canEdit,
-      cellEditor: DatalistCellEditor,
-      cellEditorParams: { listId: descListId },
-      cellEditorPopup: false,
+      cellEditor: WorkCodePopupEditor,
+      cellEditorPopup: true,
+      cellEditorPopupPosition: "under",
+      cellEditorParams: { workCodes, unitOptions },
       cellStyle: (p) => ({
         fontWeight: (p.data?.level ?? 0) <= 1 ? 600 : 400,
         paddingLeft: `${8 + (p.data?.level ?? 0) * 10}px`,
@@ -256,7 +425,7 @@ export default function BOQGrid({
       valueFormatter: (p) => ((p.value || 0) * 100).toFixed(3) + "%",
       cellStyle: { color: "#64748b", fontSize: 11 },
     },
-  ], [canEdit, unitOptions, descListId]);
+  ], [canEdit, unitOptions, workCodes]);
 
   // Dipanggil oleh picker modal (both master & manual path)
   const handlePickerAdd = useCallback((newRow) => {
@@ -307,36 +476,50 @@ export default function BOQGrid({
   const saveAll = async () => {
     setSaving(true);
     try {
-      const newOnes = rows.filter((r) => r._new && r.description).map((r) => ({
-        facility_id: facilityId,
-        master_work_code: r.master_work_code || null,
-        parent_id: null,
-        original_code: r.original_code || null,
-        level: parseInt(r.level) || 0,
-        display_order: 0,
-        description: r.description,
-        unit: r.unit,
-        volume: parseFloat(r.volume) || 0,
-        unit_price: parseFloat(r.unit_price) || 0,
-        total_price: computeTotal(r),
-        weight_pct: 0,
-        is_leaf: !!r.is_leaf,
-      }));
-      if (newOnes.length) await boqAPI.bulk(newOnes);
+      const newRowsToCreate = rows.filter((r) => r._new && r.description);
+      const rowsToUpdate = rows.filter((r) => !r._new && r._dirty);
 
-      for (const r of rows) {
-        if (!r._new && r._dirty) {
-          await boqAPI.update(r.id, {
-            description: r.description,
-            unit: r.unit,
-            volume: parseFloat(r.volume) || 0,
-            unit_price: parseFloat(r.unit_price) || 0,
-            total_price: computeTotal(r),
-            master_work_code: r.master_work_code || null,
-          });
-        }
+      // Toast jujur: kalau tidak ada yang diubah, bilang apa adanya
+      // daripada menampilkan "tersimpan" palsu yang menyesatkan user.
+      if (newRowsToCreate.length === 0 && rowsToUpdate.length === 0) {
+        toast("Tidak ada perubahan yang perlu disimpan.", { icon: "ℹ️" });
+        return;
       }
-      toast.success("BOQ tersimpan");
+
+      if (newRowsToCreate.length) {
+        await boqAPI.bulk(newRowsToCreate.map((r) => ({
+          facility_id: facilityId,
+          master_work_code: r.master_work_code || null,
+          parent_id: null,
+          original_code: r.original_code || null,
+          level: parseInt(r.level) || 0,
+          display_order: 0,
+          description: r.description,
+          unit: r.unit,
+          volume: parseFloat(r.volume) || 0,
+          unit_price: parseFloat(r.unit_price) || 0,
+          total_price: computeTotal(r),
+          weight_pct: 0,
+          is_leaf: !!r.is_leaf,
+        })));
+      }
+
+      for (const r of rowsToUpdate) {
+        await boqAPI.update(r.id, {
+          description: r.description,
+          unit: r.unit,
+          volume: parseFloat(r.volume) || 0,
+          unit_price: parseFloat(r.unit_price) || 0,
+          total_price: computeTotal(r),
+          master_work_code: r.master_work_code || null,
+        });
+        r._dirty = false;
+      }
+
+      const parts = [];
+      if (newRowsToCreate.length) parts.push(`${newRowsToCreate.length} baru`);
+      if (rowsToUpdate.length) parts.push(`${rowsToUpdate.length} diubah`);
+      toast.success(`Tersimpan: ${parts.join(", ")}.`);
       onChange?.();
     } catch (e) {
       toast.error(parseApiError(e));
@@ -345,37 +528,21 @@ export default function BOQGrid({
     }
   };
 
-  // Saat user edit inline:
-  // - volume / unit_price changed → re-compute total cache
-  // - description changed → cek apakah match salah satu master work code;
-  //   kalau ya, set master_work_code + unit + original_code otomatis
+  // Handler tunggal untuk perubahan cell apapun:
+  // - Tandai row sebagai _dirty supaya saveAll() mengirimkan update ke
+  //   backend. Tanpa flag ini, edit tidak pernah sampai ke server
+  //   meskipun toast "tersimpan" muncul.
+  // - Volume / harga berubah → re-compute total_price di cache.
+  // - Description/master_work_code/unit/original_code yang diisi lewat
+  //   WorkCodePopupEditor sudah di-set via node.setDataValue sehingga
+  //   handler ini di-trigger per-field; tidak perlu logika matching
+  //   tambahan di sini.
   const onCellValueChanged = (e) => {
     const row = e.data;
     const field = e.colDef.field;
 
     if (field === "volume" || field === "unit_price") {
       row.total_price = computeTotal(row);
-    }
-
-    if (field === "description") {
-      const match = descToCode.get(row.description);
-      if (match) {
-        row.master_work_code = match.code;
-        if (!row.unit) row.unit = match.default_unit || row.unit;
-        if (!row.original_code) row.original_code = match.code;
-      } else {
-        // Kalau sebelumnya ada master tapi uraian diedit jadi beda → drop
-        // flag master. User jadi explicit custom item.
-        if (row.master_work_code) {
-          const prevDesc = descToCode.get(
-            workCodes.find((w) => w.code === row.master_work_code)?.description
-          );
-          if (!prevDesc || prevDesc.description !== row.description) {
-            row.master_work_code = null;
-          }
-        }
-      }
-      e.api.refreshCells({ rowNodes: [e.node], force: true });
     }
 
     row._dirty = !row._new;
@@ -388,20 +555,6 @@ export default function BOQGrid({
 
   return (
     <div className="space-y-3">
-      {/* Datalist untuk kolom Uraian. Browser merender <option> berbeda-
-          beda: Chrome menampilkan value sebagai baris utama + inner text
-          sebagai label abu-abu, Firefox menampilkan inner text saja,
-          Safari menampilkan value saja. Supaya user di semua browser
-          melihat DESKRIPSI (bukan kode/kategori yang tidak informatif),
-          deskripsi ditulis sebagai value sekaligus inner text. */}
-      <datalist id={descListId}>
-        {workCodes.map((w) => (
-          <option key={w.code} value={w.description}>
-            {w.description}
-          </option>
-        ))}
-      </datalist>
-
       {/* Banner untuk APPROVED revision (kontrak aktif) */}
       {revisionLocked && (
         <div className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-50 border border-amber-200">
@@ -496,11 +649,11 @@ export default function BOQGrid({
 
       {canEdit && workCodes.length > 0 && (
         <div className="text-[11px] text-ink-400 px-1">
-          Tip: klik cell <em>Uraian</em> → panah bawah untuk melihat
-          {" "}{workCodes.length} kode standar, atau ketik untuk memfilter.
-          Saat Anda pilih uraian dari daftar, <em>Kode Master</em> dan{" "}
-          <em>Satuan</em> otomatis terisi. Atau klik <em>Tambah Item</em>{" "}
-          untuk pencarian terstruktur dengan pratinjau.
+          Tip: klik cell <em>Uraian</em> → popup pencarian muncul dengan
+          {" "}{workCodes.length} kode standar. Ketik untuk memfilter,
+          ↑/↓ untuk navigasi, Enter untuk pilih. Begitu dipilih,
+          {" "}<em>Kode Master</em>, <em>Kode Item</em>, dan <em>Satuan</em>{" "}
+          terisi otomatis.
         </div>
       )}
 
