@@ -1,4 +1,7 @@
-import { useMemo, useRef, useState, useCallback, useEffect } from "react";
+import {
+  forwardRef, useImperativeHandle, useMemo, useRef, useState,
+  useCallback, useEffect,
+} from "react";
 import { AgGridReact } from "ag-grid-react";
 import { Plus, Save, Trash2, Tag, Lock } from "lucide-react";
 import { boqAPI, masterAPI } from "@/api";
@@ -7,25 +10,67 @@ import { parseApiError, fmtNum } from "@/utils/format";
 import { Spinner } from "@/components/ui";
 import BOQItemPickerModal from "@/components/modals/BOQItemPickerModal";
 
+
+/**
+ * Cell editor uraian — input HTML native yang terikat ke <datalist>.
+ * Dropdown muncul saat fokus (panah) dan ter-filter saat user mengetik.
+ * Jauh lebih ringan daripada bikin popup sendiri dan bekerja di semua
+ * browser modern. Bila user pilih uraian yang cocok persis dengan master,
+ * onCellValueChanged di parent akan auto-isi master_work_code + satuan.
+ */
+const DatalistCellEditor = forwardRef(function DatalistCellEditor(props, ref) {
+  const { value, listId } = props;
+  const [current, setCurrent] = useState(value || "");
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    // Auto-focus + open the native dropdown suggestion UI.
+    const el = inputRef.current;
+    if (!el) return;
+    el.focus();
+    el.select();
+  }, []);
+
+  useImperativeHandle(ref, () => ({
+    getValue: () => current,
+    isCancelBeforeStart: () => false,
+    isCancelAfterEnd: () => false,
+  }));
+
+  return (
+    <input
+      ref={inputRef}
+      list={listId}
+      className="ag-input-field-input ag-text-field-input"
+      style={{ width: "100%", height: "100%", border: "none", outline: "none", padding: "0 8px" }}
+      value={current}
+      onChange={(e) => setCurrent(e.target.value)}
+    />
+  );
+});
+
 /**
  * BOQ editor grid.
  *
- * Modes:
- *   - readonly=true                → read-only (viewer / completed contract)
- *   - revisionLocked=true          → APPROVED revision di kontrak aktif;
- *                                    grid render, banner "harus via Addendum"
- *                                    muncul di atas, semua edit/add/delete
- *                                    di-disable di UI (guard server tetap)
- *   - default                      → full editable (DRAFT revision)
+ * Mode:
+ *   - readonly=true        → hanya baca (viewer / kontrak completed)
+ *   - revisionLocked=true  → revisi APPROVED di kontrak aktif; grid
+ *                            tetap tampil, banner "harus via Addendum"
+ *                            muncul, edit/add/delete di-disable di UI
+ *                            (server tetap memvalidasi)
+ *   - default              → editable penuh (revisi DRAFT)
  *
- * Input item punya dua jalur:
- *   1. Inline edit di grid (kolom uraian/satuan/volume/harga) — cepat
- *   2. Tombol "+ Tambah Item" buka modal picker — master atau manual
+ * Input item ada dua jalur:
+ *   1. Inline edit di grid (uraian / satuan / volume / harga) — cepat
+ *   2. Tombol "+ Tambah Item" → modal picker (master atau manual)
  *
- * Kolom "Uraian" sekarang jadi dropdown master work-code (datalist HTML
- * native) saat edit inline — ketik sebagian nama → muncul saran. Tidak
- * pilih master pun OK, tinggal ketik manual → tetap tersimpan sebagai
- * custom item.
+ * Kolom Uraian & Satuan dibuat dropdown:
+ *   - Uraian: custom cell editor yang terikat ke <datalist> berisi
+ *     seluruh master work code. Click → lihat daftar; ketik → filter.
+ *     Pilih dari daftar → master_work_code, satuan, original_code
+ *     otomatis terisi. Tetap bisa ketik manual (custom item).
+ *   - Satuan: agSelectCellEditor dengan nilai yang diambil dari
+ *     default_unit master + set standar sebagai fallback.
  */
 export default function BOQGrid({
   facilityId,
@@ -57,6 +102,23 @@ export default function BOQGrid({
     workCodes.forEach((w) => m.set(w.description, w));
     return m;
   }, [workCodes]);
+
+  // Daftar unit unik dari master (buat dropdown Satuan). Fallback ke set
+  // standar kalau master belum loaded, supaya dropdown tetap berguna
+  // pada kontrak pertama yang seed belum tersinkron.
+  const unitOptions = useMemo(() => {
+    const set = new Set();
+    workCodes.forEach((w) => { if (w.default_unit) set.add(w.default_unit); });
+    const fallback = ["m", "m2", "m3", "kg", "ton", "unit", "bh", "set", "ls", "hari"];
+    fallback.forEach((u) => set.add(u));
+    return Array.from(set).sort();
+  }, [workCodes]);
+
+  // ID unik per instance grid supaya datalist tidak bentrok bila ada
+  // beberapa grid di halaman yang sama.
+  const descListId = useRef(
+    `boq-desc-${Math.random().toString(36).slice(2, 8)}`
+  ).current;
 
   const computeTotal = (row) => {
     const v = parseFloat(row.volume) || 0;
@@ -90,16 +152,6 @@ export default function BOQGrid({
       );
     }
     return null;
-  };
-
-  // Cell editor pakai datalist HTML native untuk autocomplete ringan
-  // Mengetik uraian → lihat saran master → pilih → kolom master_work_code
-  // otomatis ter-set di onCellValueChanged.
-  const descriptionEditor = {
-    cellEditor: "agTextCellEditor",
-    cellEditorParams: {
-      useFormatter: false,
-    },
   };
 
   const columns = useMemo(() => [
@@ -145,13 +197,22 @@ export default function BOQGrid({
       flex: 2,
       minWidth: 240,
       editable: canEdit,
-      ...descriptionEditor,
+      cellEditor: DatalistCellEditor,
+      cellEditorParams: { listId: descListId },
+      cellEditorPopup: false,
       cellStyle: (p) => ({
         fontWeight: (p.data?.level ?? 0) <= 1 ? 600 : 400,
         paddingLeft: `${8 + (p.data?.level ?? 0) * 10}px`,
       }),
     },
-    { headerName: "Satuan", field: "unit", width: 72, editable: canEdit },
+    {
+      headerName: "Satuan",
+      field: "unit",
+      width: 90,
+      editable: canEdit,
+      cellEditor: "agSelectCellEditor",
+      cellEditorParams: { values: unitOptions },
+    },
     {
       headerName: "Volume",
       field: "volume",
@@ -190,7 +251,7 @@ export default function BOQGrid({
       valueFormatter: (p) => ((p.value || 0) * 100).toFixed(3) + "%",
       cellStyle: { color: "#64748b", fontSize: 11 },
     },
-  ], [canEdit]);
+  ], [canEdit, unitOptions, descListId]);
 
   // Dipanggil oleh picker modal (both master & manual path)
   const handlePickerAdd = useCallback((newRow) => {
@@ -320,14 +381,19 @@ export default function BOQGrid({
   const masterCount = rows.filter((r) => r.master_work_code).length;
   const customCount = rows.filter((r) => !r.master_work_code && r.description).length;
 
-  // Datalist HTML: ditaruh di atas grid supaya <input list=...> di cell
-  // editor bisa pakai saran — AG Grid's text editor otomatis pakai
-  // datalist kalau ada input list matching attribute, tapi karena itu
-  // rumit, kita pakai approach lain: help user dengan showing code list
-  // di footer + rely on picker modal untuk pilih yang eksplisit.
-
   return (
     <div className="space-y-3">
+      {/* Datalist shared by semua cell editor Uraian. Berisi seluruh
+          master work code; <input list="..."> native akan memfilter
+          berdasarkan apa yang diketik user. */}
+      <datalist id={descListId}>
+        {workCodes.map((w) => (
+          <option key={w.code} value={w.description}>
+            {w.code} · {w.category}
+          </option>
+        ))}
+      </datalist>
+
       {/* Banner untuk APPROVED revision (kontrak aktif) */}
       {revisionLocked && (
         <div className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-50 border border-amber-200">
@@ -422,10 +488,11 @@ export default function BOQGrid({
 
       {canEdit && workCodes.length > 0 && (
         <div className="text-[11px] text-ink-400 px-1">
-          💡 Tip: saat mengetik di kolom <em>Uraian</em>, jika cocok dengan salah
-          satu {workCodes.length} kode standar, kolom <em>Kode Master</em> akan
-          otomatis terisi. Atau klik <em>Tambah Item</em> untuk pencarian
-          terstruktur.
+          Tip: klik cell <em>Uraian</em> → panah bawah untuk melihat
+          {" "}{workCodes.length} kode standar, atau ketik untuk memfilter.
+          Saat Anda pilih uraian dari daftar, <em>Kode Master</em> dan{" "}
+          <em>Satuan</em> otomatis terisi. Atau klik <em>Tambah Item</em>{" "}
+          untuk pencarian terstruktur dengan pratinjau.
         </div>
       )}
 
