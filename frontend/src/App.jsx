@@ -18,6 +18,7 @@ import { CompaniesPage, PPKPage, WorkCodesPage, MasterFacilitiesPage } from "@/p
 import UsersPage from "@/pages/UsersPage";
 import RolesPage from "@/pages/RolesPage";
 import NotificationsPage from "@/pages/NotificationsPage";
+import AuditLogPage from "@/pages/AuditLogPage";
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuthStore();
@@ -55,6 +56,7 @@ export default function App() {
       <Route path="/admin/users" element={<ProtectedRoute><UsersPage /></ProtectedRoute>} />
       <Route path="/admin/roles" element={<ProtectedRoute><RolesPage /></ProtectedRoute>} />
       <Route path="/admin/notifications" element={<ProtectedRoute><NotificationsPage /></ProtectedRoute>} />
+      <Route path="/admin/audit" element={<ProtectedRoute><AuditLogPage /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

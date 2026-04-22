@@ -302,6 +302,11 @@ export const templatesAPI = {
   locations: () => api.get("/templates/locations", { responseType: "blob" }),
 };
 
+export const auditAPI = {
+  list: (params) => api.get("/audit/logs", { params }),
+  facets: () => api.get("/audit/facets"),
+};
+
 export function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
