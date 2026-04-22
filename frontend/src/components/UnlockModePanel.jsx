@@ -84,31 +84,61 @@ export default function UnlockModePanel({ contract, onChange }) {
 }
 
 function UnlockedBanner({ contract, isSuperadmin, onLockClick }) {
+  const [remaining, setRemaining] = useState(() =>
+    contract.unlock_until
+      ? Math.max(0, new Date(contract.unlock_until) - new Date())
+      : 0
+  );
+
+  useEffect(() => {
+    if (!contract.unlock_until) return;
+    const tick = setInterval(() => {
+      const ms = new Date(contract.unlock_until) - new Date();
+      setRemaining(Math.max(0, ms));
+    }, 1000);
+    return () => clearInterval(tick);
+  }, [contract.unlock_until]);
+
+  const totalSec = Math.floor(remaining / 1000);
+  const mm = Math.floor(totalSec / 60);
+  const ss = totalSec % 60;
+  const expired = totalSec <= 0;
+
   return (
-    <div className="rounded-xl border border-red-300 bg-red-50 p-4 mb-4">
+    <div className="rounded-xl border-2 border-red-500 bg-red-50 p-4 mb-4 shadow-lg animate-pulse-slow">
+      <style>{`
+        @keyframes pulse-slow {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+          50% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+        }
+        .animate-pulse-slow { animation: pulse-slow 2s infinite; }
+      `}</style>
       <div className="flex items-start gap-3">
-        <div className="w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center flex-shrink-0">
-          <Unlock size={18} className="text-red-700" />
+        <div className="w-12 h-12 rounded-xl bg-red-600 flex items-center justify-center flex-shrink-0">
+          <Unlock size={22} className="text-white" />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="font-semibold text-red-900 text-sm">
-            Mode Edit Terbuka — bypass Addendum
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className="font-bold text-red-900 text-base uppercase tracking-wide">
+              🔓 UNLOCK MODE AKTIF
+            </p>
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-red-600 text-white uppercase">
+              bypass guard
+            </span>
+          </div>
+          <p className="text-xs text-red-800 mt-1.5">
+            Kontrak dibuka untuk koreksi bebas. BOQ, Lokasi, Fasilitas, dan
+            field kontrak bisa diubah tanpa Addendum. Semua perubahan tetap
+            terekam di audit log.
           </p>
-          <p className="text-xs text-red-800 mt-1">
-            Kontrak sementara dibuka oleh superadmin untuk koreksi kesalahan
-            input. Semua guard normal (BOQ terkunci, field kontrak terkunci,
-            penambahan fasilitas) dinonaktifkan. Segera tutup kembali setelah
-            perbaikan selesai — sistem akan memvalidasi total BOQ = nilai
-            kontrak sebelum mengunci.
-          </p>
-          <div className="text-[11px] text-red-700 mt-2 flex flex-wrap gap-x-4 gap-y-1">
-            {contract.unlocked_at && (
-              <span>Dibuka: {fmtDate(contract.unlocked_at)}</span>
-            )}
-            {contract.unlock_until && (
-              <span className="font-semibold">
-                Habis: {new Date(contract.unlock_until).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}
-              </span>
+          <div className="text-[11px] text-red-800 mt-2 flex flex-wrap gap-x-4 gap-y-1 items-center">
+            <span className={`font-mono font-bold text-sm px-2 py-0.5 rounded ${
+              expired ? "bg-gray-200 text-gray-700" : mm < 5 ? "bg-red-600 text-white" : "bg-red-200 text-red-900"
+            }`}>
+              {expired ? "KEDALUWARSA" : `⏱ Sisa ${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`}
+            </span>
+            {contract.unlock_until && !expired && (
+              <span>Habis pukul {new Date(contract.unlock_until).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}</span>
             )}
             {contract.unlock_reason && (
               <span className="truncate">
@@ -119,10 +149,11 @@ function UnlockedBanner({ contract, isSuperadmin, onLockClick }) {
         </div>
         {isSuperadmin && (
           <button
-            className="btn-primary btn-xs bg-red-600 hover:bg-red-700 border-red-600 flex-shrink-0"
+            className="btn-primary bg-red-600 hover:bg-red-700 border-red-600 flex-shrink-0 font-semibold"
             onClick={onLockClick}
+            title="Kunci sekarang tanpa menunggu waktu habis"
           >
-            <Lock size={12} /> Kunci Kembali
+            <Lock size={14} /> Kunci Sekarang
           </button>
         )}
       </div>

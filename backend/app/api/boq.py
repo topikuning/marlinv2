@@ -34,8 +34,11 @@ def _is_unlocked_contract(db: Session, contract_id) -> bool:
     """
     if not contract_id:
         return False
+    import datetime as _dt
     c = db.query(Contract).filter(Contract.id == contract_id).first()
-    return bool(c and c.unlocked_at is not None)
+    if not c or c.unlock_until is None:
+        return False
+    return _dt.datetime.utcnow() < c.unlock_until
 from app.services.boq_import_service import parse_boq_file, detect_format
 from app.services.template_service import template_boq_simple
 

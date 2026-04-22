@@ -44,7 +44,8 @@ export default function EditContractModal({ open, contract, onClose, onSuccess }
 
   const status = contract?.status || "draft";
   const isDraft = status === "draft";
-  const isUnlocked = !!contract?.unlocked_at;
+  const isUnlocked =
+    !!contract?.unlock_until && new Date() < new Date(contract.unlock_until);
   // COMPLETED/TERMINATED normally read-only. Unlock Mode membuka juga —
   // inti safety valve adalah koreksi retroaktif pada kontrak yang sudah
   // selesai sekalipun.
