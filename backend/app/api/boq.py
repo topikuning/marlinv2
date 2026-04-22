@@ -736,8 +736,17 @@ def approve_revision(
     demote the previously-active revision to SUPERSEDED, and migrate existing
     weekly progress entries from old items to their clones (for UNCHANGED /
     MODIFIED items). See boq_revision_service.approve_revision for details.
+
+    Precondition yang wajib terpenuhi:
+      - Revisi punya minimal 1 item (kecuali CCO-0 boleh kosong).
+      - Total BOQ revisi == nilai kontrak saat ini. Untuk CCO-0 artinya
+        sum(item) == original_value. Untuk CCO-N yang dibuat lewat addendum,
+        artinya sum(item) == new_contract_value yang dicatat di addendum
+        (sudah di-set ke contract.current_value saat addendum dibuat).
+        Kalau beda, approve ditolak 409 — user harus koreksi BOQ atau
+        ubah nilai kontrak di addendum.
     """
-    from app.models.models import BOQRevision
+    from app.models.models import BOQRevision, Contract
     from app.services import boq_revision_service
 
     rev = db.query(BOQRevision).filter(BOQRevision.id == revision_id).first()
@@ -747,13 +756,41 @@ def approve_revision(
     if rev.item_count == 0 and rev.cco_number != 0:
         raise HTTPException(400, "Revisi kosong — tambahkan minimal satu item BOQ sebelum approve.")
 
+    # Recalc dulu supaya rev.total_value fresh saat diperbandingkan.
+    boq_revision_service.recalc_revision_totals(db, rev)
+
+    contract = db.query(Contract).filter(Contract.id == rev.contract_id).first()
+    if not contract:
+        raise HTTPException(404, "Kontrak tidak ditemukan")
+
+    expected = float(contract.current_value or 0)
+    actual = float(rev.total_value or 0)
+    diff = round(actual - expected, 2)
+    if abs(diff) >= 0.01:
+        raise HTTPException(
+            409,
+            {
+                "message": (
+                    f"Total BOQ revisi {rev.revision_code} ({actual:,.2f}) tidak "
+                    f"sama dengan nilai kontrak ({expected:,.2f}). Selisih "
+                    f"{diff:,.2f}. Koreksi BOQ atau ubah nilai kontrak pada "
+                    f"Addendum sebelum approve."
+                ),
+                "code": "revision_value_mismatch",
+                "contract_value": expected,
+                "boq_total": actual,
+                "diff": diff,
+                "revision_code": rev.revision_code,
+            },
+        )
+
     boq_revision_service.approve_revision(
         db, rev, approved_by_id=current_user.id, migrate_progress=True,
     )
     db.commit()
     log_audit(
         db, current_user, "approve", "boq_revision", str(rev.id),
-        changes={"revision_code": rev.revision_code},
+        changes={"revision_code": rev.revision_code, "total_value": actual},
         request=request, commit=True,
     )
     return {

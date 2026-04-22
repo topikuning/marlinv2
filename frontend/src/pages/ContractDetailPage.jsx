@@ -1412,6 +1412,31 @@ function RevisionsPanel({ contract, onChange }) {
                   {r.item_count} item · Total {fmtCurrency(r.total_value)}
                   {r.approved_at && ` · Approved ${fmtDate(r.approved_at)}`}
                 </p>
+                {r.status === "draft" && (() => {
+                  // Live sync-check: DRAFT hanya bisa di-approve kalau total
+                  // BOQ == nilai kontrak saat ini. Kalau beda, tampilkan
+                  // peringatan dan disable tombol Approve di bawah.
+                  const contractValue = Number(contract.current_value || 0);
+                  const boqTotal = Number(r.total_value || 0);
+                  const diff = Math.round((boqTotal - contractValue) * 100) / 100;
+                  const inSync = Math.abs(diff) < 0.01;
+                  return inSync ? (
+                    <p className="text-[11px] text-green-700 mt-1 font-medium">
+                      ✓ Sinkron dengan nilai kontrak ({fmtCurrency(contractValue)})
+                    </p>
+                  ) : (
+                    <div className="mt-2 p-2 rounded-md bg-amber-50 border border-amber-200 text-[11px] text-amber-900">
+                      <p className="font-semibold">
+                        ⚠ Total BOQ ≠ Nilai Kontrak ({fmtCurrency(contractValue)})
+                      </p>
+                      <p className="mt-0.5">
+                        Selisih: {fmtCurrency(diff)}. Approve akan ditolak
+                        sampai BOQ dikoreksi atau nilai kontrak pada Addendum
+                        diubah.
+                      </p>
+                    </div>
+                  );
+                })()}
               </div>
               <div className="flex gap-2 flex-shrink-0">
                 {r.cco_number > 0 && (
@@ -1423,15 +1448,26 @@ function RevisionsPanel({ contract, onChange }) {
                     Compare
                   </button>
                 )}
-                {r.status === "draft" && (
-                  <button
-                    className="btn-primary btn-xs"
-                    onClick={() => approve(r)}
-                    disabled={approving === r.id}
-                  >
-                    {approving === r.id ? <Spinner size={11} /> : null} Approve
-                  </button>
-                )}
+                {r.status === "draft" && (() => {
+                  const contractValue = Number(contract.current_value || 0);
+                  const boqTotal = Number(r.total_value || 0);
+                  const inSync =
+                    Math.abs(boqTotal - contractValue) < 0.01;
+                  return (
+                    <button
+                      className="btn-primary btn-xs disabled:opacity-50"
+                      onClick={() => approve(r)}
+                      disabled={approving === r.id || !inSync}
+                      title={
+                        inSync
+                          ? "Approve revisi"
+                          : "BOQ belum sinkron dengan nilai kontrak"
+                      }
+                    >
+                      {approving === r.id ? <Spinner size={11} /> : null} Approve
+                    </button>
+                  );
+                })()}
               </div>
             </div>
           </div>
