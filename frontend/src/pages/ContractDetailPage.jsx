@@ -424,14 +424,14 @@ export default function ContractDetailPage() {
             facilityId={boqFacility.id}
             items={boqItems}
             revisionLocked={
-              // Kontrak DRAFT → BOQ bebas diedit (CCO-0 masih DRAFT).
-              // Kontrak ACTIVE / ADDENDUM → CCO-0/CCO-N yang aktif sudah
-              // APPROVED, editing harus via Addendum. Banner lock muncul.
-              // COMPLETED / TERMINATED → readonly total (ditangani via
-              // readonly prop di bawah).
-              // Unlock Mode → bypass: BOQ boleh diedit walau revisi APPROVED.
+              // Working revision adalah revisi yang sedang dikerjakan:
+              //   - DRAFT (CCO-0 baru atau CCO-N+1 hasil addendum) → editable
+              //   - APPROVED aktif → locked, harus lewat Addendum baru
+              // Dengan logic ini, setelah user buat Addendum, BOQ langsung
+              // editable di DRAFT baru tanpa perlu navigasi tambahan.
+              // Unlock Mode → bypass total: BOQ boleh diedit walau APPROVED.
               !isUnlocked &&
-              (contract.status === "active" || contract.status === "addendum")
+              contract.working_revision?.status === "approved"
             }
             readonly={
               // COMPLETED / TERMINATED normalnya readonly, tapi Unlock Mode

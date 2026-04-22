@@ -127,23 +127,38 @@ def _contract_to_detail(c: Contract, db: Session) -> dict:
     # Surface the currently-active BOQ revision (if any) so the UI can show
     # "CCO-N · approved/draft" next to the BOQ tab and decide which revision
     # the progress grid should read from.
-    from app.models.models import BOQRevision
+    from app.models.models import BOQRevision, RevisionStatus
+
+    def _rev_payload(r):
+        if not r:
+            return None
+        return {
+            "id": str(r.id),
+            "cco_number": r.cco_number,
+            "revision_code": r.revision_code,
+            "status": r.status.value if hasattr(r.status, "value") else r.status,
+            "total_value": float(r.total_value or 0),
+            "item_count": r.item_count or 0,
+            "approved_at": r.approved_at.isoformat() if r.approved_at else None,
+        }
+
     active_rev = (
         db.query(BOQRevision)
         .filter(BOQRevision.contract_id == c.id, BOQRevision.is_active == True)  # noqa: E712
         .first()
     )
-    active_rev_payload = None
-    if active_rev:
-        active_rev_payload = {
-            "id": str(active_rev.id),
-            "cco_number": active_rev.cco_number,
-            "revision_code": active_rev.revision_code,
-            "status": active_rev.status.value if hasattr(active_rev.status, "value") else active_rev.status,
-            "total_value": float(active_rev.total_value or 0),
-            "item_count": active_rev.item_count or 0,
-            "approved_at": active_rev.approved_at.isoformat() if active_rev.approved_at else None,
-        }
+    active_rev_payload = _rev_payload(active_rev)
+
+    # Working revision = revisi DRAFT terbaru kalau ada (addendum pending),
+    # jatuh ke active kalau tidak ada. UI BOQ pakai ini untuk memutuskan
+    # locked vs editable supaya alur setelah buat addendum jelas.
+    latest_draft = (
+        db.query(BOQRevision)
+        .filter(BOQRevision.contract_id == c.id, BOQRevision.status == RevisionStatus.DRAFT)
+        .order_by(BOQRevision.cco_number.desc())
+        .first()
+    )
+    working_rev_payload = _rev_payload(latest_draft) or active_rev_payload
 
     return {
         "id": str(c.id),
@@ -176,6 +191,7 @@ def _contract_to_detail(c: Contract, db: Session) -> dict:
         "unlocked_by_id": str(c.unlocked_by_id) if c.unlocked_by_id else None,
         "unlock_reason": c.unlock_reason,
         "active_revision": active_rev_payload,
+        "working_revision": working_rev_payload,
         "created_at": c.created_at.isoformat(),
         "locations": locations,
         "addenda": addenda,

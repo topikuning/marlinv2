@@ -71,6 +71,46 @@ def _boq_to_dict(b: BOQItem) -> dict:
     }
 
 
+def _resolve_working_revision_id(db: Session, contract_id) -> Optional[str]:
+    """
+    Revisi yang sedang dikerjakan user di UI BOQ editor.
+
+    Prioritas:
+      1. Latest DRAFT revision untuk kontrak ini — artinya ada addendum
+         yang baru dibuat dan belum di-approve (CCO-N+1 DRAFT), atau
+         kontrak masih fresh (CCO-0 DRAFT).
+      2. Revisi aktif (APPROVED + is_active=True) — kondisi normal
+         kontrak ACTIVE tanpa addendum pending.
+      3. None — kontrak belum punya revisi apa pun (baru dibuat).
+
+    Dipakai oleh read path (list_by_facility, list_by_contract_flat) agar
+    UI secara otomatis menampilkan revisi yang benar ketika user mulai
+    mengedit setelah membuat addendum.
+    """
+    from app.models.models import BOQRevision, RevisionStatus
+
+    latest_draft = (
+        db.query(BOQRevision)
+        .filter(
+            BOQRevision.contract_id == contract_id,
+            BOQRevision.status == RevisionStatus.DRAFT,
+        )
+        .order_by(BOQRevision.cco_number.desc())
+        .first()
+    )
+    if latest_draft:
+        return str(latest_draft.id)
+    active = (
+        db.query(BOQRevision)
+        .filter(
+            BOQRevision.contract_id == contract_id,
+            BOQRevision.is_active == True,  # noqa: E712
+        )
+        .first()
+    )
+    return str(active.id) if active else None
+
+
 # ═══════════════════════════════════════════ LIST / TREE ═════════════════════
 
 @router.get("/by-facility/{facility_id}", response_model=List[dict])
@@ -95,35 +135,17 @@ def list_by_facility(
     if revision_id:
         q = q.filter(BOQItem.boq_revision_id == revision_id)
     else:
-        # Resolve the active revision of the owning contract and filter by it.
-        from app.models.models import BOQRevision
+        # Resolve the "working" revision (latest DRAFT preferred over active
+        # APPROVED). This way, setelah user membuat Addendum, BOQ tab otomatis
+        # menampilkan revisi DRAFT yang baru — bukan CCO-N APPROVED lama yang
+        # ternyata tidak bisa diedit.
         fac = db.query(Facility).filter(Facility.id == facility_id).first()
         if fac:
             loc = db.query(Location).filter(Location.id == fac.location_id).first()
             if loc:
-                active = (
-                    db.query(BOQRevision)
-                    .filter(
-                        BOQRevision.contract_id == loc.contract_id,
-                        BOQRevision.is_active == True,  # noqa: E712
-                    )
-                    .first()
-                )
-                if active:
-                    q = q.filter(BOQItem.boq_revision_id == active.id)
-                else:
-                    # No active revision yet — read from CCO-0 draft so the
-                    # user can start entering items on a freshly-created contract.
-                    cco_zero = (
-                        db.query(BOQRevision)
-                        .filter(
-                            BOQRevision.contract_id == loc.contract_id,
-                            BOQRevision.cco_number == 0,
-                        )
-                        .first()
-                    )
-                    if cco_zero:
-                        q = q.filter(BOQItem.boq_revision_id == cco_zero.id)
+                working = _resolve_working_revision_id(db, loc.contract_id)
+                if working:
+                    q = q.filter(BOQItem.boq_revision_id == working)
 
     rows = q.order_by(BOQItem.display_order, BOQItem.id).all()
     return [_boq_to_dict(r) for r in rows]
@@ -142,31 +164,9 @@ def list_by_contract_flat(
     currently-active revision unless `revision_id` overrides it. Falls back
     to CCO-0 if no revision is active yet (contract still in DRAFT).
     """
-    from app.models.models import BOQRevision
-
-    active_rev_id = revision_id
-    if not active_rev_id:
-        active = (
-            db.query(BOQRevision)
-            .filter(
-                BOQRevision.contract_id == contract_id,
-                BOQRevision.is_active == True,  # noqa: E712
-            )
-            .first()
-        )
-        if active:
-            active_rev_id = str(active.id)
-        else:
-            cco_zero = (
-                db.query(BOQRevision)
-                .filter(
-                    BOQRevision.contract_id == contract_id,
-                    BOQRevision.cco_number == 0,
-                )
-                .first()
-            )
-            if cco_zero:
-                active_rev_id = str(cco_zero.id)
+    # Default: revisi DRAFT pending kalau ada (baru dibuat addendum), fallback
+    # revisi aktif APPROVED. Selaras dengan list_by_facility.
+    active_rev_id = revision_id or _resolve_working_revision_id(db, contract_id)
 
     q = (
         db.query(BOQItem, Facility, Location)
