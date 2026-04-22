@@ -9,6 +9,10 @@ from app.core.database import get_db
 from app.models.models import Location, Contract, User
 from app.schemas.schemas import LocationCreate, LocationUpdate, LocationOut, ExcelImportResult
 from app.api.deps import get_current_user, require_permission, user_can_access_contract
+from app.api._guards import (
+    assert_scope_editable_by_contract,
+    assert_scope_editable_by_location,
+)
 from app.services.audit_service import log_audit
 
 router = APIRouter(prefix="/locations", tags=["locations"])
@@ -44,6 +48,7 @@ def create_location(
     c = db.query(Contract).filter(Contract.id == contract_id, Contract.deleted_at.is_(None)).first()
     if not c:
         raise HTTPException(404, "Kontrak tidak ditemukan")
+    assert_scope_editable_by_contract(db, contract_id, entity="location")
     if db.query(Location).filter(
         Location.contract_id == contract_id,
         Location.location_code == data.location_code,
@@ -66,6 +71,7 @@ def bulk_create_locations(
     c = db.query(Contract).filter(Contract.id == contract_id, Contract.deleted_at.is_(None)).first()
     if not c:
         raise HTTPException(404, "Kontrak tidak ditemukan")
+    assert_scope_editable_by_contract(db, contract_id, entity="location")
 
     created = 0
     skipped = 0
@@ -97,6 +103,7 @@ async def import_locations_excel(
     c = db.query(Contract).filter(Contract.id == contract_id, Contract.deleted_at.is_(None)).first()
     if not c:
         raise HTTPException(404, "Kontrak tidak ditemukan")
+    assert_scope_editable_by_contract(db, contract_id, entity="location")
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
         tmp.write(await file.read())
@@ -158,6 +165,7 @@ def update_location(
     loc = db.query(Location).filter(Location.id == location_id).first()
     if not loc:
         raise HTTPException(404, "Lokasi tidak ditemukan")
+    assert_scope_editable_by_location(db, location_id, entity="location")
     for k, v in data.model_dump(exclude_unset=True).items():
         setattr(loc, k, v)
     db.commit()
@@ -174,6 +182,7 @@ def delete_location(
     loc = db.query(Location).filter(Location.id == location_id).first()
     if not loc:
         raise HTTPException(404, "Lokasi tidak ditemukan")
+    assert_scope_editable_by_location(db, location_id, entity="location")
     db.delete(loc)
     db.commit()
     log_audit(db, current_user, "delete", "location", location_id, request=request, commit=True)

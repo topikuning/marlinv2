@@ -83,6 +83,15 @@ export const masterAPI = {
   createWorkCode: (data) => api.post("/master/work-codes", data),
   updateWorkCode: (code, data) => api.put(`/master/work-codes/${code}`, data),
   deleteWorkCode: (code) => api.delete(`/master/work-codes/${code}`),
+  workCodeTemplate: () =>
+    api.get("/master/work-codes/template", { responseType: "blob" }),
+  importWorkCodes: (file) => {
+    const form = new FormData();
+    form.append("file", file);
+    return api.post("/master/work-codes/import-excel", form, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+  },
 
   // Tahap 2: Master facilities (catalog)
   facilities: (params) => api.get("/master/facilities", { params }),
@@ -107,7 +116,8 @@ export const contractsAPI = {
   complete: (id) => api.post(`/contracts/${id}/complete`),
 
   // Unlock Mode (safety valve superadmin)
-  unlock: (id, reason) => api.post(`/contracts/${id}/unlock`, { reason }),
+  unlock: (id, reason, duration_minutes = 30) =>
+    api.post(`/contracts/${id}/unlock`, { reason, duration_minutes }),
   lock: (id) => api.post(`/contracts/${id}/lock`),
   syncStatus: (id) => api.get(`/contracts/${id}/sync-status`),
 };

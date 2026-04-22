@@ -98,6 +98,25 @@ export default function ContractDetailPage() {
     ...(boqFacility ? [{ id: "boq", label: `BOQ: ${boqFacility.facility_name}` }] : []),
   ];
 
+  // Unlock Mode: window terbuka bila unlock_until ada dan belum lewat.
+  const isUnlocked =
+    contract.unlock_until && new Date() < new Date(contract.unlock_until);
+
+  // SCOPE kontrak (Lokasi, Fasilitas, rollback Addendum) editable saat:
+  // - status DRAFT / ADDENDUM, atau
+  // - superadmin membuka Unlock Mode (window belum expire)
+  const scopeEditable =
+    contract.status === "draft" ||
+    contract.status === "addendum" ||
+    isUnlocked;
+  const facilitiesEditable = scopeEditable;
+  const locationsEditable = scopeEditable;
+  const scopeLockReason = scopeEditable
+    ? null
+    : `Lokasi & Fasilitas dikunci karena kontrak berstatus ${contract.status}. Buat Addendum untuk mengubah.`;
+  const facilityLockReason = scopeLockReason;
+  const locationLockReason = scopeLockReason;
+
   return (
     <div className="p-6 max-w-screen-2xl mx-auto">
       {/* Breadcrumb */}
@@ -111,10 +130,10 @@ export default function ContractDetailPage() {
         </span>
       </div>
 
-      {/* Unlock-mode banner (hanya saat contract.unlocked_at aktif).
+      {/* Unlock-mode banner (hanya saat window masih aktif).
           Ditaruh di atas header agar user selalu sadar kontrak sedang
           dalam mode edit bypass. */}
-      {contract.unlocked_at && (
+      {isUnlocked && (
         <UnlockModePanel contract={contract} onChange={load} />
       )}
 
@@ -134,7 +153,7 @@ export default function ContractDetailPage() {
           </div>
           <div className="flex gap-2 flex-wrap items-center">
             {/* Tombol "Buka Unlock Mode" (superadmin only, saat terkunci) */}
-            {!contract.unlocked_at && (
+            {!isUnlocked && (
               <UnlockModePanel contract={contract} onChange={load} />
             )}
             <button
@@ -202,10 +221,17 @@ export default function ContractDetailPage() {
       {/* Locations & Facilities */}
       {tab === "locations" && (
         <div>
+          {facilityLockReason && (
+            <div className="mb-4 px-3 py-2 rounded-md bg-amber-50 border border-amber-200 text-xs text-amber-800">
+              {facilityLockReason}
+            </div>
+          )}
           <div className="flex justify-end mb-4">
             <button
               className="btn-primary"
               onClick={() => setShowAddLocation(true)}
+              disabled={!locationsEditable}
+              title={locationLockReason || "Tambah lokasi baru"}
             >
               <Plus size={14} /> Tambah Lokasi
             </button>
@@ -238,6 +264,8 @@ export default function ContractDetailPage() {
                       <button
                         className="btn-ghost btn-xs"
                         onClick={() => setShowAddFacility(loc)}
+                        disabled={!facilitiesEditable}
+                        title={facilityLockReason || "Tambah fasilitas"}
                       >
                         <Plus size={11} /> Fasilitas
                       </button>
@@ -250,14 +278,17 @@ export default function ContractDetailPage() {
                       >
                         <Upload size={11} /> BOQ
                       </button>
-                      <button
-                        className="btn-ghost btn-xs text-red-600"
-                        onClick={() =>
-                          setConfirmDel({ type: "loc", loc, name: loc.name })
-                        }
-                      >
-                        <Trash2 size={11} />
-                      </button>
+                      {locationsEditable && (
+                        <button
+                          className="btn-ghost btn-xs text-red-600"
+                          onClick={() =>
+                            setConfirmDel({ type: "loc", loc, name: loc.name })
+                          }
+                          title="Hapus lokasi"
+                        >
+                          <Trash2 size={11} />
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -280,18 +311,21 @@ export default function ContractDetailPage() {
                               {f.facility_code} · {fmtNum(f.total_value)}
                             </p>
                           </button>
-                          <button
-                            onClick={() =>
-                              setConfirmDel({
-                                type: "fac",
-                                fac: f,
-                                name: f.facility_name,
-                              })
-                            }
-                            className="opacity-0 group-hover:opacity-100 text-red-500 p-1"
-                          >
-                            <Trash2 size={11} />
-                          </button>
+                          {facilitiesEditable && (
+                            <button
+                              onClick={() =>
+                                setConfirmDel({
+                                  type: "fac",
+                                  fac: f,
+                                  name: f.facility_name,
+                                })
+                              }
+                              className="opacity-0 group-hover:opacity-100 text-red-500 p-1"
+                              title="Hapus fasilitas"
+                            >
+                              <Trash2 size={11} />
+                            </button>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -382,13 +416,13 @@ export default function ContractDetailPage() {
               // COMPLETED / TERMINATED → readonly total (ditangani via
               // readonly prop di bawah).
               // Unlock Mode → bypass: BOQ boleh diedit walau revisi APPROVED.
-              !contract.unlocked_at &&
+              !isUnlocked &&
               (contract.status === "active" || contract.status === "addendum")
             }
             readonly={
               // COMPLETED / TERMINATED normalnya readonly, tapi Unlock Mode
               // membuka juga untuk koreksi retroaktif.
-              !contract.unlocked_at &&
+              !isUnlocked &&
               (contract.status === "completed" ||
                 contract.status === "terminated")
             }

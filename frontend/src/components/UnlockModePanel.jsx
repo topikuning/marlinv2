@@ -30,7 +30,8 @@ export default function UnlockModePanel({ contract, onChange }) {
   const [showLock, setShowLock] = useState(false);
 
   const isSuperadmin = user?.role?.code === "superadmin";
-  const isUnlocked = !!contract?.unlocked_at;
+  const isUnlocked =
+    !!contract?.unlock_until && new Date() < new Date(contract.unlock_until);
   const canUnlockFromStatus =
     contract?.status === "active" ||
     contract?.status === "addendum" ||
@@ -104,6 +105,11 @@ function UnlockedBanner({ contract, isSuperadmin, onLockClick }) {
             {contract.unlocked_at && (
               <span>Dibuka: {fmtDate(contract.unlocked_at)}</span>
             )}
+            {contract.unlock_until && (
+              <span className="font-semibold">
+                Habis: {new Date(contract.unlock_until).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}
+              </span>
+            )}
             {contract.unlock_reason && (
               <span className="truncate">
                 Alasan: <em>{contract.unlock_reason}</em>
@@ -126,10 +132,11 @@ function UnlockedBanner({ contract, isSuperadmin, onLockClick }) {
 
 function UnlockModal({ open, contract, onClose, onDone }) {
   const [reason, setReason] = useState("");
+  const [duration, setDuration] = useState(30);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (open) setReason("");
+    if (open) { setReason(""); setDuration(30); }
   }, [open]);
 
   const submit = async () => {
@@ -138,10 +145,11 @@ function UnlockModal({ open, contract, onClose, onDone }) {
       toast.error("Alasan wajib ≥ 10 karakter.");
       return;
     }
+    const mins = Math.max(1, Math.min(1440, parseInt(duration) || 30));
     setLoading(true);
     try {
-      await contractsAPI.unlock(contract.id, trimmed);
-      toast.success("Kontrak dibuka untuk edit bebas");
+      await contractsAPI.unlock(contract.id, trimmed, mins);
+      toast.success(`Kontrak dibuka untuk edit bebas selama ${mins} menit`);
       onDone?.();
     } catch (e) {
       toast.error(parseApiError(e));
@@ -179,12 +187,48 @@ function UnlockModal({ open, contract, onClose, onDone }) {
             <p className="font-semibold">Unlock bukan pengganti Addendum.</p>
             <p className="mt-1">
               Gunakan fitur ini hanya untuk memperbaiki kesalahan input (salah
-              ketik nilai, tanggal, atau fasilitas), bukan untuk perubahan
-              scope kontrak. Perubahan scope tetap harus lewat Addendum yang
-              tercatat administratif. Semua perubahan tetap terekam di audit log.
+              ketik nilai, tanggal, atau fasilitas). Perubahan scope tetap
+              harus lewat Addendum. Semua perubahan terekam di audit log.
             </p>
           </div>
         </div>
+
+        <label className="block">
+          <span className="text-sm font-medium text-ink-800">
+            Durasi unlock
+          </span>
+          <div className="flex items-center gap-2 mt-1">
+            <input
+              type="number"
+              className="input w-24 text-center"
+              min={1}
+              max={1440}
+              value={duration}
+              onChange={(e) => setDuration(e.target.value)}
+            />
+            <span className="text-sm text-ink-600">menit</span>
+            <div className="flex gap-1 ml-2">
+              {[15, 30, 60, 120].map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  className={`text-[11px] px-2 py-1 rounded border transition ${
+                    parseInt(duration) === m
+                      ? "bg-brand-600 text-white border-brand-600"
+                      : "bg-white text-ink-600 border-ink-200 hover:border-brand-400"
+                  }`}
+                  onClick={() => setDuration(m)}
+                >
+                  {m < 60 ? `${m}m` : `${m / 60}j`}
+                </button>
+              ))}
+            </div>
+          </div>
+          <span className="text-[11px] text-ink-500">
+            Window akan otomatis ditutup setelah waktu habis (maks 24 jam).
+          </span>
+        </label>
+
         <label className="block">
           <span className="text-sm font-medium text-ink-800">
             Alasan membuka edit-mode <span className="text-red-600">*</span>

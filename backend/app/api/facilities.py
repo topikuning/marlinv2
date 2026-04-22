@@ -11,6 +11,7 @@ from app.schemas.schemas import (
     FacilityCreate, FacilityUpdate, FacilityBulkCreate, FacilityOut, ExcelImportResult,
 )
 from app.api.deps import get_current_user, require_permission
+from app.api._guards import assert_scope_editable_by_location
 from app.services.audit_service import log_audit
 
 router = APIRouter(prefix="/facilities", tags=["facilities"])
@@ -52,6 +53,10 @@ def _resolve_master_facility(
     return None
 
 
+# Guard scope-editable statuses dipindah ke app.api._guards supaya dipakai
+# bersama oleh router locations / facilities / contracts.addenda.
+
+
 @router.get("/by-location/{location_id}", response_model=List[dict])
 def list_by_location(location_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
     rows = db.query(Facility).filter(
@@ -76,6 +81,7 @@ def create_facility(
 ):
     if not db.query(Location).filter(Location.id == data.location_id).first():
         raise HTTPException(400, "Lokasi tidak ditemukan")
+    assert_scope_editable_by_location(db, data.location_id)
     if db.query(Facility).filter(
         Facility.location_id == data.location_id,
         Facility.facility_code == data.facility_code,
@@ -115,6 +121,7 @@ def bulk_create_facilities(
 ):
     if not db.query(Location).filter(Location.id == data.location_id).first():
         raise HTTPException(400, "Lokasi tidak ditemukan")
+    assert_scope_editable_by_location(db, data.location_id)
 
     created = 0
     skipped = 0
@@ -165,6 +172,7 @@ async def import_facilities_excel(
 ):
     if not db.query(Location).filter(Location.id == location_id).first():
         raise HTTPException(404, "Lokasi tidak ditemukan")
+    assert_scope_editable_by_location(db, location_id)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
         tmp.write(await file.read())
         tmp_path = tmp.name
@@ -226,6 +234,7 @@ def update_facility(
     f = db.query(Facility).filter(Facility.id == facility_id).first()
     if not f:
         raise HTTPException(404, "Fasilitas tidak ditemukan")
+    assert_scope_editable_by_location(db, f.location_id)
     for k, v in data.model_dump(exclude_unset=True).items():
         setattr(f, k, v)
     db.commit()
@@ -242,6 +251,7 @@ def delete_facility(
     f = db.query(Facility).filter(Facility.id == facility_id).first()
     if not f:
         raise HTTPException(404, "Fasilitas tidak ditemukan")
+    assert_scope_editable_by_location(db, f.location_id)
     db.delete(f)
     db.commit()
     log_audit(db, current_user, "delete", "facility", facility_id, request=request, commit=True)

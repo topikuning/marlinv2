@@ -18,35 +18,28 @@ from app.api.deps import (
     get_current_user, require_permission, user_can_access_contract,
     get_user_role_code,
 )
+from app.api._guards import assert_scope_editable_by_contract
 from app.services.audit_service import log_audit
 from sqlalchemy import func
+from sqlalchemy.orm.attributes import flag_modified
 from pydantic import BaseModel, Field
+import datetime as _dt
 
 router = APIRouter(prefix="/contracts", tags=["contracts"])
 
 
 def contract_is_unlocked(c: Contract) -> bool:
-    """
-    True bila kontrak sedang dalam mode unlock (safety valve).
-    Dipakai guard BOQ/fasilitas/field kontrak untuk memutuskan apakah
-    mem-bypass pemeriksaan normal.
-    """
-    return c.unlocked_at is not None
+    """True bila kontrak dalam unlock window yang belum kedaluwarsa."""
+    if c.unlock_until is None:
+        return False
+    return _dt.datetime.utcnow() < c.unlock_until
 
 
 def _sum_active_boq(db: Session, contract: Contract) -> float:
-    """
-    Jumlahkan total_price semua BOQ item di revisi aktif kontrak.
-    Kalau kontrak belum punya revisi aktif (DRAFT awal), kembalikan 0.
-    Nilai dibulatkan ke 2 digit — nilai uang dibandingkan pada skala rupiah.
-    """
     from app.models.models import BOQRevision, BOQItem
     rev = (
         db.query(BOQRevision)
-        .filter(
-            BOQRevision.contract_id == contract.id,
-            BOQRevision.is_active == True,  # noqa: E712
-        )
+        .filter(BOQRevision.contract_id == contract.id, BOQRevision.is_active == True)  # noqa: E712
         .first()
     )
     if not rev:
@@ -57,6 +50,25 @@ def _sum_active_boq(db: Session, contract: Contract) -> float:
         .scalar()
     )
     return float(total or 0)
+
+
+# Role yang tunduk pada STRICT access control (harus ada di
+# assigned_contract_ids). Lihat user_can_access_contract di deps.py.
+_SCOPED_ROLES = {"ppk", "konsultan", "kontraktor"}
+
+
+def _assign_contract_to_user(db: Session, user: User, contract_id: str) -> bool:
+    if not user:
+        return False
+    current = list(user.assigned_contract_ids or [])
+    as_str = {str(c) for c in current}
+    cid = str(contract_id)
+    if cid in as_str:
+        return False
+    current.append(cid)
+    user.assigned_contract_ids = current
+    flag_modified(user, "assigned_contract_ids")
+    return True
 
 
 def _contract_to_detail(c: Contract, db: Session) -> dict:
@@ -157,6 +169,7 @@ def _contract_to_detail(c: Contract, db: Session) -> dict:
         "activated_at": c.activated_at.isoformat() if c.activated_at else None,
         "activated_by_id": str(c.activated_by_id) if c.activated_by_id else None,
         "unlocked_at": c.unlocked_at.isoformat() if c.unlocked_at else None,
+        "unlock_until": c.unlock_until.isoformat() if c.unlock_until else None,
         "unlocked_by_id": str(c.unlocked_by_id) if c.unlocked_by_id else None,
         "unlock_reason": c.unlock_reason,
         "active_revision": active_rev_payload,
@@ -334,10 +347,48 @@ def create_contract(
         db, contract, created_by_id=current_user.id, auto_approve=False,
     )
 
+    # Auto-assign kontrak baru ke (1) user PPK yang dipilih dan (2) pembuat
+    # kontrak bila role-nya STRICT-scoped. Tanpa ini, PPK login yang
+    # membuat kontrak langsung terkunci dari kontraknya sendiri — paradoks
+    # yang membingungkan user. Admin pusat / superadmin tidak perlu
+    # di-assign karena mereka sudah bypass access control.
+    assigned_notes = []
+
+    # 1. PPK → user_id
+    ppk_row = db.query(PPK).filter(PPK.id == data.ppk_id).first()
+    if ppk_row and ppk_row.user_id:
+        ppk_user = db.query(User).filter(User.id == ppk_row.user_id).first()
+        if _assign_contract_to_user(db, ppk_user, contract.id):
+            assigned_notes.append(f"ppk:{ppk_user.id}")
+
+    # 2. Kontraktor (company_id) → default_user_id
+    contractor = db.query(Company).filter(Company.id == data.company_id).first()
+    if contractor and contractor.default_user_id:
+        contractor_user = db.query(User).filter(User.id == contractor.default_user_id).first()
+        if _assign_contract_to_user(db, contractor_user, contract.id):
+            assigned_notes.append(f"kontraktor:{contractor_user.id}")
+
+    # 3. Konsultan (konsultan_id) → default_user_id
+    if data.konsultan_id:
+        konsultan = db.query(Company).filter(Company.id == data.konsultan_id).first()
+        if konsultan and konsultan.default_user_id:
+            konsultan_user = db.query(User).filter(User.id == konsultan.default_user_id).first()
+            if _assign_contract_to_user(db, konsultan_user, contract.id):
+                assigned_notes.append(f"konsultan:{konsultan_user.id}")
+
+    # 4. Pembuat kontrak sendiri (bila role scoped: ppk/konsultan/kontraktor)
+    creator_role = get_user_role_code(db, current_user)
+    if creator_role in _SCOPED_ROLES:
+        if _assign_contract_to_user(db, current_user, contract.id):
+            assigned_notes.append(f"creator:{current_user.id}")
+
     db.commit()
     db.refresh(contract)
     log_audit(db, current_user, "create", "contract", str(contract.id),
-              changes={"contract_number": contract.contract_number}, request=request, commit=True)
+              changes={
+                  "contract_number": contract.contract_number,
+                  "auto_assigned": assigned_notes,
+              }, request=request, commit=True)
     return {"id": str(contract.id), "success": True}
 
 
@@ -589,6 +640,12 @@ def delete_addendum(
     ).first()
     if not a:
         raise HTTPException(404, "Addendum tidak ditemukan")
+    # Hapus addendum hanya boleh saat kontrak masih dalam window scope-editable
+    # (DRAFT atau ADDENDUM yang belum di-approve revisinya). Setelah kontrak
+    # kembali ACTIVE / ON_HOLD / COMPLETED / TERMINATED, addendum sudah jadi
+    # bagian dari history dan revisi BOQ-nya sudah tetap — rollback otomatis
+    # tidak aman.
+    assert_scope_editable_by_contract(db, contract_id, entity="addendum")
     # revert contract — best effort
     c = db.query(Contract).filter(Contract.id == contract_id).first()
     if c and a.old_contract_value:
@@ -673,11 +730,13 @@ class UnlockRequest(BaseModel):
         ...,
         min_length=10,
         max_length=2000,
-        description=(
-            "Alasan membuka edit-mode. Minimum 10 karakter. "
-            "Contoh: 'Koreksi harga satuan pagar yang salah input' atau "
-            "'Perbaikan tanggal mulai akibat salah ketik saat input awal'."
-        ),
+        description="Alasan membuka edit-mode. Minimum 10 karakter.",
+    )
+    duration_minutes: int = Field(
+        default=30,
+        ge=1,
+        le=1440,
+        description="Durasi window unlock dalam menit (default 30, maks 1440 = 24 jam).",
     )
 
 
@@ -712,17 +771,25 @@ def unlock_contract(
             "Kontrak masih DRAFT — seluruh field sudah editable, tidak perlu unlock.",
         )
 
-    c.unlocked_at = datetime.utcnow()
+    now = _dt.datetime.utcnow()
+    c.unlocked_at = now
+    c.unlock_until = now + _dt.timedelta(minutes=payload.duration_minutes)
     c.unlocked_by_id = current_user.id
     c.unlock_reason = payload.reason.strip()
     db.commit()
     log_audit(
         db, current_user, "unlock", "contract", str(c.id),
-        changes={"reason": c.unlock_reason}, request=request, commit=True,
+        changes={
+            "reason": c.unlock_reason,
+            "duration_minutes": payload.duration_minutes,
+            "unlock_until": c.unlock_until.isoformat(),
+        },
+        request=request, commit=True,
     )
     return {
         "success": True,
         "unlocked_at": c.unlocked_at.isoformat(),
+        "unlock_until": c.unlock_until.isoformat(),
         "unlocked_by_id": str(c.unlocked_by_id),
         "unlock_reason": c.unlock_reason,
     }
@@ -799,6 +866,7 @@ def lock_contract(
         )
 
     c.unlocked_at = None
+    c.unlock_until = None
     c.unlocked_by_id = None
     c.unlock_reason = None
     db.commit()

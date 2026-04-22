@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
-import { Plus, Edit2, Trash2, Building2, UserCog, Tags, Copy, UserCheck } from "lucide-react";
-import { masterAPI } from "@/api";
+import {
+  Plus, Edit2, Trash2, Building2, UserCog, Tags, Copy, UserCheck,
+  Upload, Download, FileSpreadsheet, AlertTriangle, CheckCircle2,
+} from "lucide-react";
+import { masterAPI, downloadBlob } from "@/api";
 import {
   PageHeader, PageLoader, Modal, Empty, Spinner,
   ConfirmDialog, SearchInput,
@@ -109,7 +112,11 @@ function useCrudPage({ listFn, createFn, updateFn, deleteFn, idField = "id", onP
     setLoading(true);
     try {
       const { data } = await listFn({ page_size: 500, q: search });
-      setItems(data.items || []);
+      // Endpoint master tidak seragam: Companies/PPK membungkus
+      // ({items, total, ...}); Work Codes/Facilities mengembalikan list
+      // datar. Terima dua-duanya supaya bug "data tidak muncul" tidak
+      // terulang saat endpoint baru ditambah dengan bentuk berbeda.
+      setItems(Array.isArray(data) ? data : data?.items || []);
     } catch (e) {
       toast.error(parseApiError(e));
     } finally {
@@ -576,6 +583,7 @@ function PPKModal({ initial, onClose, onSave }) {
 //  WORK CODES
 // ════════════════════════════════════════════════════════════════════════════
 export function WorkCodesPage() {
+  const [showImport, setShowImport] = useState(false);
   const c = useCrudPage({
     listFn: masterAPI.workCodes,
     createFn: masterAPI.createWorkCode,
@@ -583,6 +591,15 @@ export function WorkCodesPage() {
     deleteFn: (code) => masterAPI.deleteWorkCode(code),
     idField: "code",
   });
+
+  const downloadTemplate = async () => {
+    try {
+      const { data } = await masterAPI.workCodeTemplate();
+      downloadBlob(data, "template_master_kode_pekerjaan.xlsx");
+    } catch (e) {
+      toast.error(parseApiError(e));
+    }
+  };
 
   return (
     <div className="p-6 max-w-screen-xl mx-auto">
@@ -592,6 +609,20 @@ export function WorkCodesPage() {
         actions={
           <>
             <SearchInput value={c.search} onChange={c.setSearch} />
+            <button
+              className="btn-secondary"
+              onClick={downloadTemplate}
+              title="Unduh template xlsx untuk input massal"
+            >
+              <Download size={14} /> Template
+            </button>
+            <button
+              className="btn-secondary"
+              onClick={() => setShowImport(true)}
+              title="Upload xlsx hasil template untuk input massal"
+            >
+              <Upload size={14} /> Import
+            </button>
             <button className="btn-primary" onClick={() => c.setEditing({})}>
               <Plus size={14} /> Kode Baru
             </button>
@@ -663,6 +694,176 @@ export function WorkCodesPage() {
         onCancel={() => c.setConfirmDel(null)}
         onConfirm={c.del}
       />
+      <ImportWorkCodesModal
+        open={showImport}
+        onClose={() => setShowImport(false)}
+        onImported={() => {
+          setShowImport(false);
+          c.refresh();
+        }}
+      />
+    </div>
+  );
+}
+
+function ImportWorkCodesModal({ open, onClose, onImported }) {
+  const [file, setFile] = useState(null);
+  const [result, setResult] = useState(null);
+  const [uploading, setUploading] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setFile(null);
+      setResult(null);
+    }
+  }, [open]);
+
+  const submit = async () => {
+    if (!file) return;
+    setUploading(true);
+    setResult(null);
+    try {
+      const { data } = await masterAPI.importWorkCodes(file);
+      setResult(data);
+      if (data.success && data.items_imported > 0) {
+        toast.success(`${data.items_imported} kode diimpor`);
+      } else if (data.success && data.items_imported === 0) {
+        toast(`Tidak ada baris baru yang diimpor.`, { icon: "ℹ️" });
+      } else {
+        toast.error("Import gagal — lihat detail di modal.");
+      }
+    } catch (e) {
+      toast.error(parseApiError(e));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const canClose = !uploading;
+  const hasImported = result?.items_imported > 0;
+
+  return (
+    <Modal
+      open={open}
+      onClose={canClose ? onClose : undefined}
+      title="Import Massal — Master Kode Pekerjaan"
+      size="md"
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose} disabled={!canClose}>
+            Tutup
+          </button>
+          {!result ? (
+            <button
+              className="btn-primary"
+              onClick={submit}
+              disabled={!file || uploading}
+            >
+              {uploading ? <Spinner size={12} /> : <Upload size={14} />}
+              Upload & Import
+            </button>
+          ) : (
+            hasImported && (
+              <button
+                className="btn-primary"
+                onClick={onImported}
+              >
+                <CheckCircle2 size={14} /> Selesai & Muat Ulang
+              </button>
+            )
+          )}
+        </>
+      }
+    >
+      {!result ? (
+        <div className="space-y-4">
+          <div className="rounded-lg border border-dashed border-ink-200 p-4 text-xs text-ink-600 bg-ink-50/50">
+            <p className="font-medium text-ink-800 mb-1">Langkah:</p>
+            <ol className="list-decimal list-inside space-y-0.5">
+              <li>Unduh template dari tombol <em>Template</em> di halaman ini.</li>
+              <li>Isi kolom <strong>code, category, description</strong> (wajib). Sub-kategori, unit, keyword, notes opsional.</li>
+              <li>Simpan sebagai xlsx, lalu upload di bawah.</li>
+              <li>Kode yang sudah ada di sistem akan di-skip (bukan diperbarui) — aman untuk dijalankan berulang.</li>
+            </ol>
+          </div>
+          <label
+            className="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-ink-200 rounded-xl py-6 cursor-pointer hover:border-brand-300 hover:bg-brand-50/40 transition"
+          >
+            <FileSpreadsheet size={24} className="text-ink-400" />
+            <div className="text-xs text-ink-500 text-center">
+              {file ? (
+                <>
+                  <p className="font-medium text-ink-800">{file.name}</p>
+                  <p>{(file.size / 1024).toFixed(1)} KB — klik untuk ganti</p>
+                </>
+              ) : (
+                <>
+                  <p className="font-medium text-ink-700">Klik untuk pilih file</p>
+                  <p>.xlsx hasil template</p>
+                </>
+              )}
+            </div>
+            <input
+              type="file"
+              accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              className="hidden"
+              onChange={(e) => setFile(e.target.files?.[0] || null)}
+            />
+          </label>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <StatCard
+              label="Berhasil Diimpor"
+              value={result.items_imported}
+              tone="emerald"
+            />
+            <StatCard
+              label="Dilewati"
+              value={result.items_skipped}
+              tone="amber"
+            />
+          </div>
+          {result.errors?.length > 0 && (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-3 max-h-56 overflow-y-auto">
+              <div className="flex items-center gap-2 text-red-800 text-xs font-semibold mb-1.5">
+                <AlertTriangle size={12} />
+                {result.errors.length} masalah ditemukan
+              </div>
+              <ul className="text-[11px] text-red-900 space-y-0.5 list-disc list-inside">
+                {result.errors.slice(0, 50).map((e, i) => (
+                  <li key={i}>{e}</li>
+                ))}
+                {result.errors.length > 50 && (
+                  <li className="italic">…dan {result.errors.length - 50} lagi.</li>
+                )}
+              </ul>
+            </div>
+          )}
+          {result.errors?.length === 0 && hasImported && (
+            <div className="flex items-start gap-2 rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-xs text-emerald-900">
+              <CheckCircle2 size={13} className="mt-0.5 flex-shrink-0" />
+              <span>
+                Semua baris yang valid berhasil diimpor. Klik <em>Selesai</em> untuk
+                menutup dan memuat ulang daftar.
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function StatCard({ label, value, tone }) {
+  const palette = tone === "emerald"
+    ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+    : "bg-amber-50 border-amber-200 text-amber-700";
+  return (
+    <div className={`rounded-lg border p-3 ${palette}`}>
+      <p className="text-[10px] uppercase tracking-wider font-medium opacity-80">{label}</p>
+      <p className="text-2xl font-semibold mt-0.5">{value ?? 0}</p>
     </div>
   );
 }

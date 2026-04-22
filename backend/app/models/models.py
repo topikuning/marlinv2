@@ -398,6 +398,7 @@ class Contract(Base):
     # kesalahan input di level sistem. Audit log tetap mencatat
     # perubahan seperti biasa.
     unlocked_at = Column(DateTime, nullable=True)
+    unlock_until = Column(DateTime, nullable=True)
     unlocked_by_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     unlock_reason = Column(Text, nullable=True)
 
