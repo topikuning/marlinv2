@@ -217,7 +217,13 @@ def update_report(
     ).first()
     if not r:
         raise HTTPException(404, "Laporan tidak ditemukan")
-    if r.is_locked:
+    # Blokir edit saat laporan terkunci, KECUALI permintaan ini memang
+    # untuk membuka kunci (is_locked=False). Tanpa pengecualian ini,
+    # tombol "Buka Kunci" jadi mustahil ditekan — laporan akan selalu
+    # tertolak dengan "Laporan sudah dikunci".
+    incoming = data.model_dump(exclude_unset=True)
+    unlocking = incoming.get("is_locked") is False
+    if r.is_locked and not unlocking:
         raise HTTPException(400, "Laporan sudah dikunci")
 
     for field in (
