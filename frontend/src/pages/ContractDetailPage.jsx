@@ -97,6 +97,21 @@ export default function ContractDetailPage() {
     ...(boqFacility ? [{ id: "boq", label: `BOQ: ${boqFacility.facility_name}` }] : []),
   ];
 
+  // SCOPE kontrak (Lokasi, Fasilitas, dan rollback Addendum) hanya boleh
+  // diubah saat kontrak masih dalam fase build (DRAFT) atau sedang dibuka
+  // via Addendum. Di status lainnya (ACTIVE / ON_HOLD / COMPLETED /
+  // TERMINATED) ketiganya dikunci — perubahan harus lewat Addendum baru.
+  // Backend memvalidasi ini di app.api._guards.
+  const scopeEditable =
+    contract.status === "draft" || contract.status === "addendum";
+  const facilitiesEditable = scopeEditable;
+  const locationsEditable = scopeEditable;
+  const scopeLockReason = scopeEditable
+    ? null
+    : `Lokasi & Fasilitas dikunci karena kontrak berstatus ${contract.status}. Buat Addendum untuk mengubah.`;
+  const facilityLockReason = scopeLockReason;
+  const locationLockReason = scopeLockReason;
+
   return (
     <div className="p-6 max-w-screen-2xl mx-auto">
       {/* Breadcrumb */}
@@ -190,10 +205,17 @@ export default function ContractDetailPage() {
       {/* Locations & Facilities */}
       {tab === "locations" && (
         <div>
+          {facilityLockReason && (
+            <div className="mb-4 px-3 py-2 rounded-md bg-amber-50 border border-amber-200 text-xs text-amber-800">
+              {facilityLockReason}
+            </div>
+          )}
           <div className="flex justify-end mb-4">
             <button
               className="btn-primary"
               onClick={() => setShowAddLocation(true)}
+              disabled={!locationsEditable}
+              title={locationLockReason || "Tambah lokasi baru"}
             >
               <Plus size={14} /> Tambah Lokasi
             </button>
@@ -226,6 +248,8 @@ export default function ContractDetailPage() {
                       <button
                         className="btn-ghost btn-xs"
                         onClick={() => setShowAddFacility(loc)}
+                        disabled={!facilitiesEditable}
+                        title={facilityLockReason || "Tambah fasilitas"}
                       >
                         <Plus size={11} /> Fasilitas
                       </button>
@@ -238,14 +262,17 @@ export default function ContractDetailPage() {
                       >
                         <Upload size={11} /> BOQ
                       </button>
-                      <button
-                        className="btn-ghost btn-xs text-red-600"
-                        onClick={() =>
-                          setConfirmDel({ type: "loc", loc, name: loc.name })
-                        }
-                      >
-                        <Trash2 size={11} />
-                      </button>
+                      {locationsEditable && (
+                        <button
+                          className="btn-ghost btn-xs text-red-600"
+                          onClick={() =>
+                            setConfirmDel({ type: "loc", loc, name: loc.name })
+                          }
+                          title="Hapus lokasi"
+                        >
+                          <Trash2 size={11} />
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -268,18 +295,21 @@ export default function ContractDetailPage() {
                               {f.facility_code} · {fmtNum(f.total_value)}
                             </p>
                           </button>
-                          <button
-                            onClick={() =>
-                              setConfirmDel({
-                                type: "fac",
-                                fac: f,
-                                name: f.facility_name,
-                              })
-                            }
-                            className="opacity-0 group-hover:opacity-100 text-red-500 p-1"
-                          >
-                            <Trash2 size={11} />
-                          </button>
+                          {facilitiesEditable && (
+                            <button
+                              onClick={() =>
+                                setConfirmDel({
+                                  type: "fac",
+                                  fac: f,
+                                  name: f.facility_name,
+                                })
+                              }
+                              className="opacity-0 group-hover:opacity-100 text-red-500 p-1"
+                              title="Hapus fasilitas"
+                            >
+                              <Trash2 size={11} />
+                            </button>
+                          )}
                         </div>
                       ))}
                     </div>

@@ -17,6 +17,7 @@ from app.schemas.schemas import (
 from app.api.deps import (
     get_current_user, require_permission, user_can_access_contract,
 )
+from app.api._guards import assert_scope_editable_by_contract
 from app.services.audit_service import log_audit
 
 router = APIRouter(prefix="/contracts", tags=["contracts"])
@@ -538,6 +539,12 @@ def delete_addendum(
     ).first()
     if not a:
         raise HTTPException(404, "Addendum tidak ditemukan")
+    # Hapus addendum hanya boleh saat kontrak masih dalam window scope-editable
+    # (DRAFT atau ADDENDUM yang belum di-approve revisinya). Setelah kontrak
+    # kembali ACTIVE / ON_HOLD / COMPLETED / TERMINATED, addendum sudah jadi
+    # bagian dari history dan revisi BOQ-nya sudah tetap — rollback otomatis
+    # tidak aman.
+    assert_scope_editable_by_contract(db, contract_id, entity="addendum")
     # revert contract — best effort
     c = db.query(Contract).filter(Contract.id == contract_id).first()
     if c and a.old_contract_value:
