@@ -1,9 +1,9 @@
 import {
-  forwardRef, useImperativeHandle, useMemo, useRef, useState,
-  useCallback, useEffect,
+  useMemo, useRef, useState, useCallback, useEffect,
 } from "react";
+import { createPortal } from "react-dom";
 import { AgGridReact } from "ag-grid-react";
-import { Plus, Save, Trash2, Tag, Lock } from "lucide-react";
+import { Plus, Save, Trash2, Tag, Lock, Search, X } from "lucide-react";
 import { boqAPI, masterAPI } from "@/api";
 import toast from "react-hot-toast";
 import { parseApiError, fmtNum } from "@/utils/format";
@@ -12,52 +12,41 @@ import BOQItemPickerModal from "@/components/modals/BOQItemPickerModal";
 
 
 /**
- * Popup cell editor untuk kolom Uraian BOQ.
+ * WorkCodePickerPopover — popup pencarian kode pekerjaan untuk kolom
+ * Uraian BOQ, dirender via React Portal ke document.body, DI LUAR
+ * siklus cell editor AG Grid sepenuhnya.
  *
- * Render sebuah popup di atas cell (cellEditorPopup: true) berisi:
- *   - input pencarian yang langsung auto-focus
- *   - daftar master work code yang ter-filter saat user mengetik
- *   - setiap item menampilkan deskripsi (baris utama) + kode & kategori
- *     (baris kecil di bawah) — user selalu melihat uraian sebagai fokus
+ * Iterasi sebelumnya memakai popup cell editor AG Grid dan gagal:
+ * cascade refreshCells/setDataValue meng-unmount editor di tengah
+ * commit → description tetap kosong walau sibling (master_work_code,
+ * unit, original_code) sudah terisi. Battle yang tidak bisa dimenangkan
+ * dari dalam lifecycle cell editor.
  *
- * Saat user memilih item, SEMUA kolom terkait diisi sekaligus lewat
- * node.setDataValue: description, master_work_code, original_code,
- * unit. Itu memicu cellValueChanged untuk setiap field → parent
- * menandai row sebagai _dirty → saat Simpan, edit benar-benar dikirim
- * ke backend (tidak lagi silent-success tanpa data tersimpan).
- *
- * User tetap boleh mengetik uraian kustom: kalau tidak ada item yang
- * dipilih (hanya mengetik + pindah fokus), nilai input dipakai apa
- * adanya → item tersimpan sebagai "custom" tanpa master_work_code.
+ * Dengan Portal, popup sepenuhnya independen. Saat user memilih:
+ *   - Popup ditutup dulu (tidak ada lagi lifecycle editor di-trigger).
+ *   - Via queueMicrotask, rowNode.setDataValue dipanggil untuk SEMUA
+ *     kolom (description + master_work_code + original_code + unit).
+ *     setDataValue di luar edit-mode = langsung masuk ke row data.
+ *   - Parent onCellValueChanged akan fire, _dirty ter-set, save ke
+ *     backend bekerja.
  */
-const WorkCodePopupEditor = forwardRef(function WorkCodePopupEditor(props, ref) {
-  const {
-    value, api, node,
-    workCodes = [], unitOptions: _unused,
-    stopEditing,
-  } = props;
-
-  const [query, setQuery] = useState(value || "");
+function WorkCodePickerPopover({
+  open, anchorRect, rowNode, workCodes, initialValue, onClose,
+}) {
+  const [query, setQuery] = useState(initialValue || "");
   const [activeIdx, setActiveIdx] = useState(0);
   const inputRef = useRef(null);
   const listRef = useRef(null);
-  // Tandai kalau user sudah eksplisit memilih item dari daftar, supaya
-  // getValue() mengembalikan deskripsi hasil pilih daripada apa yang
-  // sedang ada di input ketik (keduanya memang biasanya sama persis,
-  // tapi kita ingin semantik "pilih" jelas beda dari "ketik manual").
-  const pickedValueRef = useRef(null);
-  const currentValueRef = useRef(value || "");
 
   useEffect(() => {
-    // Fokuskan input supaya user bisa langsung mengetik atau navigasi.
+    if (!open) return;
+    setQuery(initialValue || "");
+    setActiveIdx(0);
     setTimeout(() => {
       const el = inputRef.current;
-      if (el) {
-        el.focus();
-        el.select();
-      }
-    }, 0);
-  }, []);
+      if (el) { el.focus(); el.select(); }
+    }, 10);
+  }, [open, initialValue]);
 
   const filtered = useMemo(() => {
     const q = (query || "").trim().toLowerCase();
@@ -73,48 +62,52 @@ const WorkCodePopupEditor = forwardRef(function WorkCodePopupEditor(props, ref) 
   }, [workCodes, query]);
 
   useEffect(() => {
-    if (activeIdx >= filtered.length) setActiveIdx(Math.max(0, filtered.length - 1));
+    if (activeIdx >= filtered.length) {
+      setActiveIdx(Math.max(0, filtered.length - 1));
+    }
   }, [filtered.length, activeIdx]);
 
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const active = list.querySelector(`[data-idx="${activeIdx}"]`);
+    if (active) active.scrollIntoView({ block: "nearest" });
+  }, [activeIdx]);
+
+  // Tutup pada klik di luar popup. Capture-phase supaya kita dapat
+  // event sebelum handler lain menelannya.
+  useEffect(() => {
+    if (!open) return;
+    const onDocDown = (ev) => {
+      const pop = document.getElementById("boq-workcode-popover");
+      if (pop && !pop.contains(ev.target)) onClose?.();
+    };
+    document.addEventListener("mousedown", onDocDown, true);
+    return () => document.removeEventListener("mousedown", onDocDown, true);
+  }, [open, onClose]);
+
   const commitPick = (w) => {
-    // Isi SEMUA kolom terkait — termasuk description, walau itu kolom
-    // yang sedang diedit — via setDataValue. Iterasi sebelumnya hanya
-    // men-set sibling (master_work_code/unit/original_code) dan
-    // menyerahkan description ke flow getValue(). Ternyata editor
-    // kadang sudah di-unmount oleh cascade refreshCells sebelum AG Grid
-    // sempat memanggil getValue() → description tetap kosong walau
-    // sibling sudah terisi. setDataValue langsung ke row data jauh
-    // lebih reliable.
-    currentValueRef.current = w.description;
-    pickedValueRef.current = w.description;
-    node.setDataValue("description", w.description);
-    node.setDataValue("master_work_code", w.code);
-    node.setDataValue("original_code", w.code);
-    if (w.default_unit) {
-      node.setDataValue("unit", w.default_unit);
-    }
-    try { stopEditing(); } catch {}
+    // Tutup popup DULU, commit nanti via microtask — ini penting agar
+    // React selesai unmount popup sebelum setDataValue men-trigger
+    // kaskade refresh AG Grid.
+    onClose?.();
+    queueMicrotask(() => {
+      rowNode.setDataValue("description", w.description);
+      rowNode.setDataValue("master_work_code", w.code);
+      rowNode.setDataValue("original_code", w.code);
+      if (w.default_unit) rowNode.setDataValue("unit", w.default_unit);
+    });
   };
 
   const commitFreeText = () => {
-    // Enter pada teks yang tidak cocok master — simpan sebagai custom.
-    // Sama seperti commitPick: tulis description lewat setDataValue
-    // supaya tidak bergantung pada getValue yang mungkin tidak
-    // ter-trigger kalau editor keburu unmount.
-    currentValueRef.current = query;
-    node.setDataValue("description", query);
-    node.setDataValue("master_work_code", null);
-    try { stopEditing(); } catch {}
+    const q = query.trim();
+    if (!q) { onClose?.(); return; }
+    onClose?.();
+    queueMicrotask(() => {
+      rowNode.setDataValue("description", q);
+      rowNode.setDataValue("master_work_code", null);
+    });
   };
-
-  useImperativeHandle(ref, () => ({
-    getValue: () => currentValueRef.current,
-    // Popup editor: isPopup bisa ditentukan lewat cellEditorPopup di
-    // colDef; method ini sebagai safety net untuk versi AG Grid yang
-    // mengecek di sini.
-    isPopup: () => true,
-    getPopupPosition: () => "under",
-  }));
 
   const onKeyDown = (e) => {
     if (e.key === "ArrowDown") {
@@ -130,63 +123,70 @@ const WorkCodePopupEditor = forwardRef(function WorkCodePopupEditor(props, ref) 
       else commitFreeText();
     } else if (e.key === "Escape") {
       e.preventDefault();
-      currentValueRef.current = value || "";
-      api.stopEditing(true); // cancel
-    } else if (e.key === "Tab") {
-      // Tab berarti user ingin pindah kolom; jangan intercept — biarkan
-      // grid memanggil stopEditing. Commit free-text apapun yang ada.
-      currentValueRef.current = query;
+      onClose?.();
     }
   };
 
-  useEffect(() => {
-    // Scroll item aktif ke dalam viewport saat navigasi keyboard.
-    const list = listRef.current;
-    if (!list) return;
-    const active = list.querySelector(`[data-idx="${activeIdx}"]`);
-    if (active) active.scrollIntoView({ block: "nearest" });
-  }, [activeIdx]);
+  if (!open || !anchorRect) return null;
 
-  return (
+  const popWidth = 520;
+  const popHeight = 380;
+  let top = anchorRect.bottom + 4;
+  let left = anchorRect.left;
+  if (top + popHeight > window.innerHeight) {
+    top = Math.max(8, anchorRect.top - popHeight - 4);
+  }
+  if (left + popWidth > window.innerWidth) {
+    left = Math.max(8, window.innerWidth - popWidth - 8);
+  }
+
+  return createPortal(
     <div
+      id="boq-workcode-popover"
       style={{
-        minWidth: 480, maxWidth: 640, width: "max-content",
-        background: "#fff", borderRadius: 8,
-        boxShadow: "0 10px 30px rgba(15,23,42,.18)",
+        position: "fixed",
+        top, left, width: popWidth, maxHeight: popHeight,
+        zIndex: 10000,
+        background: "#fff", borderRadius: 10,
+        boxShadow: "0 20px 40px rgba(15,23,42,.22)",
         border: "1px solid #e2e8f0",
-        overflow: "hidden",
+        display: "flex", flexDirection: "column", overflow: "hidden",
       }}
-      onMouseDown={(e) => e.stopPropagation()}
     >
-      <div style={{ padding: 8, borderBottom: "1px solid #eef2f6" }}>
+      <div style={{
+        padding: 8, borderBottom: "1px solid #eef2f6",
+        display: "flex", gap: 6, alignItems: "center",
+      }}>
+        <Search size={14} style={{ color: "#64748b", marginLeft: 6 }} />
         <input
           ref={inputRef}
           value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            currentValueRef.current = e.target.value;
-            setActiveIdx(0);
-          }}
+          onChange={(e) => { setQuery(e.target.value); setActiveIdx(0); }}
           onKeyDown={onKeyDown}
-          placeholder="Ketik untuk mencari kode/uraian…"
+          placeholder="Cari uraian atau kode…"
           style={{
-            width: "100%", padding: "8px 10px",
+            flex: 1, padding: "7px 8px",
             border: "1px solid #cbd5e1", borderRadius: 6,
             outline: "none", fontSize: 13,
           }}
         />
+        <button
+          onClick={onClose}
+          title="Tutup (Esc)"
+          style={{
+            background: "transparent", border: "none", cursor: "pointer",
+            padding: 4, color: "#64748b", display: "flex",
+          }}
+        >
+          <X size={14} />
+        </button>
       </div>
-      <div
-        ref={listRef}
-        style={{
-          maxHeight: 300, overflowY: "auto",
-          fontSize: 12,
-        }}
-      >
+      <div ref={listRef} style={{ flex: 1, overflowY: "auto", fontSize: 12 }}>
         {filtered.length === 0 ? (
-          <div style={{ padding: 14, color: "#64748b", textAlign: "center" }}>
-            Tidak ada kode yang cocok — <em>Enter</em> untuk menyimpan
-            uraian sebagai <strong>custom</strong>.
+          <div style={{ padding: 16, color: "#64748b", textAlign: "center" }}>
+            Tidak ada yang cocok.<br />
+            Tekan <kbd style={kbdStyle}>Enter</kbd> untuk menyimpan{" "}
+            <em>"{query.trim()}"</em> sebagai uraian custom.
           </div>
         ) : (
           filtered.map((w, idx) => (
@@ -195,8 +195,6 @@ const WorkCodePopupEditor = forwardRef(function WorkCodePopupEditor(props, ref) 
               data-idx={idx}
               onMouseEnter={() => setActiveIdx(idx)}
               onMouseDown={(e) => {
-                // onMouseDown supaya click ter-commit sebelum blur event
-                // mem-trigger stopEditing dengan value yang masih kosong.
                 e.preventDefault();
                 commitPick(w);
               }}
@@ -234,9 +232,16 @@ const WorkCodePopupEditor = forwardRef(function WorkCodePopupEditor(props, ref) 
         <span>↑/↓ navigasi · Enter pilih · Esc batal</span>
         <span>{filtered.length} dari {workCodes.length}</span>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
-});
+}
+
+const kbdStyle = {
+  background: "#f1f5f9", border: "1px solid #cbd5e1",
+  borderRadius: 3, padding: "0 5px", fontSize: 10,
+  fontFamily: "monospace",
+};
 
 /**
  * BOQ editor grid.
@@ -250,16 +255,17 @@ const WorkCodePopupEditor = forwardRef(function WorkCodePopupEditor(props, ref) 
  *   - default              → editable penuh (revisi DRAFT)
  *
  * Input item ada dua jalur:
- *   1. Inline edit di grid (uraian / satuan / volume / harga) — cepat
+ *   1. Inline edit di grid (satuan / volume / harga) — cepat
  *   2. Tombol "+ Tambah Item" → modal picker (master atau manual)
  *
- * Kolom Uraian & Satuan dropdown:
- *   - Uraian: WorkCodePopupEditor (popup cell editor). User bisa
- *     search, navigasi dengan keyboard, pilih → deskripsi + kode
- *     master + kode item + satuan otomatis terisi via setDataValue.
- *     Tetap bisa ketik manual (custom item) kalau kode tidak ada.
- *   - Satuan: agSelectCellEditor dengan nilai yang diambil dari
- *     default_unit master + set standar sebagai fallback.
+ * Kolom Uraian NON-editable dari sudut pandang AG Grid. Saat diklik,
+ * WorkCodePickerPopover (rendered via React Portal) muncul di bawah
+ * cell — search, navigasi keyboard, Enter untuk pilih/commit custom.
+ * setDataValue untuk description + master + unit + original_code
+ * dilakukan SETELAH popup ditutup (via queueMicrotask), di luar
+ * siklus cell editor AG Grid — pasti apply ke row data.
+ *
+ * Kolom Satuan pakai agSelectCellEditor biasa (list of units).
  */
 export default function BOQGrid({
   facilityId,
@@ -274,6 +280,8 @@ export default function BOQGrid({
   const [selectedCount, setSelectedCount] = useState(0);
   const [showPicker, setShowPicker] = useState(false);
   const [workCodes, setWorkCodes] = useState([]);
+  // Popover pencarian kode di kolom Uraian.
+  const [codePicker, setCodePicker] = useState(null); // { node, rect, initial }
 
   const canEdit = !readonly && !revisionLocked;
 
@@ -372,15 +380,21 @@ export default function BOQGrid({
       field: "description",
       flex: 2,
       minWidth: 240,
-      editable: canEdit,
-      cellEditor: WorkCodePopupEditor,
-      cellEditorPopup: true,
-      cellEditorPopupPosition: "under",
-      cellEditorParams: { workCodes, unitOptions },
-      cellStyle: (p) => ({
-        fontWeight: (p.data?.level ?? 0) <= 1 ? 600 : 400,
-        paddingLeft: `${8 + (p.data?.level ?? 0) * 10}px`,
-      }),
+      // Non-editable dari sudut AG Grid — klik cell membuka
+      // WorkCodePickerPopover via state, bukan cell editor.
+      editable: false,
+      cellStyle: (p) => {
+        const empty = canEdit && !p.data?.description;
+        return {
+          fontWeight: (p.data?.level ?? 0) <= 1 ? 600 : 400,
+          paddingLeft: `${8 + (p.data?.level ?? 0) * 10}px`,
+          cursor: canEdit ? "pointer" : "default",
+          color: empty ? "#94a3b8" : undefined,
+          fontStyle: empty ? "italic" : undefined,
+        };
+      },
+      // Placeholder visible bila description masih kosong.
+      valueFormatter: (p) => p.value || (canEdit ? "Klik untuk pilih…" : ""),
     },
     {
       headerName: "Satuan",
@@ -537,9 +551,9 @@ export default function BOQGrid({
   //   meskipun toast "tersimpan" muncul.
   // - Volume / harga berubah → re-compute total_price di cache.
   // - Description/master_work_code/unit/original_code yang diisi lewat
-  //   WorkCodePopupEditor sudah di-set via node.setDataValue sehingga
-  //   handler ini di-trigger per-field; tidak perlu logika matching
-  //   tambahan di sini.
+  //   WorkCodePickerPopover di-set via node.setDataValue (empat panggilan
+  //   berurutan), jadi handler ini di-trigger empat kali per pick —
+  //   setiap kali cukup memastikan _dirty ter-flag.
   const onCellValueChanged = (e) => {
     const row = e.data;
     const field = e.colDef.field;
@@ -642,6 +656,20 @@ export default function BOQGrid({
           stopEditingWhenCellsLoseFocus={true}
           singleClickEdit={true}
           onCellValueChanged={onCellValueChanged}
+          onCellClicked={(ev) => {
+            if (!canEdit) return;
+            if (ev.colDef.field !== "description") return;
+            // Ambil bounding rect cell sebagai anchor untuk popup.
+            const el = ev.event?.target?.closest?.(".ag-cell")
+              || ev.event?.currentTarget;
+            const rect = el?.getBoundingClientRect?.();
+            if (!rect) return;
+            setCodePicker({
+              node: ev.node,
+              rect,
+              initial: ev.data?.description || "",
+            });
+          }}
           onSelectionChanged={() => {
             setSelectedCount(gridRef.current?.api.getSelectedNodes().length || 0);
           }}
@@ -649,6 +677,15 @@ export default function BOQGrid({
           defaultColDef={{ resizable: true, sortable: false }}
         />
       </div>
+
+      <WorkCodePickerPopover
+        open={!!codePicker}
+        anchorRect={codePicker?.rect}
+        rowNode={codePicker?.node}
+        initialValue={codePicker?.initial}
+        workCodes={workCodes}
+        onClose={() => setCodePicker(null)}
+      />
 
       {canEdit && workCodes.length > 0 && (
         <div className="text-[11px] text-ink-400 px-1">
