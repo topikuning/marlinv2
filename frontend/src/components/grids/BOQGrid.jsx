@@ -12,19 +12,22 @@ import BOQItemPickerModal from "@/components/modals/BOQItemPickerModal";
 
 
 /**
- * Cell editor uraian — input HTML native yang terikat ke <datalist>.
- * Dropdown muncul saat fokus (panah) dan ter-filter saat user mengetik.
- * Jauh lebih ringan daripada bikin popup sendiri dan bekerja di semua
- * browser modern. Bila user pilih uraian yang cocok persis dengan master,
+ * Cell editor uraian — <input list="..."> native HTML yang terhubung ke
+ * <datalist>. Diperlakukan sebagai uncontrolled input: value dibaca
+ * langsung dari DOM saat AG Grid memanggil getValue(), bukan dari
+ * state React. Ini menghindari race timing — saat user memilih dari
+ * dropdown native, browser menulis ke input sebelum React sempat
+ * menjadwalkan re-render, jadi state-based getValue sering kembali
+ * kosong (bug "value hilang saat pindah kolom").
+ *
+ * Kalau value yang ditulis cocok persis dengan sebuah master work code,
  * onCellValueChanged di parent akan auto-isi master_work_code + satuan.
  */
 const DatalistCellEditor = forwardRef(function DatalistCellEditor(props, ref) {
   const { value, listId } = props;
-  const [current, setCurrent] = useState(value || "");
   const inputRef = useRef(null);
 
   useEffect(() => {
-    // Auto-focus + open the native dropdown suggestion UI.
     const el = inputRef.current;
     if (!el) return;
     el.focus();
@@ -32,7 +35,7 @@ const DatalistCellEditor = forwardRef(function DatalistCellEditor(props, ref) {
   }, []);
 
   useImperativeHandle(ref, () => ({
-    getValue: () => current,
+    getValue: () => inputRef.current?.value ?? "",
     isCancelBeforeStart: () => false,
     isCancelAfterEnd: () => false,
   }));
@@ -42,9 +45,11 @@ const DatalistCellEditor = forwardRef(function DatalistCellEditor(props, ref) {
       ref={inputRef}
       list={listId}
       className="ag-input-field-input ag-text-field-input"
-      style={{ width: "100%", height: "100%", border: "none", outline: "none", padding: "0 8px" }}
-      value={current}
-      onChange={(e) => setCurrent(e.target.value)}
+      style={{
+        width: "100%", height: "100%",
+        border: "none", outline: "none", padding: "0 8px",
+      }}
+      defaultValue={value || ""}
     />
   );
 });
@@ -383,13 +388,16 @@ export default function BOQGrid({
 
   return (
     <div className="space-y-3">
-      {/* Datalist shared by semua cell editor Uraian. Berisi seluruh
-          master work code; <input list="..."> native akan memfilter
-          berdasarkan apa yang diketik user. */}
+      {/* Datalist untuk kolom Uraian. Browser merender <option> berbeda-
+          beda: Chrome menampilkan value sebagai baris utama + inner text
+          sebagai label abu-abu, Firefox menampilkan inner text saja,
+          Safari menampilkan value saja. Supaya user di semua browser
+          melihat DESKRIPSI (bukan kode/kategori yang tidak informatif),
+          deskripsi ditulis sebagai value sekaligus inner text. */}
       <datalist id={descListId}>
         {workCodes.map((w) => (
           <option key={w.code} value={w.description}>
-            {w.code} · {w.category}
+            {w.description}
           </option>
         ))}
       </datalist>
