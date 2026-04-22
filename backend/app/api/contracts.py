@@ -16,11 +16,40 @@ from app.schemas.schemas import (
 )
 from app.api.deps import (
     get_current_user, require_permission, user_can_access_contract,
+    get_user_role_code,
 )
 from app.api._guards import assert_scope_editable_by_contract
 from app.services.audit_service import log_audit
+from sqlalchemy.orm.attributes import flag_modified
 
 router = APIRouter(prefix="/contracts", tags=["contracts"])
+
+
+# Role yang tunduk pada STRICT access control (harus ada di
+# assigned_contract_ids). Lihat user_can_access_contract di deps.py.
+_SCOPED_ROLES = {"ppk", "konsultan", "kontraktor"}
+
+
+def _assign_contract_to_user(db: Session, user: User, contract_id: str) -> bool:
+    """
+    Tambahkan contract_id ke User.assigned_contract_ids kalau belum ada.
+    Mengembalikan True bila terjadi perubahan.
+
+    `assigned_contract_ids` disimpan sebagai JSONB; SQLAlchemy tidak
+    mendeteksi mutasi in-place, jadi kita rebind list + flag_modified
+    supaya perubahan kebawa ke UPDATE.
+    """
+    if not user:
+        return False
+    current = list(user.assigned_contract_ids or [])
+    as_str = {str(c) for c in current}
+    cid = str(contract_id)
+    if cid in as_str:
+        return False
+    current.append(cid)
+    user.assigned_contract_ids = current
+    flag_modified(user, "assigned_contract_ids")
+    return True
 
 
 def _contract_to_detail(c: Contract, db: Session) -> dict:
@@ -295,10 +324,48 @@ def create_contract(
         db, contract, created_by_id=current_user.id, auto_approve=False,
     )
 
+    # Auto-assign kontrak baru ke (1) user PPK yang dipilih dan (2) pembuat
+    # kontrak bila role-nya STRICT-scoped. Tanpa ini, PPK login yang
+    # membuat kontrak langsung terkunci dari kontraknya sendiri — paradoks
+    # yang membingungkan user. Admin pusat / superadmin tidak perlu
+    # di-assign karena mereka sudah bypass access control.
+    assigned_notes = []
+
+    # 1. PPK → user_id
+    ppk_row = db.query(PPK).filter(PPK.id == data.ppk_id).first()
+    if ppk_row and ppk_row.user_id:
+        ppk_user = db.query(User).filter(User.id == ppk_row.user_id).first()
+        if _assign_contract_to_user(db, ppk_user, contract.id):
+            assigned_notes.append(f"ppk:{ppk_user.id}")
+
+    # 2. Kontraktor (company_id) → default_user_id
+    contractor = db.query(Company).filter(Company.id == data.company_id).first()
+    if contractor and contractor.default_user_id:
+        contractor_user = db.query(User).filter(User.id == contractor.default_user_id).first()
+        if _assign_contract_to_user(db, contractor_user, contract.id):
+            assigned_notes.append(f"kontraktor:{contractor_user.id}")
+
+    # 3. Konsultan (konsultan_id) → default_user_id
+    if data.konsultan_id:
+        konsultan = db.query(Company).filter(Company.id == data.konsultan_id).first()
+        if konsultan and konsultan.default_user_id:
+            konsultan_user = db.query(User).filter(User.id == konsultan.default_user_id).first()
+            if _assign_contract_to_user(db, konsultan_user, contract.id):
+                assigned_notes.append(f"konsultan:{konsultan_user.id}")
+
+    # 4. Pembuat kontrak sendiri (bila role scoped: ppk/konsultan/kontraktor)
+    creator_role = get_user_role_code(db, current_user)
+    if creator_role in _SCOPED_ROLES:
+        if _assign_contract_to_user(db, current_user, contract.id):
+            assigned_notes.append(f"creator:{current_user.id}")
+
     db.commit()
     db.refresh(contract)
     log_audit(db, current_user, "create", "contract", str(contract.id),
-              changes={"contract_number": contract.contract_number}, request=request, commit=True)
+              changes={
+                  "contract_number": contract.contract_number,
+                  "auto_assigned": assigned_notes,
+              }, request=request, commit=True)
     return {"id": str(contract.id), "success": True}
 
 
