@@ -33,6 +33,11 @@ MIGRATION_SQL = [
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS auto_provisioned BOOLEAN NOT NULL DEFAULT FALSE",
     "ALTER TABLE contracts ADD COLUMN IF NOT EXISTS activated_at TIMESTAMP",
     "ALTER TABLE contracts ADD COLUMN IF NOT EXISTS activated_by_id UUID",
+    # Unlock mode (safety-valve edit langsung, di luar alur Addendum)
+    "ALTER TABLE contracts ADD COLUMN IF NOT EXISTS unlocked_at TIMESTAMP",
+    "ALTER TABLE contracts ADD COLUMN IF NOT EXISTS unlock_until TIMESTAMP",
+    "ALTER TABLE contracts ADD COLUMN IF NOT EXISTS unlocked_by_id UUID",
+    "ALTER TABLE contracts ADD COLUMN IF NOT EXISTS unlock_reason TEXT",
     "ALTER TABLE companies ADD COLUMN IF NOT EXISTS company_type VARCHAR(30) NOT NULL DEFAULT 'contractor'",
     "ALTER TABLE companies ADD COLUMN IF NOT EXISTS default_user_id UUID",
     "ALTER TABLE ppk ADD COLUMN IF NOT EXISTS user_id UUID",

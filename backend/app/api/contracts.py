@@ -20,9 +20,36 @@ from app.api.deps import (
 )
 from app.api._guards import assert_scope_editable_by_contract
 from app.services.audit_service import log_audit
+from sqlalchemy import func
 from sqlalchemy.orm.attributes import flag_modified
+from pydantic import BaseModel, Field
+import datetime as _dt
 
 router = APIRouter(prefix="/contracts", tags=["contracts"])
+
+
+def contract_is_unlocked(c: Contract) -> bool:
+    """True bila kontrak dalam unlock window yang belum kedaluwarsa."""
+    if c.unlock_until is None:
+        return False
+    return _dt.datetime.utcnow() < c.unlock_until
+
+
+def _sum_active_boq(db: Session, contract: Contract) -> float:
+    from app.models.models import BOQRevision, BOQItem
+    rev = (
+        db.query(BOQRevision)
+        .filter(BOQRevision.contract_id == contract.id, BOQRevision.is_active == True)  # noqa: E712
+        .first()
+    )
+    if not rev:
+        return 0.0
+    total = (
+        db.query(func.coalesce(func.sum(BOQItem.total_price), 0))
+        .filter(BOQItem.boq_revision_id == rev.id)
+        .scalar()
+    )
+    return float(total or 0)
 
 
 # Role yang tunduk pada STRICT access control (harus ada di
@@ -31,14 +58,6 @@ _SCOPED_ROLES = {"ppk", "konsultan", "kontraktor"}
 
 
 def _assign_contract_to_user(db: Session, user: User, contract_id: str) -> bool:
-    """
-    Tambahkan contract_id ke User.assigned_contract_ids kalau belum ada.
-    Mengembalikan True bila terjadi perubahan.
-
-    `assigned_contract_ids` disimpan sebagai JSONB; SQLAlchemy tidak
-    mendeteksi mutasi in-place, jadi kita rebind list + flag_modified
-    supaya perubahan kebawa ke UPDATE.
-    """
     if not user:
         return False
     current = list(user.assigned_contract_ids or [])
@@ -139,6 +158,9 @@ def _contract_to_detail(c: Contract, db: Session) -> dict:
         "fiscal_year": c.fiscal_year,
         "original_value": float(c.original_value),
         "current_value": float(c.current_value),
+        # Live sum BOQ revisi aktif. Bisa beda dari current_value selama
+        # editing — UI menampilkan keduanya supaya selisih kelihatan.
+        "boq_total": _sum_active_boq(db, c),
         "start_date": c.start_date.isoformat() if c.start_date else None,
         "original_end_date": c.original_end_date.isoformat() if c.original_end_date else None,
         "end_date": c.end_date.isoformat() if c.end_date else None,
@@ -149,6 +171,10 @@ def _contract_to_detail(c: Contract, db: Session) -> dict:
         "daily_report_required": c.daily_report_required,
         "activated_at": c.activated_at.isoformat() if c.activated_at else None,
         "activated_by_id": str(c.activated_by_id) if c.activated_by_id else None,
+        "unlocked_at": (c.unlocked_at.isoformat() + "Z") if c.unlocked_at else None,
+        "unlock_until": (c.unlock_until.isoformat() + "Z") if c.unlock_until else None,
+        "unlocked_by_id": str(c.unlocked_by_id) if c.unlocked_by_id else None,
+        "unlock_reason": c.unlock_reason,
         "active_revision": active_rev_payload,
         "created_at": c.created_at.isoformat(),
         "locations": locations,
@@ -418,17 +444,25 @@ def update_contract(
         raise HTTPException(404, "Kontrak tidak ditemukan")
 
     status_value = c.status.value if hasattr(c.status, "value") else str(c.status)
+    unlocked = contract_is_unlocked(c)
 
-    if status_value in ("completed", "terminated"):
+    # COMPLETED / TERMINATED normalnya read-only. Unlock mode menggantikan
+    # batasan itu karena safety-valve didesain untuk koreksi retroaktif
+    # yang kadang muncul setelah kontrak selesai.
+    if status_value in ("completed", "terminated") and not unlocked:
         raise HTTPException(
             400,
             f"Kontrak berstatus '{status_value}' tidak dapat diedit. "
-            f"Gunakan Addendum jika perlu perubahan.",
+            f"Gunakan Addendum jika perlu perubahan, atau buka Unlock Mode.",
         )
 
     incoming = data.model_dump(exclude_unset=True)
     rejected: List[str] = []
-    if status_value != "draft":
+    # Field DRAFT-only dibuka juga saat unlock — ini inti safety-valve:
+    # membiarkan superadmin memperbaiki nilai/tanggal/ppk yang salah input
+    # tanpa memaksa membuat Addendum administratif yang tidak sesuai
+    # konteks (kesalahan input manusia, bukan perubahan scope).
+    if status_value != "draft" and not unlocked:
         for key in list(incoming.keys()):
             if key in _DRAFT_ONLY_FIELDS:
                 rejected.append(key)
@@ -439,10 +473,11 @@ def update_contract(
             {
                 "message": (
                     "Field berikut hanya bisa diubah saat status kontrak masih "
-                    "'draft', atau lewat Addendum setelah kontrak aktif."
+                    "'draft', atau lewat Addendum setelah kontrak aktif, atau "
+                    "dengan Unlock Mode."
                 ),
                 "rejected_fields": rejected,
-                "hint": "Perbaiki nomor/ nilai/ tanggal sebelum Activate, atau buat Addendum.",
+                "hint": "Perbaiki nomor/nilai/tanggal sebelum Activate, buat Addendum, atau buka Unlock Mode.",
             },
         )
 
@@ -475,9 +510,11 @@ def update_contract(
         if "end_date" in incoming:
             c.original_end_date = c.end_date
 
-    # If original_value changed in DRAFT, keep current_value in sync
-    # (no addendum has been applied yet).
-    if "original_value" in incoming:
+    # Di DRAFT, ubah original_value otomatis meng-update current_value (belum
+    # ada addendum). Di mode unlock, superadmin mungkin ingin mengubah
+    # current_value sendiri (misal: mencocokkan dengan total BOQ setelah
+    # koreksi manual), jadi biarkan ia eksplisit lewat field current_value.
+    if "original_value" in incoming and status_value == "draft" and not unlocked:
         c.current_value = c.original_value
 
     db.commit()
@@ -689,6 +726,159 @@ def activate_contract_endpoint(
         "status": c.status.value,
         "activated_at": c.activated_at.isoformat() if c.activated_at else None,
     }
+
+
+class UnlockRequest(BaseModel):
+    reason: str = Field(
+        ...,
+        min_length=10,
+        max_length=2000,
+        description="Alasan membuka edit-mode. Minimum 10 karakter.",
+    )
+    duration_minutes: int = Field(
+        default=30,
+        ge=1,
+        le=1440,
+        description="Durasi window unlock dalam menit (default 30, maks 1440 = 24 jam).",
+    )
+
+
+@router.post("/{contract_id}/unlock", response_model=dict)
+def unlock_contract(
+    contract_id: str, payload: UnlockRequest, request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contract.update")),
+):
+    """
+    Buka kontrak untuk edit bebas di luar alur Addendum. Safety valve untuk
+    koreksi kesalahan input manusia — BUKAN pengganti Addendum resmi.
+
+    Hanya superadmin. Kontrak harus sudah di luar DRAFT (DRAFT sudah editable
+    penuh, tidak perlu unlock). Idempotent: unlock pada kontrak yang sudah
+    terbuka akan memperbarui alasan dan pencatat (kasus wajar: superadmin
+    kedua meneruskan pekerjaan koreksi).
+    """
+    if get_user_role_code(db, current_user) != "superadmin":
+        raise HTTPException(403, "Hanya superadmin yang boleh membuka edit-mode kontrak.")
+
+    c = db.query(Contract).filter(
+        Contract.id == contract_id, Contract.deleted_at.is_(None),
+    ).first()
+    if not c:
+        raise HTTPException(404, "Kontrak tidak ditemukan")
+
+    status_value = c.status.value if hasattr(c.status, "value") else str(c.status)
+    if status_value == "draft":
+        raise HTTPException(
+            400,
+            "Kontrak masih DRAFT — seluruh field sudah editable, tidak perlu unlock.",
+        )
+
+    now = _dt.datetime.utcnow()
+    c.unlocked_at = now
+    c.unlock_until = now + _dt.timedelta(minutes=payload.duration_minutes)
+    c.unlocked_by_id = current_user.id
+    c.unlock_reason = payload.reason.strip()
+    db.commit()
+    log_audit(
+        db, current_user, "unlock", "contract", str(c.id),
+        changes={
+            "reason": c.unlock_reason,
+            "duration_minutes": payload.duration_minutes,
+            "unlock_until": c.unlock_until.isoformat(),
+        },
+        request=request, commit=True,
+    )
+    return {
+        "success": True,
+        "unlocked_at": c.unlocked_at.isoformat() + "Z",
+        "unlock_until": c.unlock_until.isoformat() + "Z",
+        "unlocked_by_id": str(c.unlocked_by_id),
+        "unlock_reason": c.unlock_reason,
+    }
+
+
+@router.get("/{contract_id}/sync-status", response_model=dict)
+def contract_sync_status(
+    contract_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Bandingkan total BOQ revisi aktif vs nilai kontrak. Dipakai frontend
+    untuk menampilkan indikator live saat mode unlock (hijau = sinkron,
+    merah = ada selisih → tombol Kunci-kembali di-disable).
+    """
+    if not user_can_access_contract(db, current_user, contract_id):
+        raise HTTPException(403, "Akses ditolak")
+    c = db.query(Contract).filter(Contract.id == contract_id).first()
+    if not c:
+        raise HTTPException(404, "Kontrak tidak ditemukan")
+    boq_total = _sum_active_boq(db, c)
+    current_value = float(c.current_value or 0)
+    diff = round(boq_total - current_value, 2)
+    return {
+        "contract_value": current_value,
+        "boq_total": boq_total,
+        "diff": diff,
+        "in_sync": abs(diff) < 0.01,
+    }
+
+
+@router.post("/{contract_id}/lock", response_model=dict)
+def lock_contract(
+    contract_id: str, request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contract.update")),
+):
+    """
+    Tutup kembali edit-mode. Memvalidasi total BOQ revisi aktif == nilai
+    kontrak sebelum menutup; kalau beda, 409 + detail selisih supaya UI
+    bisa menampilkan panduan perbaikan.
+    """
+    if get_user_role_code(db, current_user) != "superadmin":
+        raise HTTPException(403, "Hanya superadmin yang boleh menutup edit-mode kontrak.")
+
+    c = db.query(Contract).filter(
+        Contract.id == contract_id, Contract.deleted_at.is_(None),
+    ).first()
+    if not c:
+        raise HTTPException(404, "Kontrak tidak ditemukan")
+
+    if not contract_is_unlocked(c):
+        # Idempoten: sudah terkunci, kembalikan state saat ini.
+        return {"success": True, "already_locked": True}
+
+    boq_total = _sum_active_boq(db, c)
+    current_value = float(c.current_value or 0)
+    diff = round(boq_total - current_value, 2)
+    if abs(diff) >= 0.01:
+        raise HTTPException(
+            409,
+            {
+                "message": (
+                    f"Total BOQ aktif ({boq_total:,.2f}) tidak sama dengan "
+                    f"nilai kontrak ({current_value:,.2f}). Selisih {diff:,.2f}. "
+                    "Sesuaikan salah satu sebelum mengunci."
+                ),
+                "code": "unlock_sync_mismatch",
+                "contract_value": current_value,
+                "boq_total": boq_total,
+                "diff": diff,
+            },
+        )
+
+    c.unlocked_at = None
+    c.unlock_until = None
+    c.unlocked_by_id = None
+    c.unlock_reason = None
+    db.commit()
+    log_audit(
+        db, current_user, "lock", "contract", str(c.id),
+        changes={"boq_total": boq_total, "contract_value": current_value},
+        request=request, commit=True,
+    )
+    return {"success": True, "locked_at": datetime.utcnow().isoformat()}
 
 
 @router.post("/{contract_id}/complete", response_model=dict)

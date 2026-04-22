@@ -19,6 +19,7 @@ import BOQGrid from "@/components/grids/BOQGrid";
 import BOQImportWizard from "@/components/modals/BOQImportWizard";
 import EditContractModal from "@/components/modals/EditContractModal";
 import ContractActivationPanel from "@/components/ContractActivationPanel";
+import UnlockModePanel from "@/components/UnlockModePanel";
 
 export default function ContractDetailPage() {
   const { id } = useParams();
@@ -97,13 +98,17 @@ export default function ContractDetailPage() {
     ...(boqFacility ? [{ id: "boq", label: `BOQ: ${boqFacility.facility_name}` }] : []),
   ];
 
-  // SCOPE kontrak (Lokasi, Fasilitas, dan rollback Addendum) hanya boleh
-  // diubah saat kontrak masih dalam fase build (DRAFT) atau sedang dibuka
-  // via Addendum. Di status lainnya (ACTIVE / ON_HOLD / COMPLETED /
-  // TERMINATED) ketiganya dikunci — perubahan harus lewat Addendum baru.
-  // Backend memvalidasi ini di app.api._guards.
+  // Unlock Mode: window terbuka bila unlock_until ada dan belum lewat.
+  const isUnlocked =
+    contract.unlock_until && new Date() < new Date(contract.unlock_until);
+
+  // SCOPE kontrak (Lokasi, Fasilitas, rollback Addendum) editable saat:
+  // - status DRAFT / ADDENDUM, atau
+  // - superadmin membuka Unlock Mode (window belum expire)
   const scopeEditable =
-    contract.status === "draft" || contract.status === "addendum";
+    contract.status === "draft" ||
+    contract.status === "addendum" ||
+    isUnlocked;
   const facilitiesEditable = scopeEditable;
   const locationsEditable = scopeEditable;
   const scopeLockReason = scopeEditable
@@ -125,6 +130,13 @@ export default function ContractDetailPage() {
         </span>
       </div>
 
+      {/* Unlock-mode banner (hanya saat window masih aktif).
+          Ditaruh di atas header agar user selalu sadar kontrak sedang
+          dalam mode edit bypass. */}
+      {isUnlocked && (
+        <UnlockModePanel contract={contract} onChange={load} />
+      )}
+
       {/* Header Card */}
       <div className="card p-6 mb-6">
         <div className="flex items-start justify-between flex-wrap gap-4">
@@ -139,7 +151,11 @@ export default function ContractDetailPage() {
               {contract.contract_number}
             </p>
           </div>
-          <div className="flex gap-2 flex-wrap">
+          <div className="flex gap-2 flex-wrap items-center">
+            {/* Tombol "Buka Unlock Mode" (superadmin only, saat terkunci) */}
+            {!isUnlocked && (
+              <UnlockModePanel contract={contract} onChange={load} />
+            )}
             <button
               className="btn-secondary"
               onClick={() => setShowEdit(true)}
@@ -169,15 +185,24 @@ export default function ContractDetailPage() {
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6 pt-5 border-t border-ink-100">
           {[
-            ["Nilai Kontrak", fmtCurrency(contract.current_value)],
-            ["Perusahaan", contract.company_name],
-            ["PPK", contract.ppk_name],
-            ["Durasi", `${contract.duration_days} hari`],
-            ["Mulai", fmtDate(contract.start_date)],
-            ["Selesai", fmtDate(contract.end_date)],
-            ["Tahun Anggaran", contract.fiscal_year],
-            ["Lokasi", `${contract.locations?.length || 0}`],
-          ].map(([label, val]) => (
+            ["Nilai Kontrak", fmtCurrency(contract.current_value), null],
+            [
+              "Total BOQ",
+              fmtCurrency(contract.boq_total || 0),
+              contract.boq_total != null &&
+              Math.abs((contract.boq_total || 0) - (contract.current_value || 0)) >= 0.01
+                ? `Selisih ${fmtCurrency((contract.boq_total || 0) - (contract.current_value || 0))} dari Nilai Kontrak`
+                : null,
+            ],
+            ["Perusahaan", contract.company_name, null],
+            ["PPK", contract.ppk_name, null],
+            ["Konsultan", contract.konsultan_name || "—", null],
+            ["Durasi", `${contract.duration_days} hari`, null],
+            ["Mulai", fmtDate(contract.start_date), null],
+            ["Selesai", fmtDate(contract.end_date), null],
+            ["Tahun Anggaran", contract.fiscal_year, null],
+            ["Lokasi", `${contract.locations?.length || 0}`, null],
+          ].map(([label, val, hint]) => (
             <div key={label}>
               <p className="text-[10px] uppercase tracking-wider text-ink-400 font-medium">
                 {label}
@@ -185,6 +210,11 @@ export default function ContractDetailPage() {
               <p className="text-sm font-medium text-ink-800 mt-0.5 truncate">
                 {val}
               </p>
+              {hint && (
+                <p className="text-[10px] text-amber-700 mt-0.5 truncate" title={hint}>
+                  ⚠ {hint}
+                </p>
+              )}
             </div>
           ))}
         </div>
@@ -399,11 +429,16 @@ export default function ContractDetailPage() {
               // APPROVED, editing harus via Addendum. Banner lock muncul.
               // COMPLETED / TERMINATED → readonly total (ditangani via
               // readonly prop di bawah).
-              contract.status === "active" || contract.status === "addendum"
+              // Unlock Mode → bypass: BOQ boleh diedit walau revisi APPROVED.
+              !isUnlocked &&
+              (contract.status === "active" || contract.status === "addendum")
             }
             readonly={
-              contract.status === "completed" ||
-              contract.status === "terminated"
+              // COMPLETED / TERMINATED normalnya readonly, tapi Unlock Mode
+              // membuka juga untuk koreksi retroaktif.
+              !isUnlocked &&
+              (contract.status === "completed" ||
+                contract.status === "terminated")
             }
             onChange={() => {
               boqAPI.listByFacility(boqFacility.id).then(({ data }) => setBoqItems(data));
@@ -1055,21 +1090,47 @@ function AddAddendumModal({ open, onClose, contract, onSuccess }) {
 // ════════════════════════════════════════════════════════════════════════════
 
 function LocationRollupPanel({ contract }) {
-  const [locationId, setLocationId] = useState(
-    contract.locations?.[0]?.id || ""
-  );
+  // Default: "__all__" = rekap semua lokasi. User bisa pilih lokasi spesifik
+  // kalau mau fokus. Menghemat klik untuk kontrak yang punya banyak lokasi.
+  const [locationId, setLocationId] = useState("__all__");
   const [rollup, setRollup] = useState(null);
+  const [allRollups, setAllRollups] = useState(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!locationId) return;
     setLoading(true);
-    boqAPI
-      .locationRollup(locationId)
-      .then(({ data }) => setRollup(data))
-      .catch((e) => toast.error(parseApiError(e)))
-      .finally(() => setLoading(false));
-  }, [locationId]);
+    if (locationId === "__all__") {
+      setRollup(null);
+      Promise.all(
+        (contract.locations || []).map((loc) =>
+          boqAPI
+            .locationRollup(loc.id)
+            .then(({ data }) => ({ location: loc, rollup: data }))
+            .catch(() => ({ location: loc, rollup: null }))
+        )
+      )
+        .then((results) => setAllRollups(results))
+        .finally(() => setLoading(false));
+    } else {
+      setAllRollups(null);
+      boqAPI
+        .locationRollup(locationId)
+        .then(({ data }) => setRollup(data))
+        .catch((e) => toast.error(parseApiError(e)))
+        .finally(() => setLoading(false));
+    }
+  }, [locationId, contract.locations?.length]);
+
+  const grandTotalAll = allRollups
+    ? allRollups.reduce((a, r) => a + (r.rollup?.grand_total || 0), 0)
+    : 0;
+  const totalFacilitiesAll = allRollups
+    ? allRollups.reduce((a, r) => a + (r.rollup?.groups.length || 0), 0)
+    : 0;
+  const totalLeavesAll = allRollups
+    ? allRollups.reduce((a, r) => a + (r.rollup?.total_leaves || 0), 0)
+    : 0;
 
   if (!contract.locations?.length) {
     return (
@@ -1090,13 +1151,23 @@ function LocationRollupPanel({ contract }) {
           onChange={(e) => setLocationId(e.target.value)}
           className="select max-w-md"
         >
+          <option value="__all__">🌐 Semua Lokasi (rekap gabungan)</option>
           {contract.locations.map((loc) => (
             <option key={loc.id} value={loc.id}>
               [{loc.location_code}] {loc.name}
             </option>
           ))}
         </select>
-        {rollup && (
+        {locationId === "__all__" && allRollups && (
+          <div className="ml-auto text-xs text-ink-500">
+            {contract.locations.length} lokasi · {totalFacilitiesAll} fasilitas ·{" "}
+            {totalLeavesAll} item leaf ·{" "}
+            <span className="font-semibold text-ink-800">
+              Total: {fmtCurrency(grandTotalAll)}
+            </span>
+          </div>
+        )}
+        {locationId !== "__all__" && rollup && (
           <div className="ml-auto text-xs text-ink-500">
             {rollup.groups.length} fasilitas · {rollup.total_leaves} item leaf ·{" "}
             <span className="font-semibold text-ink-800">
@@ -1108,6 +1179,49 @@ function LocationRollupPanel({ contract }) {
 
       {loading ? (
         <PageLoader />
+      ) : locationId === "__all__" ? (
+        !allRollups ? null : allRollups.length === 0 ? (
+          <Empty icon={MapPin} title="Belum ada lokasi di kontrak ini" />
+        ) : (
+          <div className="space-y-6">
+            {allRollups.map(({ location, rollup: r }) => (
+              <div key={location.id}>
+                <div className="flex items-center gap-2 mb-2">
+                  <MapPin size={14} className="text-brand-600" />
+                  <span className="font-mono text-[11px] text-brand-600">
+                    {location.location_code}
+                  </span>
+                  <span className="font-semibold text-ink-900 text-sm">
+                    {location.name}
+                  </span>
+                  <span className="ml-auto text-xs text-ink-500">
+                    {r ? (
+                      <>
+                        {r.groups.length} fasilitas ·{" "}
+                        <span className="font-semibold text-ink-800">
+                          {fmtCurrency(r.grand_total)}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-red-600">gagal memuat</span>
+                    )}
+                  </span>
+                </div>
+                {!r || r.groups.length === 0 ? (
+                  <div className="card px-5 py-3 text-xs text-ink-500">
+                    Tidak ada fasilitas / item BOQ di lokasi ini.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {r.groups.map((g) => (
+                      <RollupFacilityCard key={g.facility.id} group={g} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )
       ) : !rollup ? null : rollup.groups.length === 0 ? (
         <Empty
           icon={Layers}
@@ -1116,81 +1230,86 @@ function LocationRollupPanel({ contract }) {
       ) : (
         <div className="space-y-4">
           {rollup.groups.map((g) => (
-            <div key={g.facility.id} className="card overflow-hidden">
-              <div className="px-5 py-3 bg-ink-50 border-b border-ink-200 flex items-center justify-between">
-                <div>
-                  <p className="font-mono text-[11px] text-brand-600">
-                    {g.facility.facility_code}
-                  </p>
-                  <p className="font-display font-semibold text-ink-900 text-sm">
-                    {g.facility.facility_name}
-                  </p>
-                </div>
-                <div className="text-right text-xs">
-                  <p className="text-ink-500">
-                    {g.item_count} item · {g.leaf_count} leaf
-                  </p>
-                  <p className="font-semibold text-ink-800">
-                    {fmtCurrency(g.facility_total)}
-                  </p>
-                </div>
-              </div>
-              {g.items.length === 0 ? (
-                <div className="px-5 py-4 text-xs text-ink-500">
-                  Fasilitas ini belum memiliki item BOQ.
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr>
-                        <th className="table-th">Kode</th>
-                        <th className="table-th">Uraian</th>
-                        <th className="table-th">Satuan</th>
-                        <th className="table-th text-right">Volume</th>
-                        <th className="table-th text-right">Harga</th>
-                        <th className="table-th text-right">Total</th>
-                        <th className="table-th text-right">Bobot %</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {g.items.map((it) => (
-                        <tr key={it.id}>
-                          <td
-                            className="table-td font-mono text-[11px]"
-                            style={{ paddingLeft: 12 + (it.level || 0) * 14 }}
-                          >
-                            {it.original_code}
-                          </td>
-                          <td
-                            className="table-td"
-                            style={{
-                              fontWeight: (it.level ?? 0) <= 1 ? 600 : 400,
-                            }}
-                          >
-                            {it.description}
-                          </td>
-                          <td className="table-td text-xs">{it.unit}</td>
-                          <td className="table-td text-right text-xs font-mono">
-                            {fmtNum(it.volume, 2)}
-                          </td>
-                          <td className="table-td text-right text-xs font-mono">
-                            {fmtNum(it.unit_price, 0)}
-                          </td>
-                          <td className="table-td text-right text-xs font-mono font-semibold">
-                            {fmtNum(it.total_price, 0)}
-                          </td>
-                          <td className="table-td text-right text-[11px] text-ink-500">
-                            {((it.weight_pct || 0) * 100).toFixed(3)}%
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
+            <RollupFacilityCard key={g.facility.id} group={g} />
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+function RollupFacilityCard({ group: g }) {
+  return (
+    <div className="card overflow-hidden">
+      <div className="px-5 py-3 bg-ink-50 border-b border-ink-200 flex items-center justify-between">
+        <div>
+          <p className="font-mono text-[11px] text-brand-600">
+            {g.facility.facility_code}
+          </p>
+          <p className="font-display font-semibold text-ink-900 text-sm">
+            {g.facility.facility_name}
+          </p>
+        </div>
+        <div className="text-right text-xs">
+          <p className="text-ink-500">
+            {g.item_count} item · {g.leaf_count} leaf
+          </p>
+          <p className="font-semibold text-ink-800">
+            {fmtCurrency(g.facility_total)}
+          </p>
+        </div>
+      </div>
+      {g.items.length === 0 ? (
+        <div className="px-5 py-4 text-xs text-ink-500">
+          Fasilitas ini belum memiliki item BOQ.
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr>
+                <th className="table-th">Kode</th>
+                <th className="table-th">Uraian</th>
+                <th className="table-th">Satuan</th>
+                <th className="table-th text-right">Volume</th>
+                <th className="table-th text-right">Harga</th>
+                <th className="table-th text-right">Total</th>
+                <th className="table-th text-right">Bobot %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {g.items.map((it) => (
+                <tr key={it.id}>
+                  <td
+                    className="table-td font-mono text-[11px]"
+                    style={{ paddingLeft: 12 + (it.level || 0) * 14 }}
+                  >
+                    {it.original_code}
+                  </td>
+                  <td
+                    className="table-td"
+                    style={{ fontWeight: (it.level ?? 0) <= 1 ? 600 : 400 }}
+                  >
+                    {it.description}
+                  </td>
+                  <td className="table-td text-xs">{it.unit}</td>
+                  <td className="table-td text-right text-xs font-mono">
+                    {fmtNum(it.volume, 2)}
+                  </td>
+                  <td className="table-td text-right text-xs font-mono">
+                    {fmtNum(it.unit_price, 0)}
+                  </td>
+                  <td className="table-td text-right text-xs font-mono font-semibold">
+                    {fmtNum(it.total_price, 0)}
+                  </td>
+                  <td className="table-td text-right text-[11px] text-ink-500">
+                    {((it.weight_pct || 0) * 100).toFixed(3)}%
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>

@@ -11,6 +11,7 @@ bisa diedit bebas.
 Helper di sini dipakai bersama oleh router locations / facilities /
 contracts.addenda supaya logic-nya seragam dan banner UI konsisten.
 """
+import datetime as _dt
 from typing import Optional
 
 from fastapi import HTTPException
@@ -20,6 +21,13 @@ from app.models.models import Contract, ContractStatus, Facility, Location
 
 
 SCOPE_EDITABLE_STATUSES = {ContractStatus.DRAFT, ContractStatus.ADDENDUM}
+
+
+def _is_unlocked(unlock_until) -> bool:
+    """True bila contract.unlock_until masih di masa depan (window aktif)."""
+    if unlock_until is None:
+        return False
+    return _dt.datetime.utcnow() < unlock_until
 
 _ENTITY_LABEL = {
     "location": "Lokasi",
@@ -50,14 +58,14 @@ def assert_scope_editable_by_contract(
     db: Session, contract_id: str, *, entity: str = "location"
 ) -> None:
     row = (
-        db.query(Contract.status, Contract.contract_number)
+        db.query(Contract.status, Contract.contract_number, Contract.unlock_until)
         .filter(Contract.id == contract_id)
         .first()
     )
     if not row:
         return
-    status, number = row
-    if status in SCOPE_EDITABLE_STATUSES:
+    status, number, unlock_until = row
+    if status in SCOPE_EDITABLE_STATUSES or _is_unlocked(unlock_until):
         return
     _raise_locked(number, status, entity=entity)
 
@@ -66,15 +74,15 @@ def assert_scope_editable_by_location(
     db: Session, location_id: str, *, entity: str = "facility"
 ) -> None:
     row = (
-        db.query(Contract.status, Contract.contract_number)
+        db.query(Contract.status, Contract.contract_number, Contract.unlock_until)
         .join(Location, Location.contract_id == Contract.id)
         .filter(Location.id == location_id)
         .first()
     )
     if not row:
         return
-    status, number = row
-    if status in SCOPE_EDITABLE_STATUSES:
+    status, number, unlock_until = row
+    if status in SCOPE_EDITABLE_STATUSES or _is_unlocked(unlock_until):
         return
     _raise_locked(number, status, entity=entity)
 
@@ -83,7 +91,7 @@ def assert_scope_editable_by_facility(
     db: Session, facility_id: str, *, entity: str = "facility"
 ) -> None:
     row = (
-        db.query(Contract.status, Contract.contract_number)
+        db.query(Contract.status, Contract.contract_number, Contract.unlock_until)
         .join(Location, Location.contract_id == Contract.id)
         .join(Facility, Facility.location_id == Location.id)
         .filter(Facility.id == facility_id)
@@ -91,7 +99,7 @@ def assert_scope_editable_by_facility(
     )
     if not row:
         return
-    status, number = row
-    if status in SCOPE_EDITABLE_STATUSES:
+    status, number, unlock_until = row
+    if status in SCOPE_EDITABLE_STATUSES or _is_unlocked(unlock_until):
         return
     _raise_locked(number, status, entity=entity)

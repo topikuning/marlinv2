@@ -386,6 +386,22 @@ class Contract(Base):
     activated_at = Column(DateTime, nullable=True)
     activated_by_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
 
+    # Unlock mode — safety valve untuk koreksi kesalahan input manusia.
+    # Saat unlocked_at IS NOT NULL, semua guard write (BOQ, fasilitas,
+    # field kontrak yang biasanya terkunci di ACTIVE) dilewati. Hanya
+    # superadmin yang bisa membuka/menutup. Saat menutup, sistem
+    # memvalidasi sum(BOQ item aktif) == current_value — selisih =
+    # refuse lock. Lihat POST /contracts/{id}/unlock dan /lock.
+    #
+    # Mode ini BUKAN pengganti Addendum: Addendum adalah perubahan
+    # administratif resmi dengan jejak dokumen; unlock hanya koreksi
+    # kesalahan input di level sistem. Audit log tetap mencatat
+    # perubahan seperti biasa.
+    unlocked_at = Column(DateTime, nullable=True)
+    unlock_until = Column(DateTime, nullable=True)
+    unlocked_by_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    unlock_reason = Column(Text, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     deleted_at = Column(DateTime)

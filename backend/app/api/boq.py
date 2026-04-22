@@ -21,6 +21,24 @@ from app.services.audit_service import log_audit
 from app.services.progress_service import (
     recalculate_facility_weights, recalculate_contract_weights,
 )
+
+
+def _is_unlocked_contract(db: Session, contract_id) -> bool:
+    """
+    True bila kontrak sedang dalam Unlock Mode (superadmin safety valve).
+    Saat unlocked, guard write BOQ di-bypass sehingga item boleh diedit
+    in-place di revisi APPROVED tanpa perlu Addendum + CCO baru.
+
+    Impor di-local untuk menghindari circular import (contracts.py
+    memanggil helper ini secara tidak langsung lewat guard).
+    """
+    if not contract_id:
+        return False
+    import datetime as _dt
+    c = db.query(Contract).filter(Contract.id == contract_id).first()
+    if not c or c.unlock_until is None:
+        return False
+    return _dt.datetime.utcnow() < c.unlock_until
 from app.services.boq_import_service import parse_boq_file, detect_format
 from app.services.template_service import template_boq_simple
 
@@ -216,7 +234,10 @@ def _resolve_writable_revision_for_facility(db: Session, facility_id: str):
     if active_draft:
         return active_draft
 
-    # 2) Any approved+active? That's read-only for new rows.
+    # 2) Any approved+active? Normalnya read-only untuk item baru — tapi
+    #    saat kontrak dalam Unlock Mode, guard dilewati supaya superadmin
+    #    bisa memperbaiki kesalahan input langsung di revisi aktif tanpa
+    #    membuat CCO baru.
     active_approved = (
         db.query(BOQRevision)
         .filter(
@@ -227,13 +248,15 @@ def _resolve_writable_revision_for_facility(db: Session, facility_id: str):
         .first()
     )
     if active_approved:
+        if _is_unlocked_contract(db, loc.contract_id):
+            return active_approved
         raise HTTPException(
             400,
             {
                 "message": (
                     f"BOQ {active_approved.revision_code} sudah APPROVED dan "
                     f"tidak bisa diedit langsung. Buat Addendum baru untuk "
-                    f"menghasilkan CCO berikutnya."
+                    f"menghasilkan CCO berikutnya, atau buka Unlock Mode."
                 ),
                 "active_revision_id": str(active_approved.id),
                 "active_revision_code": active_approved.revision_code,
@@ -355,24 +378,27 @@ def update_boq_item(
     # Symmetric with create_boq_item/bulk_create guard. Editing in place would
     # break audit trail and change_type diff generation across CCO revisions.
     # The only way to modify a BOQ in an active contract is to create an
-    # Addendum, which clones the active revision into a new DRAFT one.
+    # Addendum, which clones the active revision into a new DRAFT one — atau
+    # membuka Unlock Mode (superadmin) untuk koreksi kesalahan input.
     if item.boq_revision_id:
         from app.models.models import BOQRevision, RevisionStatus
         rev = db.query(BOQRevision).filter(BOQRevision.id == item.boq_revision_id).first()
         if rev and rev.status == RevisionStatus.APPROVED and rev.is_active:
-            raise HTTPException(
-                400,
-                {
-                    "message": (
-                        f"BOQ tidak dapat diubah karena revisi {rev.revision_code} "
-                        f"sudah disetujui dan kontrak aktif. Buat Addendum untuk "
-                        f"mengubah BOQ di kontrak yang sudah berjalan."
-                    ),
-                    "code": "revision_approved_readonly",
-                    "active_revision_id": str(rev.id),
-                    "active_revision_code": rev.revision_code,
-                },
-            )
+            if not _is_unlocked_contract(db, rev.contract_id):
+                raise HTTPException(
+                    400,
+                    {
+                        "message": (
+                            f"BOQ tidak dapat diubah karena revisi {rev.revision_code} "
+                            f"sudah disetujui dan kontrak aktif. Buat Addendum untuk "
+                            f"mengubah BOQ di kontrak yang sudah berjalan, atau buka "
+                            f"Unlock Mode."
+                        ),
+                        "code": "revision_approved_readonly",
+                        "active_revision_id": str(rev.id),
+                        "active_revision_code": rev.revision_code,
+                    },
+                )
 
     # Snapshot for addendum history
     if data.addendum_id:
@@ -423,23 +449,25 @@ def delete_boq_item(
     if not item:
         raise HTTPException(404, "Item tidak ditemukan")
 
-    # Write-guard: same as update (see update_boq_item for rationale)
+    # Write-guard: same as update (see update_boq_item for rationale).
+    # Unlock Mode di-respect di sini juga.
     if item.boq_revision_id:
         from app.models.models import BOQRevision, RevisionStatus
         rev = db.query(BOQRevision).filter(BOQRevision.id == item.boq_revision_id).first()
         if rev and rev.status == RevisionStatus.APPROVED and rev.is_active:
-            raise HTTPException(
-                400,
-                {
-                    "message": (
-                        f"Item BOQ tidak dapat dihapus karena revisi {rev.revision_code} "
-                        f"sudah disetujui dan kontrak aktif. Buat Addendum untuk "
-                        f"menghapus item."
-                    ),
-                    "code": "revision_approved_readonly",
-                    "active_revision_code": rev.revision_code,
-                },
-            )
+            if not _is_unlocked_contract(db, rev.contract_id):
+                raise HTTPException(
+                    400,
+                    {
+                        "message": (
+                            f"Item BOQ tidak dapat dihapus karena revisi {rev.revision_code} "
+                            f"sudah disetujui dan kontrak aktif. Buat Addendum untuk "
+                            f"menghapus item, atau buka Unlock Mode."
+                        ),
+                        "code": "revision_approved_readonly",
+                        "active_revision_code": rev.revision_code,
+                    },
+                )
 
     item.is_active = False  # soft delete
     db.flush()
