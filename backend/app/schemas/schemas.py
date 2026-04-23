@@ -416,6 +416,14 @@ class AddendumCreate(BaseModel):
     new_end_date: Optional[date] = None
     new_contract_value: Optional[Decimal] = None
     description: Optional[str] = None
+    # List VO APPROVED yang akan di-bundle ke Addendum ini. Setelah addendum
+    # disahkan, VO → BUNDLED dan perubahan BOQ diterapkan di revisi baru.
+    vo_ids: List[UUID] = []
+    # Kalau perubahan nilai > 10% (Perpres 16/2018 ps. 54), wajib diisi:
+    #   kpa_approved_by_id = UUID user KPA yang setuju
+    #   kpa_approval_notes = catatan persetujuan
+    kpa_approved_by_id: Optional[UUID] = None
+    kpa_approval_notes: Optional[str] = None
 
 
 class AddendumOut(ORMBase):
@@ -598,6 +606,108 @@ class DailyReportOut(ORMBase):
 
 class DailyReportDetail(DailyReportOut):
     photos: List[DailyPhotoOut] = []
+
+
+# ─── Field Observation (MC-0 / MC-N) ─────────────────────────────────────────
+
+class FieldObservationCreate(BaseModel):
+    type: str          # "mc_0" atau "mc_interim"
+    observation_date: date
+    title: str
+    findings: str = Field(min_length=10)
+    attendees: Optional[str] = None
+
+
+class FieldObservationOut(ORMBase):
+    id: UUID
+    contract_id: UUID
+    type: str
+    observation_date: date
+    title: str
+    findings: str
+    attendees: Optional[str] = None
+    submitted_by_user_id: Optional[UUID] = None
+    created_at: datetime
+
+
+# ─── Variation Order ─────────────────────────────────────────────────────────
+
+class VOItemInput(BaseModel):
+    action: str                       # add/increase/decrease/modify_spec/remove
+    boq_item_id: Optional[UUID] = None
+    facility_id: Optional[UUID] = None
+    master_work_code: Optional[str] = None
+    description: str
+    unit: Optional[str] = None
+    volume_delta: Decimal = Decimal("0")
+    unit_price: Decimal = Decimal("0")
+    old_description: Optional[str] = None
+    old_unit: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class VariationOrderCreate(BaseModel):
+    title: str
+    technical_justification: str = Field(min_length=50)
+    quantity_calculation: Optional[str] = None
+    source_observation_id: Optional[UUID] = None
+    items: List[VOItemInput] = []
+
+
+class VariationOrderUpdate(BaseModel):
+    title: Optional[str] = None
+    technical_justification: Optional[str] = Field(default=None, min_length=50)
+    quantity_calculation: Optional[str] = None
+    source_observation_id: Optional[UUID] = None
+    items: Optional[List[VOItemInput]] = None
+
+
+class VOActionRequest(BaseModel):
+    """Payload untuk approve/reject/review dengan notes/alasan."""
+    notes: Optional[str] = None
+    reason: Optional[str] = None   # wajib untuk reject (min 20 char di endpoint)
+
+
+class VOItemOut(ORMBase):
+    id: UUID
+    action: str
+    boq_item_id: Optional[UUID] = None
+    facility_id: Optional[UUID] = None
+    master_work_code: Optional[str] = None
+    description: str
+    unit: Optional[str] = None
+    volume_delta: Decimal
+    unit_price: Decimal
+    cost_impact: Decimal
+    old_description: Optional[str] = None
+    old_unit: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class VariationOrderOut(ORMBase):
+    id: UUID
+    contract_id: UUID
+    vo_number: str
+    status: str
+    title: str
+    technical_justification: str
+    quantity_calculation: Optional[str] = None
+    cost_impact: Decimal
+    source_observation_id: Optional[UUID] = None
+    submitted_by_user_id: Optional[UUID] = None
+    submitted_at: Optional[datetime] = None
+    reviewed_by_user_id: Optional[UUID] = None
+    reviewed_at: Optional[datetime] = None
+    review_notes: Optional[str] = None
+    approved_by_user_id: Optional[UUID] = None
+    approved_at: Optional[datetime] = None
+    rejected_by_user_id: Optional[UUID] = None
+    rejected_at: Optional[datetime] = None
+    rejection_reason: Optional[str] = None
+    bundled_addendum_id: Optional[UUID] = None
+    god_mode_bypass: bool = False
+    items: List[VOItemOut] = []
+    created_at: datetime
 
 
 # ─── Payment Terms ───────────────────────────────────────────────────────────

@@ -577,15 +577,64 @@ def create_addendum(
     current_user: User = Depends(require_permission("contract.update")),
 ):
     """
-    Create an Addendum / CCO. If the addendum affects the BOQ
-    (`cco`, `value_change`, `combined`) we also clone the currently-active
-    BOQ revision into a new DRAFT revision bound to this addendum. The
-    admin edits the new revision, then calls
-    `POST /boq/revisions/{id}/approve` to make it active.
+    Sign Addendum — satu-satunya titik LEGAL yang mengubah BOQ.
+
+    Selaras Perpres 16/2018 ps. 54:
+      - Kalau perubahan nilai > 10% dari nilai kontrak awal, Addendum harus
+        ditandatangani KPA (kpa_approved_by_id wajib). Kalau tidak, 400.
+      - Kalau VO sudah ada dan APPROVED, di-bundle ke Addendum ini via
+        vo_ids payload. Status VO berubah jadi BUNDLED.
+
+    God-Mode (Unlock Mode): kalau unlock_until aktif, semua syarat (threshold,
+    bundling, VO check) bisa di-bypass. Addendum ditandai god_mode_bypass=True
+    dan semua aksi ter-log di audit_logs.
+
+    Setelah addendum signed:
+      - BOQ revisi baru (V1, V2, ...) di-clone dari revisi aktif
+      - Perubahan VO items diterapkan ke revisi baru (ADD/INCREASE/DECREASE/
+        MODIFY_SPEC/REMOVE)
+      - Revisi baru DRAFT, menunggu approve_revision untuk activate
     """
+    from app.services.vo_service import (
+        is_god_mode_active, log_god_mode_bypass,
+        requires_kpa_approval, bundle_vos_to_addendum,
+    )
+
     c = db.query(Contract).filter(Contract.id == contract_id, Contract.deleted_at.is_(None)).first()
     if not c:
         raise HTTPException(404, "Kontrak tidak ditemukan")
+
+    gm = is_god_mode_active(c)
+
+    # Threshold check (Perpres ps. 54 — 10% rule)
+    needs_kpa = False
+    if data.new_contract_value is not None:
+        needs_kpa = requires_kpa_approval(c, data.new_contract_value)
+    if needs_kpa and not data.kpa_approved_by_id and not gm:
+        raise HTTPException(
+            400,
+            {
+                "code": "kpa_approval_required",
+                "message": (
+                    "Perubahan nilai > 10% dari nilai kontrak awal. "
+                    "Perpres 16/2018 ps. 54: Addendum ini wajib disetujui KPA. "
+                    "Isi kpa_approved_by_id dengan user KPA yang menandatangani."
+                ),
+                "threshold_percent": 10,
+                "original_value": float(c.original_value or 0),
+                "new_value": float(data.new_contract_value or 0),
+            },
+        )
+
+    # Validasi KPA user (bila diisi)
+    kpa_user = None
+    if data.kpa_approved_by_id:
+        kpa_user = db.query(User).filter(User.id == data.kpa_approved_by_id).first()
+        if not kpa_user:
+            raise HTTPException(400, "User KPA tidak ditemukan")
+        from app.api.deps import get_user_role_code
+        if get_user_role_code(db, kpa_user) not in ("kpa", "superadmin") and not gm:
+            raise HTTPException(400, "User yang dipilih bukan KPA.")
 
     addendum = ContractAddendum(
         contract_id=contract_id,
@@ -598,10 +647,24 @@ def create_addendum(
         old_contract_value=c.current_value,
         new_contract_value=data.new_contract_value,
         description=data.description,
+        signed_by_id=current_user.id,
+        signed_at=datetime.utcnow(),
+        kpa_approved_by_id=data.kpa_approved_by_id,
+        kpa_approved_at=datetime.utcnow() if data.kpa_approved_by_id else None,
+        kpa_approval_notes=data.kpa_approval_notes,
+        god_mode_bypass=gm,
         created_by=current_user.id,
     )
     db.add(addendum)
     db.flush()
+
+    # Bundle VO yang dipilih (status VO → BUNDLED)
+    bundled_vos = []
+    if data.vo_ids:
+        bundled_vos = bundle_vos_to_addendum(
+            db, c, addendum, [str(i) for i in data.vo_ids],
+            god_mode=gm, user=current_user,
+        )
 
     # Apply schedule / value changes to the contract header immediately.
     if data.new_end_date:
@@ -616,27 +679,44 @@ def create_addendum(
     c.status = ContractStatus.ADDENDUM
 
     new_revision_id = None
-    # Spawn a new draft BOQ revision if this addendum touches the BOQ.
     touches_boq = data.addendum_type in (
         AddendumType.CCO,
         AddendumType.VALUE_CHANGE,
         AddendumType.COMBINED,
-    )
+    ) or bool(bundled_vos)
+
     if touches_boq:
         from app.services import boq_revision_service
         new_rev = boq_revision_service.clone_revision_for_addendum(
             db, addendum, created_by_id=current_user.id,
         )
+        # Apply VO items ke revisi baru
+        if bundled_vos:
+            _apply_vo_items_to_revision(db, new_rev, bundled_vos)
         new_revision_id = str(new_rev.id)
 
     db.commit()
     db.refresh(addendum)
+    if gm:
+        log_god_mode_bypass(
+            db, current_user, c,
+            action="sign_addendum_with_bypass",
+            target_type="contract_addendum", target_id=str(addendum.id),
+            details={"needs_kpa": needs_kpa, "vo_ids": [str(i) for i in data.vo_ids]},
+            request=request,
+        )
+        db.commit()
     log_audit(
-        db, current_user, "create", "addendum", str(addendum.id),
+        db, current_user, "sign_addendum", "addendum", str(addendum.id),
         changes={
             "contract_id": contract_id,
+            "number": data.number,
             "type": data.addendum_type.value,
             "new_revision_id": new_revision_id,
+            "bundled_vo_ids": [str(v.id) for v in bundled_vos],
+            "kpa_required": needs_kpa,
+            "kpa_approved_by": str(data.kpa_approved_by_id) if data.kpa_approved_by_id else None,
+            "god_mode_bypass": gm,
         },
         request=request, commit=True,
     )
@@ -644,7 +724,71 @@ def create_addendum(
         "id": str(addendum.id),
         "success": True,
         "new_revision_id": new_revision_id,
+        "bundled_vos": [str(v.id) for v in bundled_vos],
+        "god_mode_bypass": gm,
     }
+
+
+def _apply_vo_items_to_revision(db: Session, new_rev, bundled_vos):
+    """
+    Terapkan perubahan dari VO items ke revisi BOQ baru:
+      - ADD: create new BOQItem di facility target
+      - INCREASE/DECREASE: update volume item hasil clone
+      - MODIFY_SPEC: update description/unit item hasil clone
+      - REMOVE: set is_active=False pada item hasil clone
+    Revisi baru sudah berisi clone dari revisi lama (via clone_revision_for_addendum);
+    kita tinggal patch sesuai VO items.
+    """
+    from app.models.models import VOItemAction, BOQItem
+    from app.services.boq_revision_service import recalc_revision_totals
+
+    # Build map: source_item_id (revisi lama) → cloned item id (revisi baru)
+    cloned_items = {
+        str(it.source_item_id): it
+        for it in db.query(BOQItem).filter(BOQItem.boq_revision_id == new_rev.id).all()
+        if it.source_item_id
+    }
+
+    for vo in bundled_vos:
+        for vi in vo.items:
+            if vi.action == VOItemAction.ADD:
+                new_item = BOQItem(
+                    boq_revision_id=new_rev.id,
+                    facility_id=vi.facility_id,
+                    master_work_code=vi.master_work_code,
+                    description=vi.description,
+                    unit=vi.unit,
+                    volume=vi.volume_delta,
+                    unit_price=vi.unit_price,
+                    total_price=vi.cost_impact,
+                    is_active=True,
+                    is_leaf=True,
+                    is_addendum_item=True,
+                    change_type="added",
+                )
+                db.add(new_item)
+            elif vi.action in (VOItemAction.INCREASE, VOItemAction.DECREASE):
+                target = cloned_items.get(str(vi.boq_item_id))
+                if target:
+                    from decimal import Decimal
+                    delta = Decimal(vi.volume_delta or 0)
+                    target.volume = (target.volume or Decimal("0")) + delta
+                    target.total_price = target.volume * (target.unit_price or Decimal("0"))
+                    target.change_type = "modified"
+            elif vi.action == VOItemAction.MODIFY_SPEC:
+                target = cloned_items.get(str(vi.boq_item_id))
+                if target:
+                    target.description = vi.description or target.description
+                    if vi.unit:
+                        target.unit = vi.unit
+                    target.change_type = "modified"
+            elif vi.action == VOItemAction.REMOVE:
+                target = cloned_items.get(str(vi.boq_item_id))
+                if target:
+                    target.is_active = False
+                    target.change_type = "removed"
+    db.flush()
+    recalc_revision_totals(db, new_rev)
 
 
 @router.delete("/{contract_id}/addenda/{addendum_id}", response_model=dict)
