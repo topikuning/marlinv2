@@ -4,7 +4,7 @@ import { AgGridReact } from "ag-grid-react";
 import toast from "react-hot-toast";
 import {
   ChevronRight, Save, Image, Upload, Trash2, X, Lock, Unlock,
-  Download, Filter, MapPin,
+  Download, Filter, MapPin, Layers,
 } from "lucide-react";
 import { weeklyAPI, boqAPI, downloadBlob } from "@/api";
 import {
@@ -226,7 +226,7 @@ function ProgressGrid({ report, boqItems, onSaved }) {
       cur.item_count += 1;
       map.set(r.location_id, cur);
     });
-    return Array.from(map.values()).sort((a, b) => a.code.localeCompare(b.code));
+    return Array.from(map.values()).sort((a, b) => (a.code || "").localeCompare(b.code || ""));
   }, [allRows]);
 
   const facilityOptions = useMemo(() => {
@@ -272,7 +272,7 @@ function ProgressGrid({ report, boqItems, onSaved }) {
     list.forEach((f) => {
       f.deviation_pct = f.progress_pct - contractActualTotal;
     });
-    list.sort((a, b) => a.code.localeCompare(b.code));
+    list.sort((a, b) => (a.code || "").localeCompare(b.code || ""));
     return list;
   }, [allRows]);
 
