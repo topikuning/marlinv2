@@ -32,6 +32,7 @@ from app.core.database import Base
 class UserRoleCode(str, enum.Enum):
     SUPERADMIN = "superadmin"
     ADMIN_PUSAT = "admin_pusat"
+    KPA = "kpa"                 # Kuasa Pengguna Anggaran (tt-tangan Addendum > 10%)
     PPK = "ppk"
     MANAGER = "manager"
     KONSULTAN = "konsultan"
@@ -126,6 +127,43 @@ class BOQChangeType(str, enum.Enum):
     MODIFIED = "modified"         # changed volume / unit_price / description
     ADDED = "added"               # brand new item in this CCO (no predecessor)
     REMOVED = "removed"           # tombstone: existed before, dropped in this CCO
+
+
+# ─── BOQ Lifecycle (state machine selaras Perpres 16/2018 ps. 54) ────────────
+
+class FieldObservationType(str, enum.Enum):
+    """
+    MC_0 — Mutual Check 0, pengukuran bersama di awal pelaksanaan (unik per
+           kontrak, non-legal, hanya identifikasi selisih lapangan vs BOQ)
+    MC_INTERIM — MC lanjutan selama proyek berjalan (boleh banyak)
+    """
+    MC_0 = "mc_0"
+    MC_INTERIM = "mc_interim"
+
+
+class VOStatus(str, enum.Enum):
+    """
+    Lifecycle Variation Order:
+      DRAFT          → diajukan, bisa diedit
+      UNDER_REVIEW   → diajukan untuk review, tidak bisa diedit
+      APPROVED       → disetujui, menunggu di-bundle ke Addendum
+      REJECTED       → ditolak (terminal, append-only)
+      BUNDLED        → sudah ter-bundle ke Addendum ditandatangani (legal)
+    """
+    DRAFT = "draft"
+    UNDER_REVIEW = "under_review"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    BUNDLED = "bundled"
+
+
+class VOItemAction(str, enum.Enum):
+    """Jenis perubahan BOQ yang diusulkan dalam satu baris VO item."""
+    ADD = "add"                         # tambah item baru
+    INCREASE = "increase"               # tambah volume item existing
+    DECREASE = "decrease"               # kurangi volume item existing
+    MODIFY_SPEC = "modify_spec"         # ubah spesifikasi (deskripsi/satuan)
+    REMOVE = "remove"                   # hilangkan item dari BOQ
 
 
 class NotificationStatus(str, enum.Enum):
@@ -436,10 +474,163 @@ class ContractAddendum(Base):
     new_contract_value = Column(Numeric(18, 2))
     description = Column(Text)
     document_file = Column(String(500))
+    # Untuk perubahan nilai >10%, butuh persetujuan KPA/PA. Saat signed oleh
+    # KPA, kolom ini terisi; audit BPK bisa trace authority chain.
+    kpa_approved_by_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    kpa_approved_at = Column(DateTime, nullable=True)
+    kpa_approval_notes = Column(Text)
+    # Signed by PPK (primary signer for all addenda)
+    signed_by_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    signed_at = Column(DateTime, nullable=True)
+    # Bypass god-mode (Unlock Mode superadmin) audit tag
+    god_mode_bypass = Column(Boolean, default=False, nullable=False)
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
     created_at = Column(DateTime, default=datetime.utcnow)
 
     contract = relationship("Contract", back_populates="addenda")
+    variation_orders = relationship("VariationOrder", back_populates="addendum")
+
+
+# ─── Field Observation (MC-0 & MC-N) — non-legal, identifikasi lapangan ──────
+
+class FieldObservation(Base):
+    """
+    Berita Acara pengukuran lapangan. Non-legal: tidak mengubah kontrak
+    atau BOQ, hanya menghasilkan temuan yang bisa memicu VariationOrder.
+
+    MC-0 unik per kontrak (constraint); MC_INTERIM boleh banyak.
+    """
+    __tablename__ = "field_observations"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    contract_id = Column(UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="CASCADE"), nullable=False)
+    type = Column(Enum(FieldObservationType), nullable=False)
+    observation_date = Column(Date, nullable=False)
+    title = Column(String(255), nullable=False)
+    findings = Column(Text, nullable=False)                 # temuan (wajib)
+    attendees = Column(Text)                                # daftar hadir / pihak
+    document_file = Column(String(500))                     # BA MC-0 scan
+    submitted_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    contract = relationship("Contract")
+    variation_orders = relationship("VariationOrder", back_populates="source_observation")
+
+    __table_args__ = (
+        # MC-0 unik per kontrak (boleh banyak MC_INTERIM)
+        Index("idx_field_obs_contract_type", "contract_id", "type"),
+    )
+
+
+# ─── Variation Order (VO) — usulan perubahan pre-Addendum ────────────────────
+
+class VariationOrder(Base):
+    """
+    Dokumen usulan perubahan pekerjaan (Justifikasi Teknis formal).
+    Non-legal sampai di-bundle ke Addendum yang ditandatangani.
+
+    Lifecycle (VOStatus):
+      DRAFT → UNDER_REVIEW → APPROVED → BUNDLED (to Addendum)
+                              ↓
+                           REJECTED (terminal, audit-preserved)
+
+    Satu Addendum bisa bundle banyak VO (one-to-many).
+    """
+    __tablename__ = "variation_orders"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    contract_id = Column(UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="CASCADE"), nullable=False)
+    vo_number = Column(String(50), nullable=False)         # VO-001, VO-002 per kontrak
+    status = Column(Enum(VOStatus), default=VOStatus.DRAFT, nullable=False)
+
+    title = Column(String(255), nullable=False)
+    technical_justification = Column(Text, nullable=False)  # min 50 char, wajib
+    quantity_calculation = Column(Text)                     # cara hitung volume
+    cost_impact = Column(Numeric(18, 2), default=0)         # delta nilai (bisa -)
+
+    # Sumber temuan (optional; VO bisa juga lahir tanpa MC formal)
+    source_observation_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("field_observations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # Submission
+    submitted_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    submitted_at = Column(DateTime, default=datetime.utcnow)
+
+    # Review (teknis oleh konsultan)
+    reviewed_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    review_notes = Column(Text)
+
+    # Approval (PPK) — sebelum bundling ke Addendum
+    approved_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    approved_at = Column(DateTime, nullable=True)
+
+    # Rejection (terminal)
+    rejected_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    rejected_at = Column(DateTime, nullable=True)
+    rejection_reason = Column(Text)                         # min 20 char bila REJECTED
+
+    # Bundling ke Addendum (saat sign_addendum, status → BUNDLED)
+    bundled_addendum_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("contract_addenda.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # God-mode (Unlock Mode) bypass tag
+    god_mode_bypass = Column(Boolean, default=False, nullable=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    contract = relationship("Contract")
+    source_observation = relationship("FieldObservation", back_populates="variation_orders")
+    addendum = relationship("ContractAddendum", back_populates="variation_orders")
+    items = relationship("VariationOrderItem", back_populates="vo", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint("contract_id", "vo_number", name="uq_vo_number_per_contract"),
+        Index("idx_vo_contract_status", "contract_id", "status"),
+    )
+
+
+class VariationOrderItem(Base):
+    """
+    Baris perubahan dalam satu VO. Bisa ADD (item baru), INCREASE/DECREASE
+    volume, MODIFY_SPEC (ubah deskripsi/satuan), atau REMOVE (hapus item).
+
+    Reference ke BOQItem.id wajib untuk INCREASE/DECREASE/MODIFY_SPEC/REMOVE.
+    Untuk ADD, boq_item_id NULL — saat VO di-bundle ke Addendum dan BOQ
+    versi baru dibuat, item baru dibuatkan di revisi baru.
+    """
+    __tablename__ = "variation_order_items"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    variation_order_id = Column(UUID(as_uuid=True), ForeignKey("variation_orders.id", ondelete="CASCADE"), nullable=False)
+    action = Column(Enum(VOItemAction), nullable=False)
+
+    # Ref ke BOQ item existing (kecuali ADD)
+    boq_item_id = Column(UUID(as_uuid=True), ForeignKey("boq_items.id"), nullable=True)
+
+    # Untuk ADD: tempatkan di facility tertentu
+    facility_id = Column(UUID(as_uuid=True), ForeignKey("facilities.id"), nullable=True)
+
+    # Detail item (snapshot saat VO dibuat)
+    master_work_code = Column(String(30))
+    description = Column(Text, nullable=False)
+    unit = Column(String(30))
+    volume_delta = Column(Numeric(18, 4), default=0)       # + untuk tambah, - untuk kurang
+    unit_price = Column(Numeric(18, 2), default=0)
+    cost_impact = Column(Numeric(18, 2), default=0)        # volume_delta * unit_price
+
+    # MODIFY_SPEC: snapshot deskripsi lama untuk diff audit
+    old_description = Column(Text)
+    old_unit = Column(String(30))
+
+    notes = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    vo = relationship("VariationOrder", back_populates="items")
 
 
 class Location(Base):
@@ -500,32 +691,32 @@ class Facility(Base):
 
 
 class BOQRevision(Base):
-    """A BOQ "version" tied to the original contract or a specific addendum/CCO.
+    """Versi BOQ terikat ke kontrak dan (opsional) Addendum.
 
-    Rules enforced at the application layer (and one partial unique index):
-      * CCO-0 is auto-created for every contract and represents the original,
-        signed BOQ. It carries `addendum_id = NULL`.
-      * Every approved ContractAddendum whose type touches BOQ (cco,
-        value_change, combined) spawns a new BOQRevision (CCO-1, CCO-2, ...).
-      * Exactly one revision per contract has `is_active=True`. When a new
-        CCO is approved, the previous active one flips to SUPERSEDED and
-        `is_active=False`.
-      * Weekly progress items point at BOQItem.id. When a revision is cloned,
-        items cloned with change_type=UNCHANGED carry a `source_item_id`
-        pointer so the progress_service can migrate accumulated progress
-        from the old item to the new one without data loss.
+    Terminologi baru (sesuai lifecycle refactor):
+      * V0 = BOQ baseline kontrak (addendum_id NULL)
+      * V1, V2, … = versi baru dari Addendum yang menggabungkan VO
+      * version_number menggantikan istilah "cco_number" yang lama
+
+    Aturan:
+      * V0 LOCKED permanen setelah kontrak aktif (append-only, audit-safe)
+      * Hanya satu revision per kontrak yang is_active=True pada satu waktu
+      * Addendum yang sign → spawn revision baru status DRAFT → dibuat aktif
+        via activate_new_boq event (sekaligus supersede versi lama)
     """
     __tablename__ = "boq_revisions"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     contract_id = Column(UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="CASCADE"), nullable=False)
 
-    # NULL for CCO-0 (original BOQ); non-null for CCO-N revisions that
-    # originate from a formal addendum document.
+    # NULL untuk V0 (BOQ kontrak baseline); non-null untuk V1+ yang lahir dari
+    # Addendum formal.
     addendum_id = Column(UUID(as_uuid=True), ForeignKey("contract_addenda.id", ondelete="SET NULL"), nullable=True)
 
-    cco_number = Column(Integer, nullable=False)      # 0, 1, 2, ...
-    revision_code = Column(String(20), nullable=False)  # "CCO-0", "CCO-1"
-    name = Column(String(255))                          # optional human label
+    # Nomor versi: 0, 1, 2, ...  Kolom DB masih cco_number untuk backward-
+    # compat migrasi; semantik-nya version_number (V0/V1/…).
+    cco_number = Column(Integer, nullable=False)
+    revision_code = Column(String(20), nullable=False)  # "V0", "V1" (dulu "CCO-0")
+    name = Column(String(255))
     description = Column(Text)
 
     status = Column(Enum(RevisionStatus), default=RevisionStatus.DRAFT, nullable=False)
