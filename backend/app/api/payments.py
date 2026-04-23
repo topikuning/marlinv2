@@ -34,6 +34,8 @@ def _term_to_dict(t: PaymentTerm, detail=False) -> dict:
         "status": t.status.value if hasattr(t.status, "value") else t.status,
         "invoice_number": t.invoice_number,
         "notes": t.notes,
+        "boq_revision_id": str(t.boq_revision_id) if t.boq_revision_id else None,
+        "god_mode_bypass": t.god_mode_bypass,
     }
     if detail:
         d["documents"] = [
@@ -121,13 +123,70 @@ def update_term(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("payment.update")),
 ):
+    from app.models.models import BOQRevision
+    from app.services.vo_service import is_god_mode_active, log_god_mode_bypass
+
     t = db.query(PaymentTerm).filter(PaymentTerm.id == term_id).first()
     if not t:
         raise HTTPException(404, "Termin tidak ditemukan")
-    for k, v in data.model_dump(exclude_unset=True).items():
+
+    contract = db.query(Contract).filter(Contract.id == t.contract_id).first()
+    incoming = data.model_dump(exclude_unset=True)
+    new_status = incoming.get("status")
+    gm = is_god_mode_active(contract) if contract else False
+
+    # Anchor ke BOQ revisi aktif saat termin masuk status SUBMITTED / VERIFIED
+    # / PAID (pertama kali). Setelah di-anchor, perubahan BOQ (via addendum)
+    # tidak mempengaruhi termin ini — integrity audit BPK terjaga.
+    if (
+        new_status in (
+            PaymentTermStatus.SUBMITTED, PaymentTermStatus.VERIFIED, PaymentTermStatus.PAID,
+            "submitted", "verified", "paid",
+        )
+        and t.boq_revision_id is None
+    ):
+        active_rev = (
+            db.query(BOQRevision)
+            .filter(
+                BOQRevision.contract_id == t.contract_id,
+                BOQRevision.is_active == True,  # noqa: E712
+            )
+            .first()
+        )
+        if active_rev:
+            t.boq_revision_id = active_rev.id
+
+    # Payment yang sudah PAID tidak boleh diubah kecuali god-mode
+    if t.status == PaymentTermStatus.PAID and not gm:
+        raise HTTPException(
+            400,
+            {
+                "code": "paid_payment_immutable",
+                "message": (
+                    "Termin yang sudah PAID tidak dapat diubah. Ini melindungi "
+                    "integritas audit pembayaran. Buka Unlock Mode (god-mode) "
+                    "untuk koreksi istimewa."
+                ),
+            },
+        )
+
+    for k, v in incoming.items():
         setattr(t, k, v)
+
+    if gm and t.status == PaymentTermStatus.PAID:
+        t.god_mode_bypass = True
+        log_god_mode_bypass(
+            db, current_user, contract,
+            action="edit_paid_payment",
+            target_type="payment_term", target_id=str(t.id),
+            request=request,
+        )
     db.commit()
-    log_audit(db, current_user, "update", "payment_term", str(t.id), request=request, commit=True)
+    log_audit(
+        db, current_user, "update", "payment_term", str(t.id),
+        changes={"status": new_status, "god_mode_bypass": gm},
+        request=request, commit=True,
+    )
     return {"success": True}
 
 

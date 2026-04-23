@@ -116,6 +116,9 @@ MIGRATION_SQL = [
         notes TEXT,
         created_at TIMESTAMP DEFAULT NOW()
     )""",
+    # Payment term anchor ke BOQ version (payment integrity saat addendum)
+    "ALTER TABLE payment_terms ADD COLUMN IF NOT EXISTS boq_revision_id UUID REFERENCES boq_revisions(id)",
+    "ALTER TABLE payment_terms ADD COLUMN IF NOT EXISTS god_mode_bypass BOOLEAN NOT NULL DEFAULT FALSE",
     """CREATE TABLE IF NOT EXISTS master_facilities (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         code VARCHAR(40) UNIQUE NOT NULL,

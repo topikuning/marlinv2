@@ -1048,18 +1048,248 @@ def complete_contract(
     current_user: User = Depends(require_permission("contract.update")),
 ):
     """
-    Mark an ACTIVE (or ADDENDUM) contract as COMPLETED. After this point the
-    contract is read-only. Reactivation would require a new addendum.
+    finalize_contract event — satu-satunya cara legal men-transisi kontrak
+    ke COMPLETED. Hanya PPK (atau superadmin) yang boleh trigger.
+
+    Setelah ini:
+      - Kontrak read-only permanen (kecuali Unlock Mode untuk koreksi
+        administratif)
+      - Semua BOQ version terkunci
+      - VO yang masih DRAFT/UNDER_REVIEW otomatis jadi REJECTED
+        (karena tidak akan pernah di-bundle)
+      - BAST siap di-generate via GET /contracts/{id}/bast
     """
+    from app.services.vo_service import is_god_mode_active, log_god_mode_bypass
+    from app.api.deps import get_user_role_code
+    from app.models.models import VariationOrder, VOStatus
+
     c = db.query(Contract).filter(Contract.id == contract_id, Contract.deleted_at.is_(None)).first()
     if not c:
         raise HTTPException(404, "Kontrak tidak ditemukan")
+    gm = is_god_mode_active(c)
+    role = get_user_role_code(db, current_user)
+    if role not in ("ppk", "superadmin") and not gm:
+        raise HTTPException(
+            403,
+            "Hanya PPK yang berhak menyelesaikan kontrak (penyelesaian akhir).",
+        )
 
     status_value = c.status.value if hasattr(c.status, "value") else str(c.status)
-    if status_value not in ("active", "addendum"):
+    if status_value not in ("active", "addendum") and not gm:
         raise HTTPException(400, f"Kontrak berstatus '{status_value}' tidak bisa di-complete.")
+
+    # Auto-reject VO yang belum sempat di-bundle — prevent dangling states
+    pending_vos = db.query(VariationOrder).filter(
+        VariationOrder.contract_id == contract_id,
+        VariationOrder.status.in_([VOStatus.DRAFT, VOStatus.UNDER_REVIEW, VOStatus.APPROVED]),
+    ).all()
+    for vo in pending_vos:
+        vo.status = VOStatus.REJECTED
+        vo.rejected_by_user_id = current_user.id
+        vo.rejected_at = datetime.utcnow()
+        vo.rejection_reason = "Ditolak otomatis — kontrak diselesaikan (finalize_contract)."
 
     c.status = ContractStatus.COMPLETED
     db.commit()
-    log_audit(db, current_user, "complete", "contract", str(c.id), request=request, commit=True)
-    return {"success": True, "status": c.status.value}
+    if gm:
+        log_god_mode_bypass(
+            db, current_user, c,
+            action=f"finalize_contract_from_{status_value}",
+            target_type="contract", target_id=str(c.id),
+            request=request,
+        )
+        db.commit()
+    log_audit(
+        db, current_user, "finalize_contract", "contract", str(c.id),
+        changes={
+            "from_status": status_value,
+            "auto_rejected_vos": [str(v.id) for v in pending_vos],
+            "god_mode_bypass": gm,
+        },
+        request=request, commit=True,
+    )
+    return {
+        "success": True,
+        "status": c.status.value,
+        "auto_rejected_vos": len(pending_vos),
+        "god_mode_bypass": gm,
+    }
+
+
+@router.get("/{contract_id}/bast", response_model=dict)
+def get_bast(
+    contract_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contract.read")),
+):
+    """
+    Berita Acara Serah Terima (BAST) — laporan rekonsiliasi akhir kontrak.
+
+    Berisi:
+      - Snapshot BOQ V-final (versi aktif terakhir)
+      - Realisasi fisik per item (volume terbayar kumulatif)
+      - Selisih volume (realisasi vs BOQ)
+      - Rekapitulasi pembayaran: total planned vs paid
+      - Sisa/kelebihan terhadap nilai kontrak final
+      - Daftar addendum + VO bundled (audit chain)
+    """
+    from app.models.models import (
+        BOQRevision, BOQItem, PaymentTerm, PaymentTermStatus,
+        VariationOrder, VOStatus, ContractAddendum, WeeklyProgressItem,
+        Facility, Location,
+    )
+    from decimal import Decimal as _D
+
+    c = db.query(Contract).filter(Contract.id == contract_id, Contract.deleted_at.is_(None)).first()
+    if not c:
+        raise HTTPException(404, "Kontrak tidak ditemukan")
+    if not user_can_access_contract(db, current_user, contract_id):
+        raise HTTPException(403, "Akses ditolak")
+
+    # BOQ V-final
+    active = (
+        db.query(BOQRevision)
+        .filter(
+            BOQRevision.contract_id == contract_id,
+            BOQRevision.is_active == True,  # noqa: E712
+        )
+        .first()
+    )
+
+    # Realisasi kumulatif per BOQ item (dari progress terakhir masing-masing)
+    realisasi = {}
+    if active:
+        # MAX progress per boq_item_id pada revisi aktif
+        from sqlalchemy import func as _func
+        prog_rows = (
+            db.query(
+                WeeklyProgressItem.boq_item_id,
+                _func.max(WeeklyProgressItem.volume_cumulative),
+            )
+            .join(BOQItem, BOQItem.id == WeeklyProgressItem.boq_item_id)
+            .filter(BOQItem.boq_revision_id == active.id)
+            .group_by(WeeklyProgressItem.boq_item_id)
+            .all()
+        )
+        realisasi = {str(r[0]): float(r[1] or 0) for r in prog_rows}
+
+    # Items aktif + metadata
+    items_out = []
+    total_boq_value = _D("0")
+    total_realized_value = _D("0")
+    if active:
+        rows = (
+            db.query(BOQItem, Facility, Location)
+            .join(Facility, Facility.id == BOQItem.facility_id)
+            .join(Location, Location.id == Facility.location_id)
+            .filter(
+                BOQItem.boq_revision_id == active.id,
+                BOQItem.is_active == True,  # noqa: E712
+                BOQItem.is_leaf == True,  # noqa: E712
+            )
+            .order_by(Location.location_code, Facility.display_order, BOQItem.display_order)
+            .all()
+        )
+        for b, f, l in rows:
+            vol_boq = _D(b.volume or 0)
+            vol_real = _D(str(realisasi.get(str(b.id), 0)))
+            price = _D(b.unit_price or 0)
+            value_boq = vol_boq * price
+            value_real = vol_real * price
+            total_boq_value += value_boq
+            total_realized_value += value_real
+            items_out.append({
+                "boq_item_id": str(b.id),
+                "location_code": l.location_code,
+                "facility_code": f.facility_code,
+                "facility_name": f.facility_name,
+                "description": b.description,
+                "unit": b.unit,
+                "volume_boq": float(vol_boq),
+                "volume_realized": float(vol_real),
+                "volume_diff": float(vol_real - vol_boq),
+                "unit_price": float(price),
+                "value_boq": float(value_boq),
+                "value_realized": float(value_real),
+                "completion_pct": float((vol_real / vol_boq * 100) if vol_boq > 0 else 0),
+            })
+
+    # Pembayaran rekap
+    terms = (
+        db.query(PaymentTerm)
+        .filter(PaymentTerm.contract_id == contract_id)
+        .order_by(PaymentTerm.term_number)
+        .all()
+    )
+    total_planned = sum((_D(t.amount or 0) for t in terms), _D("0"))
+    total_paid = sum(
+        (_D(t.amount or 0) for t in terms if t.status == PaymentTermStatus.PAID),
+        _D("0"),
+    )
+    payments_out = [
+        {
+            "term_number": t.term_number,
+            "name": t.name,
+            "amount": float(t.amount or 0),
+            "status": t.status.value if hasattr(t.status, "value") else t.status,
+            "paid_date": t.paid_date.isoformat() if t.paid_date else None,
+            "boq_revision_id": str(t.boq_revision_id) if t.boq_revision_id else None,
+        }
+        for t in terms
+    ]
+
+    # Audit chain: addenda + VO bundled
+    addenda = (
+        db.query(ContractAddendum)
+        .filter(ContractAddendum.contract_id == contract_id)
+        .order_by(ContractAddendum.effective_date)
+        .all()
+    )
+    addenda_out = []
+    for a in addenda:
+        bundled_vos = (
+            db.query(VariationOrder)
+            .filter(VariationOrder.bundled_addendum_id == a.id)
+            .all()
+        )
+        addenda_out.append({
+            "id": str(a.id),
+            "number": a.number,
+            "type": a.addendum_type.value if hasattr(a.addendum_type, "value") else a.addendum_type,
+            "effective_date": a.effective_date.isoformat() if a.effective_date else None,
+            "old_value": float(a.old_contract_value or 0),
+            "new_value": float(a.new_contract_value or 0),
+            "signed_by_id": str(a.signed_by_id) if a.signed_by_id else None,
+            "kpa_approved_by_id": str(a.kpa_approved_by_id) if a.kpa_approved_by_id else None,
+            "bundled_vos": [{"id": str(v.id), "vo_number": v.vo_number, "title": v.title} for v in bundled_vos],
+        })
+
+    return {
+        "contract": {
+            "id": str(c.id),
+            "number": c.contract_number,
+            "name": c.contract_name,
+            "status": c.status.value if hasattr(c.status, "value") else c.status,
+            "original_value": float(c.original_value or 0),
+            "final_value": float(c.current_value or 0),
+            "start_date": c.start_date.isoformat() if c.start_date else None,
+            "end_date": c.end_date.isoformat() if c.end_date else None,
+        },
+        "active_revision": {
+            "id": str(active.id) if active else None,
+            "version_code": active.revision_code if active else None,
+        } if active else None,
+        "boq_items": items_out,
+        "summary": {
+            "total_boq_value": float(total_boq_value),
+            "total_realized_value": float(total_realized_value),
+            "realization_pct": float(
+                (total_realized_value / total_boq_value * 100) if total_boq_value > 0 else 0
+            ),
+            "total_planned_payment": float(total_planned),
+            "total_paid_payment": float(total_paid),
+            "payment_gap": float(total_planned - total_paid),
+        },
+        "payments": payments_out,
+        "addenda_chain": addenda_out,
+    }

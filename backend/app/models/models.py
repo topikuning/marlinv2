@@ -994,6 +994,13 @@ class PaymentTerm(Base):
     status = Column(Enum(PaymentTermStatus), default=PaymentTermStatus.PLANNED)
     invoice_number = Column(String(100))
     notes = Column(Text)
+    # Anchor ke BOQ version saat termin di-submit (status SUBMITTED/VERIFIED/
+    # PAID). Payment yang sudah paid TETAP terikat ke versi BOQ saat
+    # pembayaran; jika BOQ nanti berubah (addendum), termin lama tidak
+    # ikut berubah — audit BPK bisa trace kuantitas yang dipakai saat bayar.
+    boq_revision_id = Column(UUID(as_uuid=True), ForeignKey("boq_revisions.id"), nullable=True)
+    # God-mode audit tag
+    god_mode_bypass = Column(Boolean, default=False, nullable=False)
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
