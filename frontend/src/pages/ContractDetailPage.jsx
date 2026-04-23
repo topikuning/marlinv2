@@ -3,11 +3,12 @@ import { useParams, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
   ChevronRight, Plus, MapPin, Layers, FileText, Upload,
-  Trash2, Edit2, Download, Building2,
+  Trash2, Edit2, Download, Building2, GitBranch, ClipboardList,
+  Check, X as XIcon, Send, RotateCcw, AlertTriangle,
 } from "lucide-react";
 import {
   contractsAPI, locationsAPI, facilitiesAPI, boqAPI, masterAPI,
-  templatesAPI, downloadBlob,
+  templatesAPI, downloadBlob, voAPI, fieldObsAPI,
 } from "@/api";
 import {
   PageLoader, Modal, Tabs, Empty, Spinner, ConfirmDialog,
@@ -93,7 +94,9 @@ export default function ContractDetailPage() {
     { id: "overview", label: "Ringkasan" },
     { id: "locations", label: "Lokasi & Fasilitas", count: contract.locations?.length },
     { id: "rollup", label: "Rekap BOQ Lokasi" },
-    { id: "revisions", label: "CCO Revisions" },
+    { id: "revisions", label: "BOQ Versions" },
+    { id: "variation_orders", label: "Variation Orders" },
+    { id: "field_observations", label: "Observasi Lapangan" },
     { id: "addenda", label: "Addendum", count: contract.addenda?.length },
     ...(boqFacility ? [{ id: "boq", label: `BOQ: ${boqFacility.facility_name}` }] : []),
   ];
@@ -356,9 +359,19 @@ export default function ContractDetailPage() {
         <LocationRollupPanel contract={contract} />
       )}
 
-      {/* CCO Revisions */}
+      {/* BOQ Versions */}
       {tab === "revisions" && (
         <RevisionsPanel contract={contract} onChange={load} />
+      )}
+
+      {/* Variation Orders */}
+      {tab === "variation_orders" && (
+        <VariationOrdersPanel contract={contract} onChange={load} />
+      )}
+
+      {/* Field Observations (MC-0 / MC-N) */}
+      {tab === "field_observations" && (
+        <FieldObservationsPanel contract={contract} onChange={load} />
       )}
 
       {/* Addenda */}
@@ -1408,7 +1421,7 @@ function RevisionsPanel({ contract, onChange }) {
       <Empty
         icon={FileText}
         title="Belum ada BOQ Revision"
-        description="CCO-0 otomatis dibuat saat kontrak di-create. Coba refresh atau cek data kontrak."
+        description="BOQ V0 (baseline) otomatis dibuat saat kontrak di-create. Coba refresh atau cek data kontrak."
       />
     );
   }
@@ -1619,6 +1632,531 @@ function RevisionDiffModal({ revision, onClose }) {
           </table>
         </div>
       )}
+    </Modal>
+  );
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// Variation Orders Panel — daftar VO + actions (submit/approve/reject)
+// ════════════════════════════════════════════════════════════════════════════
+const VO_STATUS_LABEL = {
+  draft: "Draft", under_review: "Review",
+  approved: "Disetujui", rejected: "Ditolak", bundled: "Ter-bundle",
+};
+const VO_STATUS_BADGE = {
+  draft: "bg-slate-100 text-slate-700 border-slate-200",
+  under_review: "bg-blue-50 text-blue-700 border-blue-200",
+  approved: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  rejected: "bg-red-50 text-red-700 border-red-200",
+  bundled: "bg-indigo-50 text-indigo-700 border-indigo-200",
+};
+
+function VariationOrdersPanel({ contract, onChange }) {
+  const [list, setList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreate, setShowCreate] = useState(false);
+  const [detail, setDetail] = useState(null);
+  const [actionModal, setActionModal] = useState(null);
+
+  const refresh = () => {
+    setLoading(true);
+    voAPI.listByContract(contract.id)
+      .then(({ data }) => setList(data.items || []))
+      .finally(() => setLoading(false));
+  };
+  useEffect(() => { refresh(); }, [contract.id]);
+
+  const doAction = async (vo, action, payload = {}) => {
+    try {
+      if (action === "submit") await voAPI.submit(vo.id);
+      else if (action === "approve") await voAPI.approve(vo.id, payload);
+      else if (action === "reject") await voAPI.reject(vo.id, payload);
+      else if (action === "delete") await voAPI.remove(vo.id);
+      toast.success(`VO ${action} sukses`);
+      setActionModal(null);
+      refresh();
+    } catch (e) { toast.error(parseApiError(e)); }
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <div className="text-xs text-ink-500">
+          {list.length} VO · <span className="font-medium">Usulan perubahan</span> yang menggantung sampai di-bundle ke Addendum
+        </div>
+        <button className="btn-primary btn-sm" onClick={() => setShowCreate(true)}>
+          <Plus size={13} /> VO Baru
+        </button>
+      </div>
+
+      {loading ? (
+        <PageLoader />
+      ) : list.length === 0 ? (
+        <Empty icon={ClipboardList} title="Belum ada Variation Order"
+          description="VO adalah usulan perubahan pekerjaan (justifikasi teknis). Setelah approved, VO di-bundle ke Addendum untuk legalisasi." />
+      ) : (
+        <div className="space-y-2">
+          {list.map((vo) => (
+            <div key={vo.id} className="card p-4">
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-mono text-[10px] text-brand-600">{vo.vo_number}</span>
+                    <span className={`text-[10px] px-2 py-0.5 rounded border font-medium ${VO_STATUS_BADGE[vo.status]}`}>
+                      {VO_STATUS_LABEL[vo.status] || vo.status}
+                    </span>
+                    {vo.god_mode_bypass && (
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200" title="Dibuat/diubah via God-Mode (Unlock)">
+                        ⚡ god-mode
+                      </span>
+                    )}
+                  </div>
+                  <p className="font-medium text-ink-900 mt-1">{vo.title}</p>
+                  <p className="text-xs text-ink-500 mt-0.5 line-clamp-2">{vo.technical_justification}</p>
+                  <div className="flex items-center gap-3 text-[11px] text-ink-500 mt-1.5">
+                    <span>Dampak: <span className={`font-semibold ${vo.cost_impact >= 0 ? "text-ink-800" : "text-red-700"}`}>
+                      {vo.cost_impact >= 0 ? "+" : ""}{fmtCurrency(vo.cost_impact)}
+                    </span></span>
+                    <span>Dibuat: {fmtDate(vo.created_at)}</span>
+                  </div>
+                </div>
+                <div className="flex gap-1 flex-wrap">
+                  <button className="btn-ghost btn-xs" onClick={() => setDetail(vo)}>Lihat</button>
+                  {vo.status === "draft" && (
+                    <button className="btn-primary btn-xs" onClick={() => doAction(vo, "submit")}>
+                      <Send size={10} /> Submit
+                    </button>
+                  )}
+                  {vo.status === "under_review" && (
+                    <>
+                      <button className="btn-secondary btn-xs" onClick={() => setActionModal({ vo, action: "approve" })}>
+                        <Check size={10} /> Approve
+                      </button>
+                      <button className="btn-ghost btn-xs text-red-600" onClick={() => setActionModal({ vo, action: "reject" })}>
+                        <XIcon size={10} /> Reject
+                      </button>
+                    </>
+                  )}
+                  {(vo.status === "draft" || vo.status === "rejected") && (
+                    <button className="btn-ghost btn-xs text-red-600" onClick={() => {
+                      if (confirm("Hapus VO ini?")) doAction(vo, "delete");
+                    }}>
+                      <Trash2 size={10} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showCreate && (
+        <VOCreateModal contract={contract} onClose={() => setShowCreate(false)}
+          onSuccess={() => { setShowCreate(false); refresh(); }} />
+      )}
+      {detail && <VODetailModal vo={detail} onClose={() => setDetail(null)} />}
+      {actionModal && (
+        <VOActionModal vo={actionModal.vo} action={actionModal.action}
+          onClose={() => setActionModal(null)}
+          onConfirm={(payload) => doAction(actionModal.vo, actionModal.action, payload)} />
+      )}
+    </div>
+  );
+}
+
+function VOCreateModal({ contract, onClose, onSuccess }) {
+  const [form, setForm] = useState({
+    title: "", technical_justification: "", quantity_calculation: "", items: [],
+  });
+  const [saving, setSaving] = useState(false);
+  const addItem = () => setForm((f) => ({ ...f, items: [...f.items, {
+    action: "increase", boq_item_id: "", facility_id: "",
+    description: "", unit: "", volume_delta: 0, unit_price: 0, notes: "",
+  }]}));
+  const updateItem = (idx, key, val) => setForm((f) => ({
+    ...f, items: f.items.map((it, i) => i === idx ? { ...it, [key]: val } : it),
+  }));
+  const removeItem = (idx) => setForm((f) => ({
+    ...f, items: f.items.filter((_, i) => i !== idx),
+  }));
+  const submit = async () => {
+    if (form.technical_justification.length < 50) return toast.error("Justifikasi teknis minimal 50 karakter");
+    if (!form.items.length) return toast.error("Tambahkan minimal 1 item perubahan");
+    setSaving(true);
+    try {
+      await voAPI.create(contract.id, form);
+      toast.success("VO tersimpan sebagai DRAFT");
+      onSuccess?.();
+    } catch (e) { toast.error(parseApiError(e)); }
+    finally { setSaving(false); }
+  };
+  const locations = contract.locations || [];
+  const allFacilities = locations.flatMap((l) => (l.facilities || []).map((f) => ({ ...f, loc: l })));
+  return (
+    <Modal open onClose={onClose} title="VO Baru · DRAFT" size="xl" footer={
+      <>
+        <button className="btn-secondary" onClick={onClose}>Batal</button>
+        <button className="btn-primary" onClick={submit} disabled={saving}>
+          {saving && <Spinner size={12} />} Simpan sebagai DRAFT
+        </button>
+      </>
+    }>
+      <div className="space-y-3 text-sm">
+        <div>
+          <label className="label">Judul *</label>
+          <input className="input" value={form.title} maxLength={200}
+            onChange={(e) => setForm({ ...form, title: e.target.value })}
+            placeholder="Contoh: Penambahan revetmen segmen timur akibat abrasi" />
+        </div>
+        <div>
+          <label className="label">Justifikasi Teknis * (min 50 karakter)</label>
+          <textarea className="input" rows={4} value={form.technical_justification}
+            onChange={(e) => setForm({ ...form, technical_justification: e.target.value })}
+            placeholder="Jelaskan latar belakang teknis perubahan ini..." />
+          <p className="text-[11px] text-ink-500 mt-0.5">
+            {form.technical_justification.length} / 50 karakter minimum
+          </p>
+        </div>
+        <div>
+          <label className="label">Perhitungan Volume (opsional)</label>
+          <textarea className="input" rows={2} value={form.quantity_calculation}
+            onChange={(e) => setForm({ ...form, quantity_calculation: e.target.value })} />
+        </div>
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <label className="label mb-0">Items Perubahan</label>
+            <button type="button" className="btn-ghost btn-xs" onClick={addItem}>
+              <Plus size={11} /> Tambah Item
+            </button>
+          </div>
+          {form.items.length === 0 ? (
+            <p className="text-xs text-ink-500 italic p-3 bg-ink-50 rounded">Belum ada item — klik "Tambah Item"</p>
+          ) : (
+            <div className="space-y-2">
+              {form.items.map((it, idx) => (
+                <div key={idx} className="border border-ink-200 rounded-lg p-3 text-xs space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium text-ink-700">Item {idx + 1}</span>
+                    <button className="text-red-600" onClick={() => removeItem(idx)}>
+                      <Trash2 size={11} />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="label text-[10px]">Aksi</label>
+                      <select className="select py-1 text-xs" value={it.action}
+                        onChange={(e) => updateItem(idx, "action", e.target.value)}>
+                        <option value="add">Tambah Item Baru</option>
+                        <option value="increase">Tambah Volume</option>
+                        <option value="decrease">Kurangi Volume</option>
+                        <option value="modify_spec">Ubah Spesifikasi</option>
+                        <option value="remove">Hilangkan Item</option>
+                      </select>
+                    </div>
+                    {it.action === "add" ? (
+                      <div>
+                        <label className="label text-[10px]">Fasilitas Target</label>
+                        <select className="select py-1 text-xs" value={it.facility_id}
+                          onChange={(e) => updateItem(idx, "facility_id", e.target.value)}>
+                          <option value="">— pilih —</option>
+                          {allFacilities.map((f) => (
+                            <option key={f.id} value={f.id}>[{f.loc.location_code}] {f.facility_code} {f.facility_name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    ) : (
+                      <div>
+                        <label className="label text-[10px]">BOQ Item ID</label>
+                        <input className="input py-1 text-xs font-mono" value={it.boq_item_id}
+                          onChange={(e) => updateItem(idx, "boq_item_id", e.target.value)}
+                          placeholder="UUID dari tab BOQ" />
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Deskripsi</label>
+                    <input className="input py-1 text-xs" value={it.description}
+                      onChange={(e) => updateItem(idx, "description", e.target.value)} />
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="label text-[10px]">Satuan</label>
+                      <input className="input py-1 text-xs" value={it.unit}
+                        onChange={(e) => updateItem(idx, "unit", e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="label text-[10px]">Volume Delta</label>
+                      <input type="number" step="any" className="input py-1 text-xs" value={it.volume_delta}
+                        onChange={(e) => updateItem(idx, "volume_delta", e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="label text-[10px]">Harga Satuan</label>
+                      <input type="number" step="any" className="input py-1 text-xs" value={it.unit_price}
+                        onChange={(e) => updateItem(idx, "unit_price", e.target.value)} />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function VODetailModal({ vo, onClose }) {
+  return (
+    <Modal open onClose={onClose} title={`Detail ${vo.vo_number}`} size="lg" footer={
+      <button className="btn-primary" onClick={onClose}>Tutup</button>
+    }>
+      <div className="space-y-3 text-sm">
+        <div className="flex items-center gap-2">
+          <span className={`text-[10px] px-2 py-0.5 rounded border font-medium ${VO_STATUS_BADGE[vo.status]}`}>
+            {VO_STATUS_LABEL[vo.status] || vo.status}
+          </span>
+          <span className="font-medium text-ink-900">{vo.title}</span>
+        </div>
+        <div>
+          <p className="text-xs text-ink-500 font-medium mb-0.5">Justifikasi Teknis</p>
+          <p className="whitespace-pre-line text-sm">{vo.technical_justification}</p>
+        </div>
+        {vo.quantity_calculation && (
+          <div>
+            <p className="text-xs text-ink-500 font-medium mb-0.5">Perhitungan Volume</p>
+            <p className="whitespace-pre-line text-sm">{vo.quantity_calculation}</p>
+          </div>
+        )}
+        <div className="grid grid-cols-2 gap-3 text-xs">
+          <div>
+            <p className="text-ink-500">Dampak Biaya</p>
+            <p className={`font-semibold ${vo.cost_impact >= 0 ? "text-ink-800" : "text-red-700"}`}>
+              {vo.cost_impact >= 0 ? "+" : ""}{fmtCurrency(vo.cost_impact)}
+            </p>
+          </div>
+          <div>
+            <p className="text-ink-500">Dibuat</p>
+            <p>{fmtDate(vo.created_at)}</p>
+          </div>
+        </div>
+        {vo.rejection_reason && (
+          <div className="p-3 rounded bg-red-50 border border-red-200 text-xs text-red-800">
+            <p className="font-semibold">Ditolak</p>
+            <p className="mt-1">{vo.rejection_reason}</p>
+          </div>
+        )}
+        {vo.items?.length > 0 && (
+          <div>
+            <p className="text-xs text-ink-500 font-medium mb-1">{vo.items.length} Item Perubahan</p>
+            <div className="space-y-1">
+              {vo.items.map((it, i) => (
+                <div key={it.id || i} className="text-xs border border-ink-200 rounded p-2">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono uppercase text-[10px] bg-ink-100 px-1.5 py-0.5 rounded">
+                      {it.action}
+                    </span>
+                    <span className="font-medium">{it.description}</span>
+                  </div>
+                  <div className="text-ink-500 mt-0.5">
+                    Δ {it.volume_delta} {it.unit} × {fmtCurrency(it.unit_price)} = <span className="font-semibold">{fmtCurrency(it.cost_impact)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+function VOActionModal({ vo, action, onClose, onConfirm }) {
+  const [notes, setNotes] = useState("");
+  const [reason, setReason] = useState("");
+  const isApprove = action === "approve";
+  const isReject = action === "reject";
+  const canConfirm = isApprove || (isReject && reason.trim().length >= 20);
+  return (
+    <Modal open onClose={onClose}
+      title={isApprove ? `Approve ${vo.vo_number}` : `Reject ${vo.vo_number}`}
+      size="md"
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose}>Batal</button>
+          <button
+            className={isReject ? "btn-primary bg-red-600 hover:bg-red-700 border-red-600" : "btn-primary"}
+            onClick={() => onConfirm(isReject ? { reason } : { notes })}
+            disabled={!canConfirm}>
+            {isReject ? "Reject" : "Approve"}
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <p className="text-sm text-ink-700">{vo.title}</p>
+        {isApprove ? (
+          <div>
+            <label className="label">Catatan (opsional)</label>
+            <textarea className="input" rows={3} value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Catatan approval..." />
+            <p className="text-[11px] text-amber-700 mt-1">
+              ⓘ Approve = VO masuk antrean BUNDLED. Belum mengubah BOQ sampai di-bundle ke Addendum yang ditandatangani.
+            </p>
+          </div>
+        ) : (
+          <div>
+            <label className="label">Alasan Penolakan * (min 20 karakter)</label>
+            <textarea className="input" rows={4} value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="Jelaskan alasan teknis/administratif penolakan..." />
+            <p className="text-[11px] text-ink-500 mt-0.5">
+              {reason.trim().length} / 20 karakter · Penolakan bersifat terminal (tidak bisa di-undo)
+            </p>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// Field Observations Panel — MC-0 + MC-N
+// ════════════════════════════════════════════════════════════════════════════
+function FieldObservationsPanel({ contract, onChange }) {
+  const [list, setList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreate, setShowCreate] = useState(false);
+  const refresh = () => {
+    setLoading(true);
+    fieldObsAPI.listByContract(contract.id)
+      .then(({ data }) => setList(data.items || []))
+      .finally(() => setLoading(false));
+  };
+  useEffect(() => { refresh(); }, [contract.id]);
+  const hasMC0 = list.some((o) => o.type === "mc_0");
+  const del = async (id) => {
+    if (!confirm("Hapus observasi ini?")) return;
+    try { await fieldObsAPI.remove(id); toast.success("Terhapus"); refresh(); }
+    catch (e) { toast.error(parseApiError(e)); }
+  };
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <div className="text-xs text-ink-500">
+          {list.length} observasi · <span className="font-medium">Non-legal</span> — hanya identifikasi lapangan, tidak mengubah BOQ
+        </div>
+        <button className="btn-primary btn-sm" onClick={() => setShowCreate(true)}>
+          <Plus size={13} /> {hasMC0 ? "MC Lanjutan" : "MC-0"}
+        </button>
+      </div>
+      {loading ? <PageLoader /> : list.length === 0 ? (
+        <Empty icon={ClipboardList} title="Belum ada observasi lapangan"
+          description="MC-0 (Mutual Check awal) dilakukan sebelum pelaksanaan untuk validasi volume BOQ vs kondisi lapangan." />
+      ) : (
+        <div className="space-y-2">
+          {list.map((o) => (
+            <div key={o.id} className="card p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[10px] px-2 py-0.5 rounded border font-semibold ${
+                      o.type === "mc_0" ? "bg-brand-50 text-brand-700 border-brand-200"
+                                       : "bg-slate-100 text-slate-700 border-slate-200"
+                    }`}>
+                      {o.type === "mc_0" ? "MC-0" : "MC Lanjutan"}
+                    </span>
+                    <span className="text-xs text-ink-500">{fmtDate(o.observation_date)}</span>
+                  </div>
+                  <p className="font-medium text-ink-900 mt-1">{o.title}</p>
+                  <p className="text-xs text-ink-600 mt-1 line-clamp-3 whitespace-pre-line">{o.findings}</p>
+                  {o.attendees && (<p className="text-[11px] text-ink-500 mt-1">Hadir: {o.attendees}</p>)}
+                </div>
+                <button className="btn-ghost btn-xs text-red-600" onClick={() => del(o.id)}>
+                  <Trash2 size={11} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {showCreate && (
+        <FOCreateModal contract={contract} hasMC0={hasMC0}
+          onClose={() => setShowCreate(false)}
+          onSuccess={() => { setShowCreate(false); refresh(); }} />
+      )}
+    </div>
+  );
+}
+
+function FOCreateModal({ contract, hasMC0, onClose, onSuccess }) {
+  const [form, setForm] = useState({
+    type: hasMC0 ? "mc_interim" : "mc_0",
+    observation_date: new Date().toISOString().slice(0, 10),
+    title: "", findings: "", attendees: "",
+  });
+  const [saving, setSaving] = useState(false);
+  const submit = async () => {
+    if (form.findings.length < 10) return toast.error("Temuan minimal 10 karakter");
+    setSaving(true);
+    try { await fieldObsAPI.create(contract.id, form); toast.success("Observasi tersimpan"); onSuccess?.(); }
+    catch (e) { toast.error(parseApiError(e)); }
+    finally { setSaving(false); }
+  };
+  return (
+    <Modal open onClose={onClose} title="Observasi Lapangan Baru" size="lg" footer={
+      <>
+        <button className="btn-secondary" onClick={onClose}>Batal</button>
+        <button className="btn-primary" onClick={submit} disabled={saving}>
+          {saving && <Spinner size={12} />} Simpan
+        </button>
+      </>
+    }>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Jenis</label>
+            <select className="select" value={form.type}
+              onChange={(e) => setForm({ ...form, type: e.target.value })}
+              disabled={!hasMC0}>
+              {!hasMC0 && <option value="mc_0">MC-0 (awal pelaksanaan)</option>}
+              <option value="mc_interim">MC Lanjutan (interim)</option>
+            </select>
+            {!hasMC0 && (
+              <p className="text-[11px] text-amber-700 mt-0.5">ⓘ MC-0 wajib dibuat sebelum MC lanjutan</p>
+            )}
+          </div>
+          <div>
+            <label className="label">Tanggal</label>
+            <input type="date" className="input" value={form.observation_date}
+              onChange={(e) => setForm({ ...form, observation_date: e.target.value })} />
+          </div>
+        </div>
+        <div>
+          <label className="label">Judul *</label>
+          <input className="input" value={form.title}
+            onChange={(e) => setForm({ ...form, title: e.target.value })}
+            placeholder="Contoh: MC-0 Lokasi Tallo" />
+        </div>
+        <div>
+          <label className="label">Temuan * (min 10 karakter)</label>
+          <textarea className="input" rows={5} value={form.findings}
+            onChange={(e) => setForm({ ...form, findings: e.target.value })}
+            placeholder="Catatan hasil pengukuran vs BOQ kontrak. Item/volume yang beda..." />
+        </div>
+        <div>
+          <label className="label">Daftar Hadir</label>
+          <input className="input" value={form.attendees}
+            onChange={(e) => setForm({ ...form, attendees: e.target.value })}
+            placeholder="PPK: ..., Konsultan: ..., Kontraktor: ..." />
+        </div>
+        <div className="p-2 rounded bg-slate-50 border border-slate-200 text-[11px] text-slate-600">
+          ⓘ Observasi lapangan <strong>tidak</strong> mengubah BOQ. Untuk mengusulkan perubahan, buat VO yang merujuk ke observasi ini.
+        </div>
+      </div>
     </Modal>
   );
 }

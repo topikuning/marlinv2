@@ -120,6 +120,30 @@ export const contractsAPI = {
     api.post(`/contracts/${id}/unlock`, { reason, duration_minutes }),
   lock: (id) => api.post(`/contracts/${id}/lock`),
   syncStatus: (id) => api.get(`/contracts/${id}/sync-status`),
+
+  // BOQ Lifecycle
+  bast: (id) => api.get(`/contracts/${id}/bast`),
+};
+
+export const voAPI = {
+  listByContract: (cid, params) =>
+    api.get(`/variation-orders/by-contract/${cid}`, { params }),
+  get: (id) => api.get(`/variation-orders/${id}`),
+  create: (cid, data) => api.post(`/variation-orders/by-contract/${cid}`, data),
+  update: (id, data) => api.put(`/variation-orders/${id}`, data),
+  remove: (id) => api.delete(`/variation-orders/${id}`),
+  submit: (id) => api.post(`/variation-orders/${id}/submit`),
+  review: (id, data) => api.post(`/variation-orders/${id}/review`, data),
+  approve: (id, data) => api.post(`/variation-orders/${id}/approve`, data),
+  reject: (id, data) => api.post(`/variation-orders/${id}/reject`, data),
+};
+
+export const fieldObsAPI = {
+  listByContract: (cid, params) =>
+    api.get(`/field-observations/by-contract/${cid}`, { params }),
+  create: (cid, data) =>
+    api.post(`/field-observations/by-contract/${cid}`, data),
+  remove: (id) => api.delete(`/field-observations/${id}`),
 };
 
 export const locationsAPI = {
