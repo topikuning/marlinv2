@@ -112,3 +112,26 @@ def user_can_access_contract(db: Session, user: User, contract_id: str) -> bool:
         assigned = [str(c) for c in (user.assigned_contract_ids or [])]
         return str(contract_id) in assigned
     return False
+
+
+def filter_contracts_for_user(query, user: User):
+    """
+    Reduce a Contract query so it only returns contracts the user may see.
+    Selaras dengan user_can_access_contract — admin/manager/itjen/viewer
+    lihat semua, role STRICT-scoped (ppk/konsultan/kontraktor) dibatasi
+    assigned_contract_ids. Dipakai endpoint listing yang butuh filter
+    massal (peta dashboard, dll).
+    """
+    from sqlalchemy import false
+    from app.models.models import Contract
+
+    role = user.role_obj
+    role_code = role.code if role else None
+    if role_code in ("superadmin", "admin_pusat", "itjen", "viewer", "manager"):
+        return query
+    if role_code in ("ppk", "konsultan", "kontraktor"):
+        assigned = [str(c) for c in (user.assigned_contract_ids or [])]
+        if not assigned:
+            return query.filter(false())
+        return query.filter(Contract.id.in_(assigned))
+    return query.filter(false())

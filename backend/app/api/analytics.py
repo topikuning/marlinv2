@@ -207,3 +207,162 @@ def scurve(
         return get_scurve_data(db, contract_id)
     except ValueError as e:
         raise HTTPException(404, str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Spatial Dashboard
+# ─────────────────────────────────────────────────────────────────────────────
+from app.api.deps import filter_contracts_for_user
+from app.models.models import (
+    WeeklyReportPhoto, WeeklyReport,
+)
+
+
+@router.get("/map-locations", response_model=dict)
+def map_locations(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Daftar lokasi proyek dengan koordinat untuk dashboard peta. Hanya
+    lokasi dengan latitude+longitude yang dikembalikan; lokasi tanpa
+    koordinat di-skip secara senyap (akan tampil di list lokasi normal,
+    tapi tidak di peta).
+
+    Setiap entri membungkus location + ringkasan kontrak induk + daftar
+    fasilitas. Frontend memakai ini untuk render marker dan panel info.
+    """
+    contracts_q = (
+        db.query(Contract)
+        .filter(Contract.deleted_at.is_(None))
+    )
+    contracts_q = filter_contracts_for_user(contracts_q, current_user)
+    contract_ids = [c.id for c in contracts_q.all()]
+    if not contract_ids:
+        return {"items": []}
+
+    locs = (
+        db.query(Location, Contract)
+        .join(Contract, Contract.id == Location.contract_id)
+        .filter(
+            Location.contract_id.in_(contract_ids),
+            Location.latitude.isnot(None),
+            Location.longitude.isnot(None),
+            Location.is_active == True,  # noqa: E712
+        )
+        .all()
+    )
+
+    # Pre-fetch facilities + last weekly progress per contract.
+    contract_progress = {}
+    latest_weeklies = (
+        db.query(WeeklyReport)
+        .filter(WeeklyReport.contract_id.in_(contract_ids), WeeklyReport.is_deleted == False)  # noqa: E712
+        .order_by(WeeklyReport.contract_id, WeeklyReport.week_number.desc())
+        .all()
+    )
+    for w in latest_weeklies:
+        if w.contract_id not in contract_progress:
+            contract_progress[w.contract_id] = {
+                "week_number": w.week_number,
+                "planned_pct": float(w.planned_cumulative_pct or 0),
+                "actual_pct": float(w.actual_cumulative_pct or 0),
+            }
+
+    items = []
+    for loc, c in locs:
+        facilities = (
+            db.query(Facility)
+            .filter(Facility.location_id == loc.id, Facility.is_active == True)  # noqa: E712
+            .order_by(Facility.display_order, Facility.facility_code)
+            .all()
+        )
+        progress = contract_progress.get(c.id, {})
+        items.append({
+            "location_id": str(loc.id),
+            "location_code": loc.location_code,
+            "location_name": loc.name,
+            "village": loc.village,
+            "district": loc.district,
+            "city": loc.city,
+            "province": loc.province,
+            "latitude": float(loc.latitude),
+            "longitude": float(loc.longitude),
+            "contract_id": str(c.id),
+            "contract_number": c.contract_number,
+            "contract_name": c.contract_name,
+            "contract_status": c.status.value if hasattr(c.status, "value") else c.status,
+            "current_value": float(c.current_value or 0),
+            "start_date": c.start_date.isoformat() if c.start_date else None,
+            "end_date": c.end_date.isoformat() if c.end_date else None,
+            "duration_days": c.duration_days,
+            "latest_week": progress.get("week_number"),
+            "planned_pct": progress.get("planned_pct"),
+            "actual_pct": progress.get("actual_pct"),
+            "deviation_pct": (
+                (progress.get("actual_pct", 0) - progress.get("planned_pct", 0))
+                if progress.get("planned_pct") is not None else None
+            ),
+            "facilities": [
+                {
+                    "id": str(f.id),
+                    "facility_code": f.facility_code,
+                    "facility_name": f.facility_name,
+                    "facility_type": f.facility_type,
+                    "total_value": float(f.total_value or 0),
+                }
+                for f in facilities
+            ],
+        })
+    return {"items": items}
+
+
+@router.get("/facility-photos/{facility_id}", response_model=dict)
+def facility_photos(
+    facility_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Foto dokumentasi suatu fasilitas, dikelompokkan per tanggal pengambilan.
+    Sumber: weekly_report_photos.facility_id (daily report tidak punya
+    facility_id, jadi tidak masuk gallery per-fasilitas).
+
+    Akses: hanya kontrak yang user punya akses (sama seperti list normal).
+    """
+    fac = db.query(Facility).filter(Facility.id == facility_id).first()
+    if not fac:
+        raise HTTPException(404, "Fasilitas tidak ditemukan")
+    loc = db.query(Location).filter(Location.id == fac.location_id).first()
+    if not loc or not user_can_access_contract(db, current_user, str(loc.contract_id)):
+        raise HTTPException(403, "Akses ditolak")
+
+    rows = (
+        db.query(WeeklyReportPhoto)
+        .filter(WeeklyReportPhoto.facility_id == facility_id)
+        .order_by(WeeklyReportPhoto.taken_at.desc().nullslast(), WeeklyReportPhoto.created_at.desc())
+        .all()
+    )
+    groups: dict = {}
+    for p in rows:
+        when = p.taken_at or p.created_at
+        key = when.date().isoformat() if when else "unknown"
+        groups.setdefault(key, []).append({
+            "id": str(p.id),
+            "file_path": p.file_path,
+            "thumbnail_path": p.thumbnail_path,
+            "caption": p.caption,
+            "taken_at": p.taken_at.isoformat() + "Z" if p.taken_at else None,
+            "created_at": p.created_at.isoformat() + "Z" if p.created_at else None,
+        })
+    sorted_groups = sorted(groups.items(), key=lambda kv: kv[0], reverse=True)
+    return {
+        "facility": {
+            "id": str(fac.id),
+            "code": fac.facility_code,
+            "name": fac.facility_name,
+            "type": fac.facility_type,
+        },
+        "groups": [{"date": k, "photos": v} for k, v in sorted_groups],
+        "total": len(rows),
+    }

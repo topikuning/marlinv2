@@ -124,13 +124,14 @@ PERMISSIONS = [
 # ─────────────────────────────────────────────────────────────────────────────
 MENUS = [
     ("dashboard",           "Dashboard",           "LayoutDashboard", "/",                    None,     1),
-    ("contracts",           "Kontrak",             "FileText",        "/contracts",           None,     2),
-    ("reports_daily",       "Laporan Harian",      "CalendarDays",    "/reports/daily",       None,     3),
-    ("reports_weekly",      "Laporan Mingguan",    "CalendarRange",   "/reports/weekly",      None,     4),
-    ("scurve",              "Kurva S",             "TrendingUp",      "/scurve",              None,     5),
-    ("payments",            "Termin Pembayaran",   "Wallet",          "/payments",            None,     6),
-    ("reviews",             "Review Lapangan",     "ClipboardCheck",  "/reviews",             None,     7),
-    ("warnings",            "Early Warning",       "AlertTriangle",   "/warnings",            None,     8),
+    ("dashboard_eksekutif",  "Dashboard Eksekutif", "Map",             "/eksekutif",           None,     2),
+    ("contracts",           "Kontrak",             "FileText",        "/contracts",           None,     3),
+    ("reports_daily",       "Laporan Harian",      "CalendarDays",    "/reports/daily",       None,     4),
+    ("reports_weekly",      "Laporan Mingguan",    "CalendarRange",   "/reports/weekly",      None,     5),
+    ("scurve",              "Kurva S",             "TrendingUp",      "/scurve",              None,     6),
+    ("payments",            "Termin Pembayaran",   "Wallet",          "/payments",            None,     7),
+    ("reviews",             "Review Lapangan",     "ClipboardCheck",  "/reviews",             None,     8),
+    ("warnings",            "Early Warning",       "AlertTriangle",   "/warnings",            None,     9),
     ("master",              "Master Data",         "Database",        None,                   None,    90),
     ("master_companies",    "Perusahaan",          "Building2",       "/master/companies",    "master", 91),
     ("master_ppk",          "PPK",                 "UserCog",         "/master/ppk",          "master", 92),
@@ -406,6 +407,9 @@ def run():
                              order_index=order, is_active=True)
                 db.add(m)
                 db.flush()
+            else:
+                # Refresh metadata supaya re-seed merebahkan urutan / label baru
+                m.label = label; m.icon = icon; m.path = path; m.order_index = order
             parent_map[code] = m.id
         for code, label, icon, path, parent_code, order in [m for m in MENUS if m[4] is not None]:
             m = db.query(MenuItem).filter(MenuItem.code == code).first()
@@ -415,6 +419,9 @@ def run():
                              order_index=order, is_active=True)
                 db.add(m)
                 db.flush()
+            else:
+                m.label = label; m.icon = icon; m.path = path
+                m.parent_id = parent_map.get(parent_code); m.order_index = order
             parent_map[code] = m.id
         db.flush()
         all_menu_codes = [m.code for m in db.query(MenuItem).all()]
