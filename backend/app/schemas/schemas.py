@@ -534,6 +534,7 @@ class WeeklyReportDetail(WeeklyReportOut):
 class DailyReportCreate(BaseModel):
     contract_id: UUID
     location_id: Optional[UUID] = None
+    facility_id: Optional[UUID] = None
     report_date: date
     activities: Optional[str] = None
     manpower_count: int = 0
@@ -550,6 +551,7 @@ class DailyReportCreate(BaseModel):
 
 class DailyReportUpdate(BaseModel):
     location_id: Optional[UUID] = None
+    facility_id: Optional[UUID] = None
     report_date: Optional[date] = None
     activities: Optional[str] = None
     manpower_count: Optional[int] = None

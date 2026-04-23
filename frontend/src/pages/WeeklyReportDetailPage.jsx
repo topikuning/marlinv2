@@ -73,7 +73,7 @@ export default function WeeklyReportDetailPage() {
         <NarrativeTab report={report} onChange={setReport} />
       )}
       {tab === "photos" && (
-        <PhotosTab report={report} onChange={setReport} />
+        <PhotosTab report={report} boqItems={boqItems} onChange={setReport} />
       )}
     </div>
   );
@@ -468,8 +468,27 @@ function NarrativeTab({ report, onChange }) {
 // Photos tab
 // ════════════════════════════════════════════════════════════════════════════
 
-function PhotosTab({ report, onChange }) {
+function PhotosTab({ report, boqItems, onChange }) {
   const [uploading, setUploading] = useState(false);
+  const [tagFacilityId, setTagFacilityId] = useState("");
+
+  // Derive list fasilitas unik dari BOQ items agar user bisa tag foto ke
+  // fasilitas spesifik sebelum upload. Foto tanpa tag masih disimpan tapi
+  // tidak muncul di galeri Dashboard Eksekutif.
+  const facilityOptions = (() => {
+    const seen = new Map();
+    (boqItems || []).forEach((b) => {
+      if (b.facility_id && !seen.has(b.facility_id)) {
+        seen.set(b.facility_id, {
+          id: b.facility_id,
+          code: b.facility_code,
+          name: b.facility_name,
+          location: b.location_name,
+        });
+      }
+    });
+    return Array.from(seen.values());
+  })();
 
   const onFile = async (e) => {
     const files = Array.from(e.target.files || []);
@@ -477,7 +496,7 @@ function PhotosTab({ report, onChange }) {
     setUploading(true);
     try {
       for (const f of files) {
-        await weeklyAPI.uploadPhoto(report.id, f);
+        await weeklyAPI.uploadPhoto(report.id, f, null, tagFacilityId || null);
       }
       toast.success(`${files.length} foto di-upload`);
       const { data } = await weeklyAPI.get(report.id);
@@ -503,23 +522,44 @@ function PhotosTab({ report, onChange }) {
 
   return (
     <div className="card p-6">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <h3 className="font-display font-semibold text-ink-800">
           Foto Progres Minggu Ini
         </h3>
         {!report.is_locked && (
-          <label className="btn-primary btn-xs cursor-pointer">
-            <Upload size={11} /> Upload Foto
-            <input
-              type="file"
-              hidden
-              multiple
-              accept="image/*"
-              onChange={onFile}
-            />
-          </label>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select
+              className="select text-xs py-1"
+              value={tagFacilityId}
+              onChange={(e) => setTagFacilityId(e.target.value)}
+              title="Foto akan di-tag ke fasilitas ini. Kosongkan untuk foto umum."
+            >
+              <option value="">Tag fasilitas: (umum, tanpa tag)</option>
+              {facilityOptions.map((f) => (
+                <option key={f.id} value={f.id}>
+                  [{f.code}] {f.name}
+                </option>
+              ))}
+            </select>
+            <label className="btn-primary btn-xs cursor-pointer">
+              <Upload size={11} /> Upload Foto
+              <input
+                type="file"
+                hidden
+                multiple
+                accept="image/*"
+                onChange={onFile}
+              />
+            </label>
+          </div>
         )}
       </div>
+      {!report.is_locked && (
+        <p className="text-[11px] text-ink-500 mb-3">
+          💡 Pilih fasilitas terkait sebelum upload agar foto muncul di
+          galeri Dashboard Eksekutif untuk fasilitas tersebut.
+        </p>
+      )}
       {uploading && (
         <div className="text-xs text-ink-500 mb-2 flex items-center gap-2">
           <Spinner size={12} /> Mengunggah...

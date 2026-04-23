@@ -731,6 +731,11 @@ class DailyReport(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     contract_id = Column(UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="CASCADE"), nullable=False)
     location_id = Column(UUID(as_uuid=True), ForeignKey("locations.id"))
+    # Fasilitas target laporan harian. Nullable untuk kompatibilitas data
+    # legacy (laporan lama tidak punya field ini), tapi form baru mewajibkan
+    # supaya foto dari laporan ini bisa muncul di galeri Dashboard Eksekutif
+    # per-fasilitas.
+    facility_id = Column(UUID(as_uuid=True), ForeignKey("facilities.id"))
     report_date = Column(Date, nullable=False, index=True)
 
     activities = Column(Text)           # narrative of the day
@@ -764,6 +769,10 @@ class DailyReportPhoto(Base):
     __tablename__ = "daily_report_photos"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     daily_report_id = Column(UUID(as_uuid=True), ForeignKey("daily_reports.id", ondelete="CASCADE"), nullable=False)
+    # Foto terikat ke fasilitas tertentu (inherit dari DailyReport.facility_id
+    # saat diunggah) supaya Dashboard Eksekutif bisa menampilkannya di galeri
+    # fasilitas yang tepat. Nullable untuk foto legacy.
+    facility_id = Column(UUID(as_uuid=True), ForeignKey("facilities.id"))
     file_path = Column(String(500), nullable=False)
     thumbnail_path = Column(String(500))
     caption = Column(Text)

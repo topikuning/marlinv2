@@ -214,7 +214,7 @@ def scurve(
 # ─────────────────────────────────────────────────────────────────────────────
 from app.api.deps import filter_contracts_for_user
 from app.models.models import (
-    WeeklyReportPhoto, WeeklyReport,
+    WeeklyReportPhoto, WeeklyReport, DailyReportPhoto, DailyReport,
 )
 
 
@@ -337,25 +337,67 @@ def facility_photos(
     if not loc or not user_can_access_contract(db, current_user, str(loc.contract_id)):
         raise HTTPException(403, "Akses ditolak")
 
-    rows = (
-        db.query(WeeklyReportPhoto)
+    # Foto dari 2 sumber: weekly_report_photos + daily_report_photos yang
+    # terikat fasilitas ini. Digabung, lalu dikelompokkan per tanggal.
+    weekly_rows = (
+        db.query(WeeklyReportPhoto, WeeklyReport)
+        .join(WeeklyReport, WeeklyReport.id == WeeklyReportPhoto.weekly_report_id)
         .filter(WeeklyReportPhoto.facility_id == facility_id)
-        .order_by(WeeklyReportPhoto.taken_at.desc().nullslast(), WeeklyReportPhoto.created_at.desc())
         .all()
     )
+    daily_rows = (
+        db.query(DailyReportPhoto, DailyReport)
+        .join(DailyReport, DailyReport.id == DailyReportPhoto.daily_report_id)
+        .filter(
+            DailyReportPhoto.facility_id == facility_id,
+            DailyReport.is_deleted == False,  # noqa: E712
+        )
+        .all()
+    )
+
     groups: dict = {}
-    for p in rows:
-        when = p.taken_at or p.created_at
-        key = when.date().isoformat() if when else "unknown"
+
+    def _pick_date(photo, report, fallback_attr):
+        # Pakai taken_at kalau ada, fallback ke report_date (daily) atau
+        # period_end (weekly), fallback terakhir ke created_at.
+        if photo.taken_at:
+            return photo.taken_at.date()
+        if report is not None and hasattr(report, fallback_attr):
+            val = getattr(report, fallback_attr)
+            if val:
+                return val if hasattr(val, "isoformat") and not hasattr(val, "hour") else val.date()
+        if photo.created_at:
+            return photo.created_at.date()
+        return None
+
+    for p, rep in weekly_rows:
+        d = _pick_date(p, rep, "period_end")
+        key = d.isoformat() if d else "unknown"
         groups.setdefault(key, []).append({
             "id": str(p.id),
+            "source": "weekly",
             "file_path": p.file_path,
             "thumbnail_path": p.thumbnail_path,
             "caption": p.caption,
             "taken_at": p.taken_at.isoformat() + "Z" if p.taken_at else None,
             "created_at": p.created_at.isoformat() + "Z" if p.created_at else None,
         })
+
+    for p, rep in daily_rows:
+        d = _pick_date(p, rep, "report_date")
+        key = d.isoformat() if d else "unknown"
+        groups.setdefault(key, []).append({
+            "id": str(p.id),
+            "source": "daily",
+            "file_path": p.file_path,
+            "thumbnail_path": p.thumbnail_path,
+            "caption": p.caption,
+            "taken_at": p.taken_at.isoformat() + "Z" if p.taken_at else None,
+            "created_at": p.created_at.isoformat() + "Z" if p.created_at else None,
+        })
+
     sorted_groups = sorted(groups.items(), key=lambda kv: kv[0], reverse=True)
+    total = len(weekly_rows) + len(daily_rows)
     return {
         "facility": {
             "id": str(fac.id),
@@ -364,5 +406,6 @@ def facility_photos(
             "type": fac.facility_type,
         },
         "groups": [{"date": k, "photos": v} for k, v in sorted_groups],
-        "total": len(rows),
+        "total": total,
+        "sources": {"weekly": len(weekly_rows), "daily": len(daily_rows)},
     }

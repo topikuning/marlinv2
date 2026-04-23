@@ -46,6 +46,9 @@ MIGRATION_SQL = [
     "ALTER TABLE boq_items ADD COLUMN IF NOT EXISTS boq_revision_id UUID",
     "ALTER TABLE boq_items ADD COLUMN IF NOT EXISTS source_item_id UUID",
     "ALTER TABLE boq_items ADD COLUMN IF NOT EXISTS change_type VARCHAR(20)",
+    # Laporan harian berbasis fasilitas (untuk feed Dashboard Eksekutif)
+    "ALTER TABLE daily_reports ADD COLUMN IF NOT EXISTS facility_id UUID",
+    "ALTER TABLE daily_report_photos ADD COLUMN IF NOT EXISTS facility_id UUID",
     """CREATE TABLE IF NOT EXISTS master_facilities (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         code VARCHAR(40) UNIQUE NOT NULL,
