@@ -10,7 +10,7 @@ import {
 } from "recharts";
 import {
   MapPin, Layers, ChevronLeft, Calendar, Image as ImageIcon, X,
-  ChevronRight, ChevronLeft as ChevLeft, Search, Maximize2, Minimize2,
+  ChevronRight, Search, Maximize2, Minimize2,
 } from "lucide-react";
 import { analyticsAPI } from "@/api";
 import { PageLoader, Empty } from "@/components/ui";
@@ -19,7 +19,7 @@ import {
 } from "@/utils/format";
 import toast from "react-hot-toast";
 
-// Leaflet default marker icon fix untuk bundler
+// Leaflet default marker icon fix
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconUrl: markerIcon,
@@ -38,7 +38,7 @@ const STATUS_COLOR = {
 
 function statusMarker(status, highlighted = false) {
   const color = STATUS_COLOR[status] || "#2563eb";
-  const size = highlighted ? 32 : 24;
+  const size = highlighted ? 30 : 22;
   const inner = highlighted ? 10 : 6;
   return L.divIcon({
     className: "custom-marker",
@@ -46,9 +46,8 @@ function statusMarker(status, highlighted = false) {
       background:${color};
       width:${size}px;height:${size}px;border-radius:50%;
       border:3px solid #fff;
-      box-shadow:0 2px 8px rgba(0,0,0,0.5);
+      box-shadow:0 2px 8px rgba(0,0,0,0.45);
       display:flex;align-items:center;justify-content:center;
-      ${highlighted ? "animation:pulse 1.5s infinite;" : ""}
     "><div style="background:#fff;width:${inner}px;height:${inner}px;border-radius:50%"></div></div>`,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
@@ -61,9 +60,7 @@ const INDONESIA_ZOOM = 5;
 function FlyTo({ position, zoom }) {
   const map = useMap();
   useEffect(() => {
-    if (position) {
-      map.flyTo(position, zoom ?? Math.max(map.getZoom(), 11), { duration: 0.8 });
-    }
+    if (position) map.flyTo(position, zoom ?? Math.max(map.getZoom(), 11), { duration: 0.8 });
   }, [position]);
   return null;
 }
@@ -75,7 +72,6 @@ export default function ExecutiveDashboardPage() {
   const [selected, setSelected] = useState(null);
   const [selectedFacility, setSelectedFacility] = useState(null);
   const [search, setSearch] = useState("");
-  const [showPanel, setShowPanel] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -85,8 +81,6 @@ export default function ExecutiveDashboardPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  // Search: filter markers by q yang match nama kontrak, PPK, perusahaan,
-  // lokasi, kota, atau kode lokasi.
   const filteredItems = useMemo(() => {
     if (!search.trim()) return mapItems;
     const q = search.toLowerCase();
@@ -103,153 +97,140 @@ export default function ExecutiveDashboardPage() {
   }, [mapItems, search]);
 
   const toggleFullscreen = () => {
-    if (document.fullscreenElement) {
-      document.exitFullscreen();
-    } else {
-      document.documentElement.requestFullscreen().catch(() => {});
-    }
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen().catch(() => {});
   };
 
   const closePanel = () => {
     setSelected(null);
     setSelectedFacility(null);
-    setShowPanel(true);
   };
 
   if (loading) return <PageLoader />;
 
+  const panelOpen = !!selected;
+
   return (
-    <div className="-m-4 sm:-m-6 lg:-m-6 relative h-[calc(100vh-4rem)]">
-      <style>{`
-        @keyframes pulse {
-          0%, 100% { transform: scale(1); }
-          50% { transform: scale(1.15); }
-        }
-      `}</style>
+    <div className="relative w-full h-full" style={{ minHeight: "calc(100vh - 4rem)" }}>
+      {/* Map — full bleed */}
+      <div className="absolute inset-0">
+        <MapContainer
+          center={INDONESIA_CENTER}
+          zoom={INDONESIA_ZOOM}
+          style={{ width: "100%", height: "100%" }}
+          scrollWheelZoom
+          zoomControl={false}
+        >
+          <TileLayer
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
+          {selected && <FlyTo position={[selected.latitude, selected.longitude]} />}
+          {filteredItems.map((loc) => (
+            <Marker
+              key={loc.location_id}
+              position={[loc.latitude, loc.longitude]}
+              icon={statusMarker(loc.contract_status, selected?.location_id === loc.location_id)}
+              eventHandlers={{
+                click: () => {
+                  setSelected(loc);
+                  setSelectedFacility(null);
+                },
+              }}
+            >
+              <Popup>
+                <div className="text-xs">
+                  <p className="font-semibold">{loc.location_name}</p>
+                  <p className="text-gray-500 font-mono">{loc.location_code}</p>
+                  <p className="mt-1">{loc.contract_number}</p>
+                </div>
+              </Popup>
+            </Marker>
+          ))}
+        </MapContainer>
+      </div>
 
-      {/* Map fullscreen */}
-      <MapContainer
-        center={INDONESIA_CENTER}
-        zoom={INDONESIA_ZOOM}
-        style={{ width: "100%", height: "100%" }}
-        scrollWheelZoom
-        zoomControl={false}
-      >
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
-        {selected && (
-          <FlyTo position={[selected.latitude, selected.longitude]} />
-        )}
-        {filteredItems.map((loc) => (
-          <Marker
-            key={loc.location_id}
-            position={[loc.latitude, loc.longitude]}
-            icon={statusMarker(loc.contract_status, selected?.location_id === loc.location_id)}
-            eventHandlers={{
-              click: () => {
-                setSelected(loc);
-                setSelectedFacility(null);
-                setShowPanel(true);
-              },
-            }}
-          >
-            <Popup>
-              <div className="text-xs">
-                <p className="font-semibold">{loc.location_name}</p>
-                <p className="text-gray-500 font-mono">{loc.location_code}</p>
-                <p className="mt-1">{loc.contract_number}</p>
-              </div>
-            </Popup>
-          </Marker>
-        ))}
-      </MapContainer>
-
-      {/* Search overlay — top left */}
-      <div className="absolute top-4 left-4 z-[1000] w-[360px] max-w-[calc(100vw-2rem)]">
-        <div className="bg-white rounded-xl shadow-lg border border-ink-200 p-2 flex items-center gap-2">
-          <Search size={16} className="text-ink-400 ml-2" />
+      {/* Top-right floating controls */}
+      <div className="absolute top-4 right-4 z-[1000] flex items-center gap-2">
+        {/* Search — compact, expands on focus */}
+        <div className="bg-white rounded-full shadow-lg border border-ink-200 flex items-center px-3 py-1.5 w-[280px] md:w-[360px]">
+          <Search size={14} className="text-ink-400" />
           <input
             type="text"
             placeholder="Cari PPK, perusahaan, kontrak, lokasi..."
-            className="flex-1 bg-transparent text-sm outline-none py-1"
+            className="flex-1 bg-transparent text-xs outline-none px-2 py-0.5"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
           {search && (
-            <button onClick={() => setSearch("")} className="p-1 text-ink-400 hover:text-ink-700">
-              <X size={14} />
+            <button onClick={() => setSearch("")} className="p-0.5 text-ink-400 hover:text-ink-700">
+              <X size={12} />
             </button>
           )}
         </div>
-        <div className="mt-1 text-[11px] text-ink-600 bg-white/90 px-3 py-1 rounded-full inline-block shadow">
-          {filteredItems.length} / {mapItems.length} lokasi
-          {search && ` · memfilter "${search}"`}
+        {/* Marker count pill */}
+        <div className="bg-white/95 border border-ink-200 rounded-full shadow-lg px-3 py-1.5 text-[11px] text-ink-700 whitespace-nowrap">
+          <span className="font-semibold">{filteredItems.length}</span>
+          <span className="text-ink-400"> / {mapItems.length}</span>
         </div>
+        {/* Fullscreen toggle */}
+        <button
+          onClick={toggleFullscreen}
+          className="bg-white rounded-full shadow-lg border border-ink-200 p-2 hover:bg-ink-50"
+          title="Full-screen (F11)"
+        >
+          {document.fullscreenElement ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+        </button>
       </div>
 
-      {/* Fullscreen toggle — top right */}
-      <button
-        onClick={toggleFullscreen}
-        className="absolute top-4 right-4 z-[1000] bg-white rounded-xl shadow-lg border border-ink-200 p-2.5 hover:bg-ink-50"
-        title="Full-screen (F11 juga bisa)"
-      >
-        {document.fullscreenElement ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-      </button>
-
-      {/* Empty state hint — center bottom */}
+      {/* Empty state — only saat tidak ada hasil sama sekali */}
       {filteredItems.length === 0 && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[50]">
           <div className="bg-white/95 rounded-xl shadow-lg border border-amber-200 p-4 max-w-md text-center pointer-events-auto">
             <MapPin size={32} className="mx-auto text-amber-500 mb-2" />
-            <p className="font-semibold text-ink-800">Tidak ada lokasi ditemukan</p>
+            <p className="font-semibold text-ink-800">
+              {search ? "Tidak ada hasil" : "Belum ada lokasi berkoordinat"}
+            </p>
             <p className="text-xs text-ink-600 mt-1">
               {search
                 ? "Coba kata kunci lain atau bersihkan filter."
-                : "Belum ada lokasi dengan koordinat. Lengkapi Latitude & Longitude di form Tambah Lokasi."}
+                : "Lengkapi Latitude & Longitude di form Tambah Lokasi agar marker muncul di peta."}
             </p>
           </div>
         </div>
       )}
 
-      {/* Info panel — slide in from left when location selected */}
-      {selected && showPanel && (
-        <div className="absolute top-0 left-0 bottom-0 w-full sm:w-[420px] bg-white shadow-2xl z-[999] overflow-y-auto border-r border-ink-200">
+      {/* Side panel — slide-in from LEFT saat lokasi dipilih.
+          Single panel ini switch antara mode "info" dan "foto fasilitas". */}
+      <aside
+        className={`absolute top-0 bottom-0 left-0 w-full sm:w-[420px] bg-white shadow-2xl z-[900] overflow-hidden flex flex-col transition-transform duration-300 ${
+          panelOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
+        {selected && !selectedFacility && (
           <ProjectSummary
             location={selected}
             onClose={closePanel}
             onOpenContract={() => navigate(`/contracts/${selected.contract_id}`)}
             onSelectFacility={setSelectedFacility}
           />
-        </div>
-      )}
-
-      {/* Collapse/expand panel toggle (mini) when panel hidden */}
-      {selected && !showPanel && (
-        <button
-          onClick={() => setShowPanel(true)}
-          className="absolute top-1/2 left-4 -translate-y-1/2 z-[999] bg-white rounded-r-xl shadow-lg border border-ink-200 p-3 hover:bg-ink-50"
-          title="Tampilkan panel info"
-        >
-          <ChevronRight size={18} />
-        </button>
-      )}
-
-      {/* Photo gallery lightbox/drawer — covers when facility selected */}
-      {selectedFacility && (
-        <PhotoGalleryDrawer
-          facility={selectedFacility}
-          onClose={() => setSelectedFacility(null)}
-        />
-      )}
+        )}
+        {selected && selectedFacility && (
+          <FacilityPhotos
+            facility={selectedFacility}
+            location={selected}
+            onBack={() => setSelectedFacility(null)}
+            onClose={closePanel}
+          />
+        )}
+      </aside>
     </div>
   );
 }
 
 
 // ────────────────────────────────────────────────────────────────────────────
-// Project Summary (slide-in left panel)
+// Project Summary (panel mode: info)
 // ────────────────────────────────────────────────────────────────────────────
 function ProjectSummary({ location: loc, onClose, onOpenContract, onSelectFacility }) {
   const [scurve, setScurve] = useState(null);
@@ -268,9 +249,9 @@ function ProjectSummary({ location: loc, onClose, onOpenContract, onSelectFacili
       : "text-red-700";
 
   return (
-    <div>
-      {/* Header dengan close */}
-      <div className="sticky top-0 bg-white z-10 px-5 pt-4 pb-3 border-b border-ink-100 flex items-start justify-between gap-3">
+    <>
+      {/* Sticky header */}
+      <div className="flex-shrink-0 px-5 pt-4 pb-3 border-b border-ink-100 flex items-start justify-between gap-3">
         <div className="flex-1 min-w-0">
           <span className={contractStatusBadge(loc.contract_status)}>
             {loc.contract_status}
@@ -282,22 +263,23 @@ function ProjectSummary({ location: loc, onClose, onOpenContract, onSelectFacili
             {loc.contract_number}
           </p>
         </div>
-        <button onClick={onClose} className="text-ink-400 hover:text-ink-800 p-1" title="Tutup">
+        <button onClick={onClose} className="text-ink-400 hover:text-ink-800 p-1 -mt-1" title="Tutup (Esc)">
           <X size={18} />
         </button>
       </div>
 
-      <div className="p-5 space-y-4">
+      {/* Scrollable body */}
+      <div className="flex-1 overflow-y-auto p-5 space-y-4">
         <div className="text-xs space-y-1">
           <div className="flex items-center gap-1.5 text-ink-600">
             <MapPin size={12} className="text-brand-600" />
             <span className="font-medium">{loc.location_name}</span>
-            <span className="font-mono text-[10px] text-ink-400 ml-auto">
-              {loc.latitude.toFixed(4)}, {loc.longitude.toFixed(4)}
-            </span>
           </div>
           <p className="text-[11px] text-ink-500 pl-4">
             {[loc.village, loc.district, loc.city, loc.province].filter(Boolean).join(", ")}
+          </p>
+          <p className="text-[11px] text-ink-400 pl-4 font-mono">
+            {loc.latitude.toFixed(4)}, {loc.longitude.toFixed(4)}
           </p>
         </div>
 
@@ -310,7 +292,6 @@ function ProjectSummary({ location: loc, onClose, onOpenContract, onSelectFacili
           <Cell label="Selesai" value={fmtDate(loc.end_date)} />
         </div>
 
-        {/* Progress bar */}
         <div className="border-t border-ink-100 pt-3">
           <p className="text-[10px] uppercase tracking-wider text-ink-400 font-medium mb-2">
             Progress Fisik {loc.latest_week && `· Minggu ${loc.latest_week}`}
@@ -344,7 +325,6 @@ function ProjectSummary({ location: loc, onClose, onOpenContract, onSelectFacili
           )}
         </div>
 
-        {/* S-Curve */}
         <div className="border-t border-ink-100 pt-3">
           <p className="text-[10px] uppercase tracking-wider text-ink-400 font-medium mb-2">
             Kurva S
@@ -352,7 +332,7 @@ function ProjectSummary({ location: loc, onClose, onOpenContract, onSelectFacili
           {!scurve || (scurve.points || []).length === 0 ? (
             <p className="text-xs text-ink-500 italic">Belum ada data</p>
           ) : (
-            <div className="h-36">
+            <div className="h-32">
               <ResponsiveContainer>
                 <AreaChart data={scurve.points} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
                   <defs>
@@ -376,7 +356,6 @@ function ProjectSummary({ location: loc, onClose, onOpenContract, onSelectFacili
           )}
         </div>
 
-        {/* Facilities */}
         <div className="border-t border-ink-100 pt-3">
           <p className="text-[10px] uppercase tracking-wider text-ink-400 font-medium mb-2 flex items-center gap-1.5">
             <Layers size={11} /> Fasilitas ({loc.facilities?.length || 0})
@@ -404,12 +383,15 @@ function ProjectSummary({ location: loc, onClose, onOpenContract, onSelectFacili
             </div>
           )}
         </div>
+      </div>
 
+      {/* Sticky footer */}
+      <div className="flex-shrink-0 p-4 border-t border-ink-100">
         <button onClick={onOpenContract} className="btn-primary w-full">
           Buka Detail Kontrak →
         </button>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -424,9 +406,9 @@ function Cell({ label, value }) {
 
 
 // ────────────────────────────────────────────────────────────────────────────
-// Photo Gallery Drawer (bottom sheet) + embedded Lightbox with nav controls
+// Facility Photos (panel mode: photos) — with embedded Lightbox
 // ────────────────────────────────────────────────────────────────────────────
-function PhotoGalleryDrawer({ facility, onClose }) {
+function FacilityPhotos({ facility, location, onBack, onClose }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [flatPhotos, setFlatPhotos] = useState([]);
@@ -437,7 +419,6 @@ function PhotoGalleryDrawer({ facility, onClose }) {
     analyticsAPI.facilityPhotos(facility.id)
       .then(({ data }) => {
         setData(data);
-        // Flat list untuk navigasi prev/next di lightbox
         const flat = (data.groups || []).flatMap((g) =>
           g.photos.map((p) => ({ ...p, date: g.date }))
         );
@@ -460,7 +441,6 @@ function PhotoGalleryDrawer({ facility, onClose }) {
     setLightboxIdx((i) => (i >= flatPhotos.length - 1 ? 0 : i + 1));
   }, [flatPhotos.length]);
 
-  // Keyboard nav saat lightbox terbuka
   useEffect(() => {
     if (lightboxIdx < 0) return;
     const handler = (e) => {
@@ -476,116 +456,111 @@ function PhotoGalleryDrawer({ facility, onClose }) {
 
   return (
     <>
-      {/* Bottom drawer */}
-      <div className="absolute bottom-0 left-0 right-0 bg-white shadow-2xl border-t border-ink-200 z-[998] max-h-[55vh] overflow-y-auto">
-        <div className="sticky top-0 bg-white border-b border-ink-100 px-5 py-3 flex items-center justify-between gap-3">
-          <div>
-            <button onClick={onClose} className="btn-ghost btn-xs mb-0.5">
-              <ChevLeft size={11} /> Tutup Galeri
-            </button>
-            <p className="text-sm font-semibold text-ink-800 flex items-center gap-2">
-              <ImageIcon size={14} className="text-brand-600" />
-              <span className="font-mono text-[11px] text-brand-600">{facility.facility_code}</span>
-              {facility.facility_name}
-            </p>
-          </div>
-          {data && (
-            <div className="text-xs text-ink-500 text-right">
-              <p>{data.total} foto · {data.groups.length} sesi</p>
-              {data.sources && (
-                <p className="text-[10px] text-ink-400">
-                  {data.sources.weekly || 0} mingguan · {data.sources.daily || 0} harian
-                </p>
-              )}
-            </div>
-          )}
+      {/* Sticky header with back + close */}
+      <div className="flex-shrink-0 px-5 pt-4 pb-3 border-b border-ink-100">
+        <div className="flex items-center justify-between mb-2">
+          <button onClick={onBack} className="btn-ghost btn-xs">
+            <ChevronLeft size={11} /> Kembali ke Info
+          </button>
+          <button onClick={onClose} className="text-ink-400 hover:text-ink-800 p-1" title="Tutup">
+            <X size={18} />
+          </button>
         </div>
-
-        <div className="p-5">
-          {loading ? (
-            <p className="text-xs text-ink-500 italic">Memuat foto...</p>
-          ) : !data || data.total === 0 ? (
-            <Empty
-              icon={ImageIcon}
-              title="Belum ada foto"
-              description="Foto muncul bila laporan harian/mingguan sudah di-tag ke fasilitas ini."
-            />
-          ) : (
-            <div className="space-y-4">
-              {data.groups.map((g) => (
-                <div key={g.date}>
-                  <p className="text-xs font-semibold text-ink-700 flex items-center gap-1.5 mb-2">
-                    <Calendar size={11} />
-                    {g.date === "unknown" ? "Tanggal tidak diketahui" : fmtDate(g.date)}
-                    <span className="text-ink-400 font-normal">· {g.photos.length} foto</span>
-                  </p>
-                  <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-7 lg:grid-cols-9 gap-2">
-                    {g.photos.map((p) => (
-                      <button
-                        key={p.id}
-                        onClick={() => openLightbox(p)}
-                        className="aspect-square rounded-lg overflow-hidden border border-ink-200 hover:border-brand-400 group relative"
-                      >
-                        <img
-                          src={assetUrl(p.thumbnail_path || p.file_path)}
-                          alt={p.caption || ""}
-                          className="w-full h-full object-cover group-hover:scale-105 transition"
-                          loading="lazy"
-                        />
-                        {p.source && (
-                          <span className={`absolute top-1 right-1 text-[8px] px-1 rounded font-semibold uppercase ${
-                            p.source === "daily" ? "bg-teal-600 text-white" : "bg-indigo-600 text-white"
-                          }`}>
-                            {p.source === "daily" ? "H" : "M"}
-                          </span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        <p className="text-xs text-ink-500 truncate">{location.location_name}</p>
+        <p className="font-display font-semibold text-ink-900 text-sm flex items-center gap-2">
+          <span className="font-mono text-[10px] text-brand-600">{facility.facility_code}</span>
+          {facility.facility_name}
+        </p>
+        {data && (
+          <p className="text-[11px] text-ink-500 mt-1">
+            {data.total} foto · {data.groups.length} sesi
+            {data.sources && ` · ${data.sources.weekly || 0} mingguan · ${data.sources.daily || 0} harian`}
+          </p>
+        )}
       </div>
 
-      {/* Lightbox — z-index tinggi agar tidak tumpang-tindih map */}
+      {/* Scrollable body */}
+      <div className="flex-1 overflow-y-auto p-5">
+        {loading ? (
+          <p className="text-xs text-ink-500 italic">Memuat foto...</p>
+        ) : !data || data.total === 0 ? (
+          <Empty
+            icon={ImageIcon}
+            title="Belum ada foto"
+            description="Foto muncul bila laporan harian/mingguan sudah di-tag ke fasilitas ini."
+          />
+        ) : (
+          <div className="space-y-4">
+            {data.groups.map((g) => (
+              <div key={g.date}>
+                <p className="text-xs font-semibold text-ink-700 flex items-center gap-1.5 mb-2">
+                  <Calendar size={11} />
+                  {g.date === "unknown" ? "Tanggal tidak diketahui" : fmtDate(g.date)}
+                  <span className="text-ink-400 font-normal">· {g.photos.length} foto</span>
+                </p>
+                <div className="grid grid-cols-3 gap-2">
+                  {g.photos.map((p) => (
+                    <button
+                      key={p.id}
+                      onClick={() => openLightbox(p)}
+                      className="aspect-square rounded-lg overflow-hidden border border-ink-200 hover:border-brand-400 group relative"
+                    >
+                      <img
+                        src={assetUrl(p.thumbnail_path || p.file_path)}
+                        alt={p.caption || ""}
+                        className="w-full h-full object-cover group-hover:scale-105 transition"
+                        loading="lazy"
+                      />
+                      {p.source && (
+                        <span className={`absolute top-1 right-1 text-[8px] px-1 rounded font-semibold uppercase ${
+                          p.source === "daily" ? "bg-teal-600 text-white" : "bg-indigo-600 text-white"
+                        }`}>
+                          {p.source === "daily" ? "H" : "M"}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Lightbox — fixed, covers entire viewport, above everything */}
       {current && (
         <div
-          className="fixed inset-0 z-[10000] bg-black/90 flex items-center justify-center"
+          className="fixed inset-0 z-[10000] bg-black/95 flex items-center justify-center"
           onClick={closeLightbox}
         >
-          {/* Top bar */}
           <div className="absolute top-0 inset-x-0 p-4 flex items-center justify-between text-white z-10">
-            <div className="text-xs">
-              <p className="font-semibold">{facility.facility_code} · {facility.facility_name}</p>
+            <div className="text-xs min-w-0">
+              <p className="font-semibold truncate">{facility.facility_code} · {facility.facility_name}</p>
               <p className="text-white/70">
                 {lightboxIdx + 1} / {flatPhotos.length}
-                {current.date && ` · ${current.date !== "unknown" ? fmtDate(current.date) : "Tanggal tidak diketahui"}`}
+                {current.date && ` · ${current.date !== "unknown" ? fmtDate(current.date) : "Tanggal ?"}`}
                 {current.source && ` · ${current.source === "daily" ? "Laporan Harian" : "Laporan Mingguan"}`}
               </p>
             </div>
             <button
               onClick={(e) => { e.stopPropagation(); closeLightbox(); }}
-              className="text-white/80 hover:text-white p-2 rounded hover:bg-white/10"
+              className="text-white/80 hover:text-white p-2 rounded hover:bg-white/10 flex-shrink-0"
               title="Tutup (Esc)"
             >
               <X size={22} />
             </button>
           </div>
 
-          {/* Prev button */}
           {flatPhotos.length > 1 && (
             <button
               onClick={(e) => { e.stopPropagation(); prevPhoto(); }}
               className="absolute left-4 top-1/2 -translate-y-1/2 bg-white/10 hover:bg-white/25 text-white rounded-full p-3 z-10"
               title="Sebelumnya (←)"
             >
-              <ChevLeft size={24} />
+              <ChevronLeft size={24} />
             </button>
           )}
 
-          {/* Image */}
           <div className="flex flex-col items-center max-w-6xl max-h-[85vh] px-16" onClick={(e) => e.stopPropagation()}>
             <img
               src={assetUrl(current.file_path)}
@@ -597,7 +572,6 @@ function PhotoGalleryDrawer({ facility, onClose }) {
             )}
           </div>
 
-          {/* Next button */}
           {flatPhotos.length > 1 && (
             <button
               onClick={(e) => { e.stopPropagation(); nextPhoto(); }}
