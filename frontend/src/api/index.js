@@ -216,6 +216,15 @@ export const weeklyAPI = {
     api.delete(`/reports/weekly/${id}/photos/${photoId}`),
   template: (cid) =>
     api.get(`/reports/weekly/template/${cid}`, { responseType: "blob" }),
+  exportExcel: (id) =>
+    api.get(`/reports/weekly/${id}/export-excel`, { responseType: "blob" }),
+  importExcel: (id, file) => {
+    const form = new FormData();
+    form.append("file", file);
+    return api.post(`/reports/weekly/${id}/import-excel`, form, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+  },
 };
 
 export const dailyAPI = {

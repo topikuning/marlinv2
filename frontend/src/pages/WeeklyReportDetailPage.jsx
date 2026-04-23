@@ -4,8 +4,9 @@ import { AgGridReact } from "ag-grid-react";
 import toast from "react-hot-toast";
 import {
   ChevronRight, Save, Image, Upload, Trash2, X, Lock, Unlock,
+  Download, Filter, MapPin,
 } from "lucide-react";
-import { weeklyAPI, boqAPI } from "@/api";
+import { weeklyAPI, boqAPI, downloadBlob } from "@/api";
 import {
   PageLoader, Modal, Spinner, Tabs, Empty,
 } from "@/components/ui";
@@ -164,9 +165,12 @@ function KPI({ label, value, highlight }) {
 function ProgressGrid({ report, boqItems, onSaved }) {
   const gridRef = useRef();
   const [saving, setSaving] = useState(false);
+  const [filterLocation, setFilterLocation] = useState("");
+  const [filterFacility, setFilterFacility] = useState("");
+  const [importing, setImporting] = useState(false);
 
   // Merge BOQ items with existing progress entries
-  const rowData = useMemo(() => {
+  const allRows = useMemo(() => {
     const progressMap = new Map(
       (report.progress_items || []).map((p) => [p.boq_item_id, p])
     );
@@ -174,8 +178,10 @@ function ProgressGrid({ report, boqItems, onSaved }) {
       const p = progressMap.get(b.id) || {};
       return {
         boq_item_id: b.id,
+        location_id: b.location_id,
         location_code: b.location_code,
         location_name: b.location_name,
+        facility_id: b.facility_id,
         facility_code: b.facility_code,
         facility_name: b.facility_name,
         full_code: b.full_code || b.original_code,
@@ -192,6 +198,77 @@ function ProgressGrid({ report, boqItems, onSaved }) {
       };
     });
   }, [report, boqItems]);
+
+  // Rollup per-lokasi: list unik lokasi + target (sum weight_pct) + realisasi
+  // (sum weighted_progress_pct) untuk ditampilkan sebagai summary card.
+  const locationSummary = useMemo(() => {
+    const map = new Map();
+    allRows.forEach((r) => {
+      if (!r.location_id) return;
+      const cur = map.get(r.location_id) || {
+        id: r.location_id,
+        code: r.location_code,
+        name: r.location_name,
+        target_weight: 0,
+        actual_weight: 0,
+        item_count: 0,
+      };
+      cur.target_weight += r.weight_pct || 0;
+      cur.actual_weight += r.weighted_progress_pct || 0;
+      cur.item_count += 1;
+      map.set(r.location_id, cur);
+    });
+    return Array.from(map.values()).sort((a, b) => a.code.localeCompare(b.code));
+  }, [allRows]);
+
+  const facilityOptions = useMemo(() => {
+    const seen = new Map();
+    allRows.forEach((r) => {
+      if (filterLocation && r.location_id !== filterLocation) return;
+      if (r.facility_id && !seen.has(r.facility_id)) {
+        seen.set(r.facility_id, { id: r.facility_id, code: r.facility_code, name: r.facility_name });
+      }
+    });
+    return Array.from(seen.values());
+  }, [allRows, filterLocation]);
+
+  // Filter rowData berdasar lokasi/fasilitas dipilih
+  const rowData = useMemo(() => {
+    return allRows.filter((r) => {
+      if (filterLocation && r.location_id !== filterLocation) return false;
+      if (filterFacility && r.facility_id !== filterFacility) return false;
+      return true;
+    });
+  }, [allRows, filterLocation, filterFacility]);
+
+  const downloadExcel = async () => {
+    try {
+      const { data } = await weeklyAPI.exportExcel(report.id);
+      downloadBlob(data, `progress_W${report.week_number}.xlsx`);
+    } catch (e) {
+      toast.error(parseApiError(e));
+    }
+  };
+
+  const uploadExcel = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    try {
+      const { data } = await weeklyAPI.importExcel(report.id, file);
+      if (data.success) {
+        toast.success(`Import sukses: ${data.updated} diubah, ${data.created} baru${data.skipped ? `, ${data.skipped} dilewati` : ""}`);
+        onSaved?.();
+      } else {
+        toast.error(data.errors?.[0] || "Import gagal");
+      }
+    } catch (err) {
+      toast.error(parseApiError(err));
+    } finally {
+      setImporting(false);
+      e.target.value = "";
+    }
+  };
 
   const columns = useMemo(
     () => [
@@ -339,30 +416,123 @@ function ProgressGrid({ report, boqItems, onSaved }) {
   }
 
   return (
-    <div className="card p-4">
-      <div className="flex items-center justify-between mb-3">
-        <div className="text-xs text-ink-500">
-          {boqItems.length} item BOQ · Kuning = vol minggu ini · Biru = vol kumulatif
+    <div className="space-y-3">
+      {/* Per-lokasi summary — target vs realisasi */}
+      {locationSummary.length > 0 && (
+        <div className="card p-4">
+          <p className="text-[10px] uppercase tracking-wider text-ink-400 font-medium mb-2 flex items-center gap-1.5">
+            <MapPin size={10} /> Ringkasan per Lokasi
+          </p>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+            {locationSummary.map((l) => {
+              const targetPct = (l.target_weight || 0) * 100;
+              const actualPct = (l.actual_weight || 0) * 100;
+              const pctOfTarget = l.target_weight > 0
+                ? (l.actual_weight / l.target_weight) * 100
+                : 0;
+              return (
+                <button
+                  key={l.id}
+                  onClick={() => {
+                    setFilterLocation(filterLocation === l.id ? "" : l.id);
+                    setFilterFacility("");
+                  }}
+                  className={`text-left p-2 rounded-lg border transition ${
+                    filterLocation === l.id
+                      ? "bg-brand-50 border-brand-400"
+                      : "bg-white border-ink-200 hover:border-brand-300"
+                  }`}
+                >
+                  <p className="font-mono text-[10px] text-brand-600">{l.code}</p>
+                  <p className="text-xs font-medium text-ink-800 truncate">{l.name}</p>
+                  <div className="mt-1.5">
+                    <div className="flex justify-between text-[10px] text-ink-500 mb-0.5">
+                      <span>Realisasi vs Target</span>
+                      <span className="font-semibold text-ink-800">
+                        {actualPct.toFixed(2)}% / {targetPct.toFixed(2)}%
+                      </span>
+                    </div>
+                    <div className="h-1.5 bg-ink-100 rounded overflow-hidden">
+                      <div
+                        className={`h-full ${pctOfTarget >= 95 ? "bg-green-500" : pctOfTarget >= 70 ? "bg-brand-500" : "bg-amber-500"}`}
+                        style={{ width: `${Math.min(100, pctOfTarget)}%` }}
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-ink-400 mt-1">{l.item_count} item BOQ</p>
+                </button>
+              );
+            })}
+          </div>
         </div>
-        <button
-          className="btn-primary btn-xs"
-          onClick={save}
-          disabled={saving || report.is_locked}
-        >
-          {saving ? <Spinner size={12} /> : <Save size={12} />} Simpan Progress
-        </button>
-      </div>
-      <div className="ag-theme-quartz" style={{ height: 620 }}>
-        <AgGridReact
-          ref={gridRef}
-          rowData={rowData}
-          columnDefs={columns}
-          stopEditingWhenCellsLoseFocus={true}
-          singleClickEdit={true}
-          onCellValueChanged={onCellValueChanged}
-          getRowId={(p) => p.data.boq_item_id}
-          defaultColDef={{ resizable: true, sortable: true, filter: true }}
-        />
+      )}
+
+      <div className="card p-4">
+        {/* Filter bar */}
+        <div className="flex items-center gap-2 flex-wrap mb-3">
+          <Filter size={13} className="text-ink-500" />
+          <select
+            className="select py-1 text-xs"
+            value={filterLocation}
+            onChange={(e) => { setFilterLocation(e.target.value); setFilterFacility(""); }}
+          >
+            <option value="">Semua Lokasi</option>
+            {locationSummary.map((l) => (
+              <option key={l.id} value={l.id}>[{l.code}] {l.name}</option>
+            ))}
+          </select>
+          <select
+            className="select py-1 text-xs"
+            value={filterFacility}
+            onChange={(e) => setFilterFacility(e.target.value)}
+            disabled={!filterLocation}
+          >
+            <option value="">Semua Fasilitas</option>
+            {facilityOptions.map((f) => (
+              <option key={f.id} value={f.id}>[{f.code}] {f.name}</option>
+            ))}
+          </select>
+          {(filterLocation || filterFacility) && (
+            <button
+              className="btn-ghost btn-xs"
+              onClick={() => { setFilterLocation(""); setFilterFacility(""); }}
+            >
+              <X size={11} /> Reset
+            </button>
+          )}
+          <span className="text-[11px] text-ink-500 ml-auto">
+            {rowData.length} / {allRows.length} item
+          </span>
+          <button className="btn-ghost btn-xs" onClick={downloadExcel} title="Download progress ke Excel untuk diedit offline">
+            <Download size={11} /> Export
+          </button>
+          <label className="btn-ghost btn-xs cursor-pointer" title="Upload file hasil edit untuk bulk-update">
+            {importing ? <Spinner size={11} /> : <Upload size={11} />} Import
+            <input type="file" hidden accept=".xlsx" onChange={uploadExcel} disabled={importing || report.is_locked} />
+          </label>
+          <button
+            className="btn-primary btn-xs"
+            onClick={save}
+            disabled={saving || report.is_locked}
+          >
+            {saving ? <Spinner size={12} /> : <Save size={12} />} Simpan
+          </button>
+        </div>
+        <div className="text-[11px] text-ink-500 mb-2">
+          Kuning = vol minggu ini · Biru = vol kumulatif · Klik kartu lokasi di atas untuk memfilter cepat
+        </div>
+        <div className="ag-theme-quartz" style={{ height: 520 }}>
+          <AgGridReact
+            ref={gridRef}
+            rowData={rowData}
+            columnDefs={columns}
+            stopEditingWhenCellsLoseFocus={true}
+            singleClickEdit={true}
+            onCellValueChanged={onCellValueChanged}
+            getRowId={(p) => p.data.boq_item_id}
+            defaultColDef={{ resizable: true, sortable: true, filter: true }}
+          />
+        </div>
       </div>
     </div>
   );
@@ -565,37 +735,72 @@ function PhotosTab({ report, boqItems, onChange }) {
           <Spinner size={12} /> Mengunggah...
         </div>
       )}
-      {!report.photos?.length ? (
-        <Empty icon={Image} title="Belum ada foto" />
-      ) : (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {report.photos.map((p) => (
-            <div
-              key={p.id}
-              className="relative group aspect-square rounded-xl overflow-hidden bg-ink-100"
-            >
-              <img
-                src={assetUrl(p.thumbnail_path || p.file_path)}
-                alt={p.caption || ""}
-                className="w-full h-full object-cover"
-              />
-              {p.caption && (
-                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-2">
-                  <p className="text-[11px] text-white truncate">{p.caption}</p>
+      {(() => {
+        const photos = report.photos || [];
+        if (!photos.length) return <Empty icon={Image} title="Belum ada foto" />;
+        // Group foto per fasilitas. Pakai facilityOptions (dari BOQ items) untuk
+        // resolve nama fasilitas. Foto tanpa facility_id masuk grup "Belum di-tag".
+        const nameById = new Map(facilityOptions.map((f) => [f.id, f]));
+        const buckets = new Map();
+        photos.forEach((p) => {
+          const key = p.facility_id || "_untagged";
+          if (!buckets.has(key)) buckets.set(key, []);
+          buckets.get(key).push(p);
+        });
+        const entries = Array.from(buckets.entries());
+        return (
+          <div className="space-y-4">
+            {entries.map(([key, list]) => {
+              const f = key !== "_untagged" ? nameById.get(key) : null;
+              return (
+                <div key={key}>
+                  <p className="text-xs font-semibold text-ink-700 mb-2 flex items-center gap-1.5">
+                    {f ? (
+                      <>
+                        <span className="font-mono text-[10px] text-brand-600">[{f.code}]</span>
+                        <span>{f.name}</span>
+                        <span className="text-ink-400 font-normal">
+                          · {f.location || "lokasi"}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-amber-700">⚠ Belum di-tag fasilitas (tidak muncul di Dashboard Eksekutif)</span>
+                    )}
+                    <span className="text-ink-400 font-normal ml-auto">{list.length} foto</span>
+                  </p>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    {list.map((p) => (
+                      <div
+                        key={p.id}
+                        className="relative group aspect-square rounded-xl overflow-hidden bg-ink-100"
+                      >
+                        <img
+                          src={assetUrl(p.thumbnail_path || p.file_path)}
+                          alt={p.caption || ""}
+                          className="w-full h-full object-cover"
+                        />
+                        {p.caption && (
+                          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-2">
+                            <p className="text-[11px] text-white truncate">{p.caption}</p>
+                          </div>
+                        )}
+                        {!report.is_locked && (
+                          <button
+                            onClick={() => remove(p.id)}
+                            className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 bg-red-600 text-white p-1.5 rounded-lg"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              )}
-              {!report.is_locked && (
-                <button
-                  onClick={() => remove(p.id)}
-                  className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 bg-red-600 text-white p-1.5 rounded-lg"
-                >
-                  <Trash2 size={12} />
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+              );
+            })}
+          </div>
+        );
+      })()}
     </div>
   );
 }
