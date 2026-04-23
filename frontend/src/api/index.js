@@ -305,6 +305,7 @@ export const analyticsAPI = {
   scurve: (cid) => api.get(`/analytics/scurve/${cid}`),
   mapLocations: () => api.get("/analytics/map-locations"),
   facilityPhotos: (fid) => api.get(`/analytics/facility-photos/${fid}`),
+  facilityProgress: (fid) => api.get(`/analytics/facility-progress/${fid}`),
 };
 
 export const templatesAPI = {

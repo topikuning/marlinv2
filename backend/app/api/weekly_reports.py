@@ -21,6 +21,7 @@ from app.api.deps import get_current_user, require_permission, user_can_access_c
 from app.services.audit_service import log_audit
 from app.services.progress_service import (
     update_progress_item_calculations, recalculate_report_totals, run_early_warning_check,
+    get_previous_cumulatives, compute_facility_progress_summary,
     get_deviation_status, calculate_spi,
 )
 from app.services.file_service import save_upload, delete_file, ALLOWED_IMAGE_EXT
@@ -180,6 +181,12 @@ def create_report(
     db.add(report)
     db.flush()
 
+    # Pre-lookup Volume Minggu Lalu dari minggu-minggu sebelumnya
+    prev_cums = get_previous_cumulatives(
+        db, report.contract_id,
+        [str(i.boq_item_id) for i in (data.progress_items or [])],
+        report.week_number,
+    )
     for item_data in data.progress_items:
         boq = db.query(BOQItem).filter(BOQItem.id == item_data.boq_item_id).first()
         if not boq:
@@ -188,10 +195,18 @@ def create_report(
             weekly_report_id=report.id,
             boq_item_id=item_data.boq_item_id,
             volume_this_week=item_data.volume_this_week,
-            volume_cumulative=item_data.volume_cumulative,
             notes=item_data.notes,
         )
-        update_progress_item_calculations(pi, boq)
+        try:
+            update_progress_item_calculations(
+                pi, boq,
+                previous_cumulative=prev_cums.get(str(item_data.boq_item_id), 0.0),
+            )
+        except ValueError as ve:
+            db.rollback()
+            raise HTTPException(400, {
+                "message": str(ve), "code": "weekly_progress_overflow",
+            })
         db.add(pi)
 
     db.flush()
@@ -241,6 +256,11 @@ def update_report(
             WeeklyProgressItem.weekly_report_id == r.id
         ).delete()
         db.flush()
+        prev_cums = get_previous_cumulatives(
+            db, r.contract_id,
+            [str(i.boq_item_id) for i in data.progress_items],
+            r.week_number,
+        )
         for item_data in data.progress_items:
             boq = db.query(BOQItem).filter(BOQItem.id == item_data.boq_item_id).first()
             if not boq:
@@ -249,10 +269,16 @@ def update_report(
                 weekly_report_id=r.id,
                 boq_item_id=item_data.boq_item_id,
                 volume_this_week=item_data.volume_this_week,
-                volume_cumulative=item_data.volume_cumulative,
                 notes=item_data.notes,
             )
-            update_progress_item_calculations(pi, boq)
+            try:
+                update_progress_item_calculations(
+                    pi, boq,
+                    previous_cumulative=prev_cums.get(str(item_data.boq_item_id), 0.0),
+                )
+            except ValueError as ve:
+                db.rollback()
+                raise HTTPException(400, {"message": str(ve), "code": "weekly_progress_overflow"})
             db.add(pi)
     db.flush()
     recalculate_report_totals(db, r)
@@ -284,7 +310,13 @@ def upsert_progress_items(
     if r.is_locked:
         raise HTTPException(400, "Laporan sudah dikunci")
 
+    # Batch-lookup Volume Minggu Lalu untuk semua boq_item_id yang dikirim
+    # sekaligus (hindari N+1). volume_cumulative dihitung server: prev+this_week.
+    boq_ids = [str(i.boq_item_id) for i in items]
+    prev_cums = get_previous_cumulatives(db, r.contract_id, boq_ids, r.week_number)
+
     touched = 0
+    errors = []
     for item_data in items:
         boq = db.query(BOQItem).filter(BOQItem.id == item_data.boq_item_id).first()
         if not boq:
@@ -300,10 +332,25 @@ def upsert_progress_items(
             )
             db.add(pi)
         pi.volume_this_week = item_data.volume_this_week
-        pi.volume_cumulative = item_data.volume_cumulative
         pi.notes = item_data.notes
-        update_progress_item_calculations(pi, boq)
-        touched += 1
+        try:
+            update_progress_item_calculations(
+                pi, boq,
+                previous_cumulative=prev_cums.get(str(item_data.boq_item_id), 0.0),
+            )
+            touched += 1
+        except ValueError as ve:
+            errors.append({
+                "boq_item_id": str(item_data.boq_item_id),
+                "message": str(ve),
+            })
+    if errors:
+        db.rollback()
+        raise HTTPException(400, {
+            "message": "Ada input volume yang melebihi BOQ. Perbaiki sebelum simpan.",
+            "code": "weekly_progress_overflow",
+            "errors": errors,
+        })
 
     db.flush()
     recalculate_report_totals(db, r)
@@ -560,6 +607,14 @@ async def import_report_excel(
             result["errors"].append("Kolom 'boq_item_id' tidak ditemukan. Pastikan pakai file hasil Export Excel.")
             return result
 
+        # Batch lookup Volume Minggu Lalu untuk semua boq_item_id di file
+        file_boq_ids = [
+            str(row.get("boq_item_id") or "").strip()
+            for _, row in df.iterrows()
+            if str(row.get("boq_item_id") or "").strip()
+        ]
+        prev_cums = get_previous_cumulatives(db, r.contract_id, file_boq_ids, r.week_number)
+
         for idx, row in df.iterrows():
             bid = str(row.get("boq_item_id") or "").strip()
             if not bid or bid.lower() == "nan":
@@ -591,9 +646,17 @@ async def import_report_excel(
             else:
                 result["updated"] += 1
             pi.volume_this_week = Decimal(str(vol_week))
-            pi.volume_cumulative = Decimal(str(vol_cum))
             pi.notes = notes
-            update_progress_item_calculations(pi, boq)
+            # Abaikan Vol Kumulatif di Excel — server yang compute ulang
+            # (prev + this_week) untuk menjaga konsistensi histori.
+            try:
+                update_progress_item_calculations(
+                    pi, boq,
+                    previous_cumulative=prev_cums.get(str(bid), 0.0),
+                )
+            except ValueError as ve:
+                result["errors"].append(f"Baris {idx+2} ({boq.description or bid}): {ve}")
+                continue
 
         db.flush()
         recalculate_report_totals(db, r)

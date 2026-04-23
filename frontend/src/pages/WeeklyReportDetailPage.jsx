@@ -169,13 +169,19 @@ function ProgressGrid({ report, boqItems, onSaved }) {
   const [filterFacility, setFilterFacility] = useState("");
   const [importing, setImporting] = useState(false);
 
-  // Merge BOQ items with existing progress entries
+  // Merge BOQ items dengan progress minggu ini + Volume Minggu Lalu dari
+  // minggu sebelumnya. Volume Minggu Lalu = progress_cumulative pada minggu
+  // ini dikurangi Volume Minggu Ini (untuk row yang sudah ada). Backend
+  // juga yang authoritative; client-side ini hanya untuk display awal.
   const allRows = useMemo(() => {
     const progressMap = new Map(
       (report.progress_items || []).map((p) => [p.boq_item_id, p])
     );
     return boqItems.map((b) => {
       const p = progressMap.get(b.id) || {};
+      const thisWk = parseFloat(p.volume_this_week || 0);
+      const cumul = parseFloat(p.volume_cumulative || 0);
+      const prevWk = Math.max(0, cumul - thisWk);
       return {
         boq_item_id: b.id,
         location_id: b.location_id,
@@ -189,12 +195,14 @@ function ProgressGrid({ report, boqItems, onSaved }) {
         unit: b.unit,
         volume_boq: parseFloat(b.volume || 0),
         weight_pct: parseFloat(b.weight_pct || 0),
-        volume_this_week: parseFloat(p.volume_this_week || 0),
-        volume_cumulative: parseFloat(p.volume_cumulative || 0),
+        volume_previous_week: prevWk,
+        volume_this_week: thisWk,
+        volume_cumulative: cumul,
         progress_cumulative_pct: parseFloat(p.progress_cumulative_pct || 0),
         weighted_progress_pct: parseFloat(p.weighted_progress_pct || 0),
         notes: p.notes || "",
         _dirty: false,
+        _overflow: false,
       };
     });
   }, [report, boqItems]);
@@ -231,6 +239,42 @@ function ProgressGrid({ report, boqItems, onSaved }) {
     });
     return Array.from(seen.values());
   }, [allRows, filterLocation]);
+
+  // Ringkasan per Fasilitas: agregasi target_weight + actual_weight per
+  // fasilitas dari allRows (sudah include progress). Deviasi fasilitas
+  // dihitung vs rata-rata kontrak untuk deteksi laggard cepat.
+  const facilitySummary = useMemo(() => {
+    const map = new Map();
+    let contractActualTotal = 0;
+    allRows.forEach((r) => {
+      if (!r.facility_id) return;
+      const cur = map.get(r.facility_id) || {
+        id: r.facility_id,
+        code: r.facility_code,
+        name: r.facility_name,
+        location_code: r.location_code,
+        location_id: r.location_id,
+        target_weight: 0,
+        actual_weight: 0,
+        item_count: 0,
+      };
+      cur.target_weight += r.weight_pct || 0;
+      cur.actual_weight += r.weighted_progress_pct || 0;
+      cur.item_count += 1;
+      contractActualTotal += r.weighted_progress_pct || 0;
+      map.set(r.facility_id, cur);
+    });
+    // Tambah progress_pct per fasilitas + deviasi vs kontrak
+    const list = Array.from(map.values()).map((f) => ({
+      ...f,
+      progress_pct: f.target_weight > 0 ? f.actual_weight / f.target_weight : 0,
+    }));
+    list.forEach((f) => {
+      f.deviation_pct = f.progress_pct - contractActualTotal;
+    });
+    list.sort((a, b) => a.code.localeCompare(b.code));
+    return list;
+  }, [allRows]);
 
   // Filter rowData berdasar lokasi/fasilitas dipilih
   const rowData = useMemo(() => {
@@ -315,35 +359,61 @@ function ProgressGrid({ report, boqItems, onSaved }) {
         cellStyle: { color: "#64748b", fontSize: "11px" },
       },
       {
-        headerName: "Vol Minggu Ini",
-        field: "volume_this_week",
-        width: 130,
-        editable: !report.is_locked,
+        headerName: "Volume Minggu Lalu",
+        field: "volume_previous_week",
+        width: 140,
+        editable: false,
         type: "numericColumn",
         valueFormatter: (p) => fmtNum(p.value, 2),
         cellStyle: {
-          backgroundColor: "#fefce8",
-          fontWeight: 500,
-          color: "#713f12",
+          backgroundColor: "#f8fafc",
+          color: "#64748b",
+          fontSize: "11px",
         },
       },
       {
-        headerName: "Vol Kumulatif",
-        field: "volume_cumulative",
-        width: 130,
+        headerName: "Volume Minggu Ini",
+        field: "volume_this_week",
+        width: 140,
         editable: !report.is_locked,
         type: "numericColumn",
         valueFormatter: (p) => fmtNum(p.value, 2),
-        cellStyle: {
-          backgroundColor: "#eff6ff",
-          fontWeight: 500,
-          color: "#1e3a8a",
+        cellStyle: (p) => {
+          const base = {
+            backgroundColor: "#fefce8",
+            fontWeight: 500,
+            color: "#713f12",
+          };
+          if (p.data?._overflow) {
+            return { ...base, backgroundColor: "#fee2e2", color: "#991b1b" };
+          }
+          return base;
+        },
+      },
+      {
+        headerName: "Volume Kumulatif",
+        field: "volume_cumulative",
+        width: 140,
+        editable: false,
+        type: "numericColumn",
+        valueFormatter: (p) => fmtNum(p.value, 2),
+        cellStyle: (p) => {
+          const base = {
+            backgroundColor: "#eff6ff",
+            fontWeight: 500,
+            color: "#1e3a8a",
+          };
+          if (p.data?._overflow) {
+            return { ...base, backgroundColor: "#fee2e2", color: "#991b1b" };
+          }
+          return base;
         },
       },
       {
         headerName: "% Progres",
         field: "progress_cumulative_pct",
         width: 100,
+        editable: false,
         valueFormatter: (p) => ((p.value || 0) * 100).toFixed(1) + "%",
         cellStyle: (p) => ({
           color: (p.value || 0) >= 1 ? "#059669" : "#374151",
@@ -351,9 +421,10 @@ function ProgressGrid({ report, boqItems, onSaved }) {
         }),
       },
       {
-        headerName: "Kontribusi",
+        headerName: "Bobot Progres",
         field: "weighted_progress_pct",
-        width: 110,
+        width: 120,
+        editable: false,
         valueFormatter: (p) => ((p.value || 0) * 100).toFixed(4) + "%",
         cellStyle: { color: "#64748b", fontSize: "11px" },
       },
@@ -371,8 +442,24 @@ function ProgressGrid({ report, boqItems, onSaved }) {
 
   const onCellValueChanged = (e) => {
     const row = e.data;
-    if (e.colDef.field === "volume_cumulative" && row.volume_boq > 0) {
-      row.progress_cumulative_pct = row.volume_cumulative / row.volume_boq;
+    if (e.colDef.field === "volume_this_week") {
+      // Auto-compute Volume Kumulatif = Volume Minggu Lalu + Volume Minggu Ini.
+      // Volume Minggu Lalu bersifat snapshot — tidak diubah user.
+      const thisWk = parseFloat(row.volume_this_week) || 0;
+      const prevWk = parseFloat(row.volume_previous_week) || 0;
+      const cum = prevWk + thisWk;
+      row.volume_cumulative = cum;
+
+      // Validasi lokal: kumulatif tidak boleh melebihi Volume BOQ
+      const vol = parseFloat(row.volume_boq) || 0;
+      row._overflow = vol > 0 && cum > vol + 1e-6;
+
+      // Progress & bobot progres (sinkron dengan server)
+      if (vol > 0) {
+        row.progress_cumulative_pct = Math.min(1, cum / vol);
+      } else {
+        row.progress_cumulative_pct = Math.min(1, Math.max(0, cum));
+      }
       row.weighted_progress_pct = row.progress_cumulative_pct * row.weight_pct;
     }
     row._dirty = true;
@@ -380,27 +467,43 @@ function ProgressGrid({ report, boqItems, onSaved }) {
   };
 
   const save = async () => {
-    const dirty = (gridRef.current?.api.getModel().rowsToDisplay || [])
-      .map((n) => n.data)
-      .filter((r) => r._dirty);
+    const allRowData = (gridRef.current?.api.getModel().rowsToDisplay || [])
+      .map((n) => n.data);
+    const dirty = allRowData.filter((r) => r._dirty);
+    const overflow = allRowData.filter((r) => r._overflow);
+    if (overflow.length) {
+      toast.error(
+        `${overflow.length} baris melebihi Volume BOQ — kurangi Volume Minggu Ini sebelum simpan.`
+      );
+      return;
+    }
     if (!dirty.length) return toast("Tidak ada perubahan");
     setSaving(true);
     try {
+      // Kirim cuma volume_this_week + notes; server yang compute kumulatif
+      // dari snapshot minggu-minggu sebelumnya. Ini menjaga integritas
+      // histori walau sudah berpindah minggu.
       const payload = dirty.map((r) => ({
         boq_item_id: r.boq_item_id,
         volume_this_week: parseFloat(r.volume_this_week) || 0,
-        volume_cumulative: parseFloat(r.volume_cumulative) || 0,
         notes: r.notes || null,
       }));
       const { data } = await weeklyAPI.upsertProgress(report.id, payload);
       toast.success(
-        `${data.touched} item tersimpan. Kumulatif: ${(data.actual_cumulative_pct * 100).toFixed(2)}%`
+        `${data.touched} item tersimpan. Kumulatif kontrak: ${(data.actual_cumulative_pct * 100).toFixed(2)}%`
       );
-      // refresh
       const { data: fresh } = await weeklyAPI.get(report.id);
       onSaved(fresh);
     } catch (e) {
-      toast.error(parseApiError(e));
+      // Backend error detail untuk overflow
+      const detail = e?.response?.data?.detail;
+      if (detail?.code === "weekly_progress_overflow" && detail.errors?.length) {
+        toast.error(`Volume melebihi BOQ pada ${detail.errors.length} baris — cek grid, baris merah.`);
+      } else if (typeof detail === "object" && detail?.message) {
+        toast.error(detail.message);
+      } else {
+        toast.error(parseApiError(e));
+      }
     } finally {
       setSaving(false);
     }
@@ -464,6 +567,75 @@ function ProgressGrid({ report, boqItems, onSaved }) {
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* Ringkasan per Fasilitas — progres fisik + deviasi vs rata-rata kontrak */}
+      {facilitySummary.length > 0 && (
+        <div className="card p-4">
+          <p className="text-[10px] uppercase tracking-wider text-ink-400 font-medium mb-2 flex items-center gap-1.5">
+            <Layers size={10} /> Ringkasan per Fasilitas
+          </p>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+            {facilitySummary.map((f) => {
+              const progressPct = (f.progress_pct || 0) * 100;
+              const targetWeight = (f.target_weight || 0) * 100;
+              const deviation = (f.deviation_pct || 0) * 100;
+              const devClass = deviation >= 0
+                ? "text-green-700"
+                : deviation >= -3
+                ? "text-ink-600"
+                : deviation >= -10
+                ? "text-amber-700"
+                : "text-red-700";
+              return (
+                <button
+                  key={f.id}
+                  onClick={() => {
+                    setFilterLocation(f.location_id || "");
+                    setFilterFacility(filterFacility === f.id ? "" : f.id);
+                  }}
+                  className={`text-left p-2 rounded-lg border transition ${
+                    filterFacility === f.id
+                      ? "bg-brand-50 border-brand-400"
+                      : "bg-white border-ink-200 hover:border-brand-300"
+                  }`}
+                  title={`Progres: ${progressPct.toFixed(2)}% · Bobot target: ${targetWeight.toFixed(2)}% · Deviasi vs rata-rata kontrak: ${deviation.toFixed(2)}%`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-mono text-[10px] text-brand-600">
+                        {f.location_code} · {f.code}
+                      </p>
+                      <p className="text-xs font-medium text-ink-800 truncate">{f.name}</p>
+                    </div>
+                    <span className={`text-[11px] font-semibold ${devClass}`}>
+                      {deviation >= 0 ? "+" : ""}{deviation.toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="mt-1.5">
+                    <div className="flex justify-between text-[10px] text-ink-500 mb-0.5">
+                      <span>Progres Fisik</span>
+                      <span className="font-semibold text-ink-800">{progressPct.toFixed(2)}%</span>
+                    </div>
+                    <div className="h-1.5 bg-ink-100 rounded overflow-hidden">
+                      <div
+                        className={`h-full ${progressPct >= 95 ? "bg-green-500" : progressPct >= 70 ? "bg-brand-500" : progressPct >= 30 ? "bg-amber-500" : "bg-red-500"}`}
+                        style={{ width: `${Math.min(100, progressPct)}%` }}
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-ink-400 mt-1">
+                    Bobot target: {targetWeight.toFixed(2)}%
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-[10px] text-ink-500 mt-2">
+            💡 Deviasi = Progres Fasilitas − Rata-rata Progres Kontrak.
+            Angka negatif besar = fasilitas ini tertinggal dibanding lainnya.
+          </p>
         </div>
       )}
 

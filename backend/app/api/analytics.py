@@ -322,6 +322,53 @@ def map_locations(
     return {"items": items}
 
 
+@router.get("/facility-progress/{facility_id}", response_model=dict)
+def facility_progress(
+    facility_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Ringkasan progres fisik satu fasilitas (untuk panel Dashboard Eksekutif
+    saat fasilitas diklik). Menghitung:
+      - target_weight_pct (porsi fasilitas dari total kontrak)
+      - actual_weight_pct (kontribusi realisasi saat ini)
+      - facility_progress_pct (actual / target)
+      - contract_progress_pct (rata-rata seluruh kontrak untuk referensi)
+      - deviation_pct (selisih progress fasilitas vs rata-rata kontrak)
+    """
+    fac = db.query(Facility).filter(Facility.id == facility_id).first()
+    if not fac:
+        raise HTTPException(404, "Fasilitas tidak ditemukan")
+    loc = db.query(Location).filter(Location.id == fac.location_id).first()
+    if not loc or not user_can_access_contract(db, current_user, str(loc.contract_id)):
+        raise HTTPException(403, "Akses ditolak")
+
+    from app.services.progress_service import compute_facility_progress_summary
+    summaries = compute_facility_progress_summary(db, loc.contract_id)
+    target_facility = next((s for s in summaries if s["facility_id"] == str(facility_id)), None)
+    if not target_facility:
+        target_facility = {
+            "facility_id": str(facility_id),
+            "facility_code": fac.facility_code,
+            "facility_name": fac.facility_name,
+            "target_weight_pct": 0.0,
+            "actual_weight_pct": 0.0,
+            "facility_progress_pct": 0.0,
+            "item_count": 0,
+            "completed_item_count": 0,
+        }
+
+    # Rata-rata kontrak: jumlah actual_weight_pct (yang sama dengan
+    # realisasi kumulatif kontrak)
+    contract_actual = sum(s["actual_weight_pct"] for s in summaries)
+    target_facility["contract_progress_pct"] = contract_actual
+    target_facility["deviation_pct"] = (
+        target_facility["facility_progress_pct"] - contract_actual
+    )
+    return target_facility
+
+
 @router.get("/facility-photos/{facility_id}", response_model=dict)
 def facility_photos(
     facility_id: str,

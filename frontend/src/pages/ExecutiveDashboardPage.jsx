@@ -410,16 +410,22 @@ function Cell({ label, value }) {
 // ────────────────────────────────────────────────────────────────────────────
 function FacilityPhotos({ facility, location, onBack, onClose }) {
   const [data, setData] = useState(null);
+  const [progress, setProgress] = useState(null);
   const [loading, setLoading] = useState(true);
   const [flatPhotos, setFlatPhotos] = useState([]);
   const [lightboxIdx, setLightboxIdx] = useState(-1);
 
   useEffect(() => {
     setLoading(true);
-    analyticsAPI.facilityPhotos(facility.id)
-      .then(({ data }) => {
-        setData(data);
-        const flat = (data.groups || []).flatMap((g) =>
+    Promise.all([
+      analyticsAPI.facilityPhotos(facility.id),
+      analyticsAPI.facilityProgress(facility.id).catch(() => ({ data: null })),
+    ])
+      .then(([photoRes, progRes]) => {
+        const d = photoRes.data;
+        setData(d);
+        setProgress(progRes.data);
+        const flat = (d.groups || []).flatMap((g) =>
           g.photos.map((p) => ({ ...p, date: g.date }))
         );
         setFlatPhotos(flat);
@@ -471,8 +477,49 @@ function FacilityPhotos({ facility, location, onBack, onClose }) {
           <span className="font-mono text-[10px] text-brand-600">{facility.facility_code}</span>
           {facility.facility_name}
         </p>
+
+        {/* Progress fisik fasilitas + deviasi vs kontrak */}
+        {progress && (
+          <div className="mt-2 p-2 rounded-lg bg-ink-50 border border-ink-200">
+            {(() => {
+              const pPct = (progress.facility_progress_pct || 0) * 100;
+              const cPct = (progress.contract_progress_pct || 0) * 100;
+              const dev = (progress.deviation_pct || 0) * 100;
+              const devClass =
+                dev >= 0 ? "text-green-700"
+                : dev >= -3 ? "text-ink-600"
+                : dev >= -10 ? "text-amber-700"
+                : "text-red-700";
+              return (
+                <>
+                  <div className="flex justify-between text-[11px] mb-1">
+                    <span className="text-ink-600">
+                      Progres Fisik:
+                      <span className="font-semibold text-ink-800 ml-1">{pPct.toFixed(2)}%</span>
+                    </span>
+                    <span className={`font-semibold ${devClass}`}>
+                      Deviasi: {dev >= 0 ? "+" : ""}{dev.toFixed(2)}%
+                    </span>
+                  </div>
+                  <div className="h-1.5 bg-ink-200 rounded overflow-hidden">
+                    <div
+                      className={`h-full ${pPct >= 95 ? "bg-green-500" : pPct >= 70 ? "bg-brand-500" : pPct >= 30 ? "bg-amber-500" : "bg-red-500"}`}
+                      style={{ width: `${Math.min(100, pPct)}%` }}
+                    />
+                  </div>
+                  <p className="text-[10px] text-ink-500 mt-1">
+                    Rata-rata kontrak: {cPct.toFixed(2)}% · Bobot target:{" "}
+                    {((progress.target_weight_pct || 0) * 100).toFixed(2)}% ·{" "}
+                    {progress.completed_item_count || 0}/{progress.item_count || 0} item selesai
+                  </p>
+                </>
+              );
+            })()}
+          </div>
+        )}
+
         {data && (
-          <p className="text-[11px] text-ink-500 mt-1">
+          <p className="text-[11px] text-ink-500 mt-2">
             {data.total} foto · {data.groups.length} sesi
             {data.sources && ` · ${data.sources.weekly || 0} mingguan · ${data.sources.daily || 0} harian`}
           </p>
