@@ -287,7 +287,7 @@ CONTRACTS = [
         "lokasi":  LOCATIONS_K3,
         "fac_profiles": ["lengkap","sedang","sedang","minimal"],
         "kontraktor": "PT Tirta Samudera Konstruksi",
-        "konsultan":  "CV Mitra Teknik Bahari",
+        "konsultan":  "CV Mitra Konsultan Teknik",
         "ppk":        "Drs. Ahmad Fauzi, M.Si",
     },
     {
@@ -315,7 +315,7 @@ CONTRACTS = [
         "lokasi":  LOCATIONS_K5,
         "fac_profiles": ["sedang","minimal"],
         "kontraktor": "PT Barito Konstruksi Bahari",
-        "konsultan":  "CV Mitra Teknik Bahari",
+        "konsultan":  "CV Mitra Konsultan Teknik",
         "ppk":        "Drs. Ahmad Fauzi, M.Si",
     },
     {
@@ -597,18 +597,26 @@ def run():
                 "Jl. Barito No. 21, Banjarmasin",
                 "Banjarmasin", "Kalimantan Selatan",
                 "Suharto, ST, MT", "0511-556677", "suharto@bkb.co.id"),
+            # K10, K14 — kontraktor Sulawesi Tenggara / NTT
+            "PT Samudera Biru Konstruksi": _company(
+                "PT Samudera Biru Konstruksi", "contractor",
+                "07.890.123.4-567.000",
+                "Jl. Diponegoro No. 17, Baubau",
+                "Baubau", "Sulawesi Tenggara",
+                "Rahmat Saleh, ST", "0402-221133", "rahmat@sbk.co.id"),
             "PT Konsultan Kelautan Indonesia": _company(
                 "PT Konsultan Kelautan Indonesia", "consultant",
                 "05.678.901.2-345.000",
                 "Jl. Gatot Subroto Kav. 56, Jakarta Selatan",
                 "Jakarta", "DKI Jakarta",
                 "Dr. Siti Rahayu, ST, MT", "021-52907788", "siti@kki.co.id"),
-            "CV Mitra Teknik Bahari": _company(
-                "CV Mitra Teknik Bahari", "consultant",
+            # Dipakai oleh K3, K8, K9, K11, K13, K15
+            "CV Mitra Konsultan Teknik": _company(
+                "CV Mitra Konsultan Teknik", "consultant",
                 "06.789.012.3-456.000",
                 "Jl. Pantai Losari No. 3, Makassar",
                 "Makassar", "Sulawesi Selatan",
-                "Yusuf Darmawan, ST", "0411-224433", "yusuf@mtb.co.id"),
+                "Yusuf Darmawan, ST", "0411-224433", "yusuf@mkt.co.id"),
         }
 
         ppks = {
@@ -620,6 +628,26 @@ def run():
                 "Ir. Dewi Permatasari, M.Sc", "198003102005012003",
                 "PPK Satker SKIPM NTB", "SKIPM Mataram — KKP",
                 "081298765432", "6281298765432", "dewi.permata@kkp.go.id"),
+            # K10 — PPK Sultra
+            "Muh. Ridwan, S.T., M.T.": _ppk(
+                "Muh. Ridwan, S.T., M.T.", "198112202006041002",
+                "PPK Satker BPSPL Makassar", "BPSPL Makassar — KKP",
+                "081355667788", "6281355667788", "m.ridwan@kkp.go.id"),
+            # K12 — PPK Sulbar
+            "Ir. Hartono Wijaya, M.Si": _ppk(
+                "Ir. Hartono Wijaya, M.Si", "197603152002121003",
+                "PPK Satker Ditjen PDSPKP", "Ditjen PDSPKP — KKP",
+                "081244556677", "6281244556677", "hartono.wijaya@kkp.go.id"),
+            # K14 — PPK NTT
+            "Yohanes P. Lewotobi, S.T.": _ppk(
+                "Yohanes P. Lewotobi, S.T.", "198507122010011005",
+                "PPK Satker BPBL Kupang", "BPBL Kupang — KKP",
+                "081237889900", "6281237889900", "y.lewotobi@kkp.go.id"),
+            # K15 — PPK Sulteng
+            "Hendrik Kambey, S.T., M.T.": _ppk(
+                "Hendrik Kambey, S.T., M.T.", "197811042005011004",
+                "PPK Satker SKIPM Palu", "SKIPM Palu — KKP",
+                "081298001122", "6281298001122", "h.kambey@kkp.go.id"),
         }
         print(f"  ✓ {len(companies)} perusahaan, {len(ppks)} PPK\n")
 
