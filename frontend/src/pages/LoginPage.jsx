@@ -6,7 +6,7 @@ import { Spinner } from "@/components/ui";
 import { parseApiError } from "@/utils/format";
 
 export default function LoginPage() {
-  const [email, setEmail] = useState("admin@knmp.id");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const { login } = useAuthStore();
@@ -48,10 +48,10 @@ export default function LoginPage() {
             </div>
             <div>
               <h1 className="font-display font-semibold text-ink-900 leading-none">
-                KNMP Monitor
+                Marlin
               </h1>
               <p className="text-xs text-ink-500 mt-1">
-                Kampung Nelayan Merah Putih
+                Monitoring, Analysis, Reporting & Learning
               </p>
             </div>
           </div>
@@ -71,6 +71,7 @@ export default function LoginPage() {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                placeholder="admin@marlin.id"
                 required
                 autoFocus
               />

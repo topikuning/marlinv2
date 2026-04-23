@@ -518,6 +518,7 @@ function AddLocationModal({ open, onClose, contractId, onSuccess }) {
   const [mode, setMode] = useState("single");
   const [form, setForm] = useState({
     location_code: "", name: "", village: "", district: "", city: "", province: "",
+    latitude: "", longitude: "",
   });
   const [bulk, setBulk] = useState([{ location_code: "", name: "" }]);
   const [file, setFile] = useState(null);
@@ -527,7 +528,12 @@ function AddLocationModal({ open, onClose, contractId, onSuccess }) {
     setLoading(true);
     try {
       if (mode === "single") {
-        await locationsAPI.create(contractId, form);
+        const payload = {
+          ...form,
+          latitude: form.latitude !== "" ? parseFloat(form.latitude) : null,
+          longitude: form.longitude !== "" ? parseFloat(form.longitude) : null,
+        };
+        await locationsAPI.create(contractId, payload);
         toast.success("Lokasi ditambahkan");
       } else if (mode === "bulk") {
         const items = bulk.filter((b) => b.location_code && b.name);
@@ -602,9 +608,14 @@ function AddLocationModal({ open, onClose, contractId, onSuccess }) {
               onChange={(e) => setForm({ ...form, name: e.target.value })}
             />
           </div>
-          {["village", "district", "city", "province"].map((f) => (
+          {[
+            ["village", "Desa/Kelurahan"],
+            ["district", "Kecamatan"],
+            ["city", "Kabupaten/Kota"],
+            ["province", "Provinsi"],
+          ].map(([f, label]) => (
             <div key={f}>
-              <label className="label capitalize">{f}</label>
+              <label className="label">{label}</label>
               <input
                 className="input"
                 value={form[f]}
@@ -612,6 +623,32 @@ function AddLocationModal({ open, onClose, contractId, onSuccess }) {
               />
             </div>
           ))}
+          <div>
+            <label className="label">Latitude</label>
+            <input
+              className="input"
+              type="number"
+              step="any"
+              placeholder="-6.2088"
+              value={form.latitude}
+              onChange={(e) => setForm({ ...form, latitude: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="label">Longitude</label>
+            <input
+              className="input"
+              type="number"
+              step="any"
+              placeholder="106.8456"
+              value={form.longitude}
+              onChange={(e) => setForm({ ...form, longitude: e.target.value })}
+            />
+          </div>
+          <p className="col-span-2 text-[11px] text-ink-500 -mt-1">
+            💡 Koordinat opsional, tapi diperlukan agar lokasi muncul di peta dashboard.
+            Cara cepat: buka Google Maps, klik kanan titik lokasi, pilih koordinatnya.
+          </p>
         </div>
       )}
 

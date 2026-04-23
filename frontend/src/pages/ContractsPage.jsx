@@ -404,7 +404,7 @@ function CreateContractModal({ open, onClose, onSuccess }) {
                     />
                   </div>
                   <div>
-                    <label className="label">Desa/Kel</label>
+                    <label className="label">Desa/Kelurahan</label>
                     <input
                       className="input"
                       value={l.village}
@@ -420,7 +420,7 @@ function CreateContractModal({ open, onClose, onSuccess }) {
                     />
                   </div>
                   <div>
-                    <label className="label">Kota/Kab</label>
+                    <label className="label">Kabupaten/Kota</label>
                     <input
                       className="input"
                       value={l.city}

@@ -972,7 +972,7 @@ export function MasterFacilitiesPage() {
     <div className="p-6 max-w-screen-xl mx-auto">
       <PageHeader
         title="Master Fasilitas"
-        description="Katalog tipe bangunan & infrastruktur KNMP"
+        description="Katalog tipe bangunan & infrastruktur"
         actions={
           <>
             <SearchInput value={c.search} onChange={c.setSearch} />

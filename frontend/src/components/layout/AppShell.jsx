@@ -6,12 +6,13 @@ import {
   LayoutDashboard, FileText, CalendarDays, CalendarRange,
   TrendingUp, Wallet, ClipboardCheck, AlertTriangle, Database,
   Building2, UserCog, Tags, Settings, Users, ShieldCheck, History,
+  Layers,
 } from "lucide-react";
 
 const ICONS = {
   LayoutDashboard, FileText, CalendarDays, CalendarRange, TrendingUp,
   Wallet, ClipboardCheck, AlertTriangle, Database, Building2,
-  UserCog, Tags, Settings, Users, ShieldCheck, Bell, History,
+  UserCog, Tags, Settings, Users, ShieldCheck, Bell, History, Layers,
 };
 
 export default function AppShell({ children }) {
@@ -50,10 +51,10 @@ export default function AppShell({ children }) {
         </div>
         <div>
           <div className="text-white font-display font-semibold text-sm leading-none">
-            KNMP Monitor
+            Marlin
           </div>
           <div className="text-[10px] text-ink-500 mt-0.5">
-            Kampung Nelayan Merah Putih
+            Monitoring, Analysis, Reporting & Learning
           </div>
         </div>
       </div>

@@ -467,7 +467,7 @@ function QueueTab() {
 function TestTab() {
   const [phone, setPhone] = useState("");
   const [message, setMessage] = useState(
-    "Ini test pesan KNMP Monitor — jika Anda menerima ini, konfigurasi WhatsApp berfungsi."
+    "Ini test pesan Marlin — jika Anda menerima ini, konfigurasi WhatsApp berfungsi."
   );
   const [sending, setSending] = useState(false);
   const [running, setRunning] = useState(false);

@@ -28,8 +28,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="KNMP Monitor v2",
-    description="Monitoring konstruksi multi-lokasi — Kampung Nelayan Merah Putih",
+    title="Marlin",
+    description="Monitoring, Analysis, Reporting & Learning for Infrastructure Network",
     version="2.0.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -68,4 +68,4 @@ def health():
 
 @app.get("/")
 def root():
-    return {"app": "KNMP Monitor v2", "docs": "/api/docs"}
+    return {"app": "Marlin", "docs": "/api/docs"}

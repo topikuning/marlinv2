@@ -6,9 +6,9 @@ Isi:
   2. Permissions (30 buah)
   3. Menu items (17 buah, 2 level)
   4. Roles (8 role) beserta permission & menu masing-masing
-  5. Admin user: admin@knmp.id / Admin@123!
+  5. Admin user: admin@marlin.id / Admin@123!  (migrasi otomatis dari admin@knmp.id bila ada)
   6. Master Work Codes (70 kode dari 6 kategori)
-  7. Master Facilities (29 tipe fasilitas KNMP)
+  7. Master Facilities (29 tipe fasilitas)
 
 Tidak ada data kontrak, perusahaan, PPK, laporan, atau apapun lain.
 
@@ -450,15 +450,21 @@ def run():
 
         # Step 4 — Admin user
         print("▸ Admin user...")
-        if not db.query(User).filter(User.email == "admin@knmp.id").first():
+        # Migrasi rebrand: kalau admin lama @knmp.id ada, rename ke @marlin.id
+        legacy_admin = db.query(User).filter(User.email == "admin@knmp.id").first()
+        if legacy_admin:
+            legacy_admin.email = "admin@marlin.id"
+            db.flush()
+            print("  ↻ Email admin lama 'admin@knmp.id' dimigrasi ke 'admin@marlin.id'")
+        if not db.query(User).filter(User.email == "admin@marlin.id").first():
             db.add(User(
-                email="admin@knmp.id", username="admin",
+                email="admin@marlin.id", username="admin",
                 full_name="Super Administrator",
                 hashed_password=get_password_hash("Admin@123!"),
                 role_id=role_map["superadmin"].id,
                 is_active=True, must_change_password=False, auto_provisioned=False,
             ))
-            print("  ✓ Dibuat: admin@knmp.id / Admin@123!\n")
+            print("  ✓ Dibuat: admin@marlin.id / Admin@123!\n")
         else:
             print("  → Sudah ada\n")
 
@@ -485,7 +491,7 @@ def run():
         db.commit()
         print("=" * 55)
         print("✓ seed_master selesai — database bersih & siap pakai.")
-        print("  Login: admin@knmp.id / Admin@123!")
+        print("  Login: admin@marlin.id / Admin@123!")
         print("=" * 55)
 
     except Exception as e:
