@@ -626,16 +626,29 @@ def run():
                                 )),
                             ))
 
-            # Daily reports (7 hari terakhir, hanya kontrak aktif)
+            # Daily reports (7 hari terakhir, hanya kontrak aktif).
+            # Sejak revamp laporan harian berbasis fasilitas, setiap laporan
+            # dipaku ke Lokasi + Fasilitas spesifik supaya foto dokumentasi
+            # bisa muncul di galeri Dashboard Eksekutif per-fasilitas.
             if is_active and cfg["current_week"] > 0:
                 weather = ["Cerah", "Berawan", "Mendung", "Gerimis"]
+                from app.models.models import Location as _Loc, Facility as _Fac
+                demo_locs = db.query(_Loc).filter(_Loc.contract_id == contract.id).all()
+                demo_facs_by_loc = {
+                    str(l.id): db.query(_Fac).filter(_Fac.location_id == l.id).all()
+                    for l in demo_locs
+                }
                 for day_i in range(6, -1, -1):
                     rep_date = TODAY - timedelta(days=day_i)
                     if rep_date.weekday() == 6:
                         continue
+                    chosen_loc = random.choice(demo_locs) if demo_locs else None
+                    facs_in_loc = demo_facs_by_loc.get(str(chosen_loc.id), []) if chosen_loc else []
+                    chosen_fac = random.choice(facs_in_loc) if facs_in_loc else None
                     db.add(DailyReport(
                         contract_id=contract.id,
-                        location_id=None,  # contract-level
+                        location_id=chosen_loc.id if chosen_loc else None,
+                        facility_id=chosen_fac.id if chosen_fac else None,
                         report_date=rep_date,
                         activities=(
                             f"Pekerjaan pasang batu revetmen lanjutan. "

@@ -28,26 +28,198 @@ def calculate_spi(actual: Optional[float], planned: Optional[float]) -> Optional
     return round(actual / planned, 4)
 
 
-def update_progress_item_calculations(progress_item: WeeklyProgressItem, boq_item: BOQItem):
-    vol = float(boq_item.volume or 0)
-    if vol > 0:
-        progress_item.progress_this_week_pct = Decimal(str(
-            float(progress_item.volume_this_week or 0) / vol
-        ))
-        progress_item.progress_cumulative_pct = Decimal(str(
-            float(progress_item.volume_cumulative or 0) / vol
-        ))
-    else:
-        # lumpsum — volume_cumulative interpreted as percent (0..1)
-        pct_cum = float(progress_item.volume_cumulative or 0)
-        pct_wk = float(progress_item.volume_this_week or 0)
-        progress_item.progress_this_week_pct = Decimal(str(min(1.0, max(0.0, pct_wk))))
-        progress_item.progress_cumulative_pct = Decimal(str(min(1.0, max(0.0, pct_cum))))
+def update_progress_item_calculations(
+    progress_item: WeeklyProgressItem,
+    boq_item: BOQItem,
+    *,
+    previous_cumulative: Optional[float] = None,
+):
+    """
+    Hitung ulang persentase progres untuk satu WeeklyProgressItem.
 
+    Alur baru (selaras spek perbaikan_logika_laporan_mingguan):
+      Volume Kumulatif = Volume Minggu Lalu + Volume Minggu Ini
+      Volume Minggu Lalu = volume_cumulative dari minggu < current_week
+      Volume Minggu Ini  = input user (progress_item.volume_this_week)
+      Validasi: Volume Kumulatif tidak boleh > volume BOQ fasilitas.
+
+    Parameter:
+      previous_cumulative — sudah di-lookup oleh caller dari minggu-minggu
+        sebelumnya (max volume_cumulative). Bila None, fallback dihitung
+        dari existing pi.volume_cumulative - volume_this_week untuk
+        kompatibilitas mundur.
+
+    Raises ValueError kalau inputan menyebabkan kumulatif melebihi BOQ.
+    """
+    this_week = float(progress_item.volume_this_week or 0)
+    if previous_cumulative is None:
+        existing_cum = float(progress_item.volume_cumulative or 0)
+        previous_cumulative = max(0.0, existing_cum - this_week)
+    cumulative = max(0.0, previous_cumulative + this_week)
+
+    vol = float(boq_item.volume or 0)
+    label = (boq_item.description or "")[:80] or str(boq_item.id)
+
+    if vol > 0:
+        if cumulative > vol + 1e-6:
+            raise ValueError(
+                f"Volume kumulatif ({cumulative:g}) melebihi Volume BOQ "
+                f"({vol:g}) untuk item '{label}'. Kurangi Volume Minggu Ini."
+            )
+        progress_item.progress_this_week_pct = Decimal(str(this_week / vol))
+        progress_item.progress_cumulative_pct = Decimal(str(cumulative / vol))
+    else:
+        # Lumpsum — volume diinterpretasi sebagai persentase 0..1
+        if cumulative > 1.0 + 1e-6:
+            raise ValueError(
+                f"Progress kumulatif melebihi 100% untuk item lumpsum '{label}'."
+            )
+        progress_item.progress_this_week_pct = Decimal(str(min(1.0, max(0.0, this_week))))
+        progress_item.progress_cumulative_pct = Decimal(str(min(1.0, max(0.0, cumulative))))
+
+    progress_item.volume_cumulative = Decimal(str(cumulative))
     progress_item.weighted_progress_pct = Decimal(str(
         float(progress_item.progress_cumulative_pct) * float(boq_item.weight_pct or 0)
     ))
     return progress_item
+
+
+def get_previous_cumulatives(
+    db: Session,
+    contract_id,
+    boq_item_ids: List,
+    current_week: int,
+) -> dict:
+    """
+    Batch-lookup Volume Minggu Lalu (= max volume_cumulative dari report
+    mingguan dengan week_number < current_week) untuk setiap boq_item_id.
+    Return dict {boq_item_id: float}.
+
+    Progress sifatnya monotonic non-decreasing, jadi MAX dari semua minggu
+    sebelumnya sama dengan minggu terakhir yang dilaporkan. Pakai MAX
+    sebagai safety kalau ada history yang tidak rapi.
+    """
+    from sqlalchemy import func
+    if not boq_item_ids:
+        return {}
+    rows = (
+        db.query(
+            WeeklyProgressItem.boq_item_id,
+            func.max(WeeklyProgressItem.volume_cumulative),
+        )
+        .join(WeeklyReport, WeeklyReport.id == WeeklyProgressItem.weekly_report_id)
+        .filter(
+            WeeklyReport.contract_id == contract_id,
+            WeeklyReport.week_number < current_week,
+            WeeklyReport.is_deleted == False,  # noqa: E712
+            WeeklyProgressItem.boq_item_id.in_(boq_item_ids),
+        )
+        .group_by(WeeklyProgressItem.boq_item_id)
+        .all()
+    )
+    return {str(r[0]): float(r[1] or 0) for r in rows}
+
+
+def compute_facility_progress_summary(
+    db: Session,
+    contract_id,
+    *,
+    revision_id=None,
+) -> List[dict]:
+    """
+    Ringkasan progres per fasilitas untuk sebuah kontrak, berdasarkan
+    WeeklyProgressItem terbaru (max volume_cumulative per BOQ). Untuk
+    setiap fasilitas kembalikan:
+
+      - facility_id, facility_code, facility_name, location_name
+      - target_weight_pct: sum(BOQItem.weight_pct) untuk fasilitas ini
+        (= porsi target fasilitas terhadap total kontrak)
+      - actual_weight_pct: sum(weight_pct * progress_cumulative_pct)
+        (= kontribusi realisasi ke total kontrak sampai saat ini)
+      - facility_progress_pct: actual / target bila target > 0
+        (= progress fisik internal fasilitas, 0..1)
+      - item_count, completed_item_count
+
+    Deviasi per fasilitas dihitung di frontend sebagai
+    (facility_progress_pct - rata-rata progress kontrak) supaya konteks
+    relatif terlihat.
+    """
+    from app.models.models import BOQRevision, RevisionStatus
+
+    # Tentukan revisi aktif
+    if revision_id is None:
+        active = (
+            db.query(BOQRevision)
+            .filter(
+                BOQRevision.contract_id == contract_id,
+                BOQRevision.is_active == True,  # noqa: E712
+            )
+            .first()
+        )
+        revision_id = active.id if active else None
+    if revision_id is None:
+        return []
+
+    # Ambil BOQ items + facility/location + max cumulative pct per item
+    items = (
+        db.query(BOQItem, Facility, Location)
+        .join(Facility, Facility.id == BOQItem.facility_id)
+        .join(Location, Location.id == Facility.location_id)
+        .filter(
+            Location.contract_id == contract_id,
+            BOQItem.boq_revision_id == revision_id,
+            BOQItem.is_active == True,  # noqa: E712
+            BOQItem.is_leaf == True,    # noqa: E712
+        )
+        .all()
+    )
+    if not items:
+        return []
+
+    boq_ids = [b.id for b, _, _ in items]
+    from sqlalchemy import func
+    latest_progress = dict(
+        db.query(
+            WeeklyProgressItem.boq_item_id,
+            func.max(WeeklyProgressItem.progress_cumulative_pct),
+        )
+        .filter(WeeklyProgressItem.boq_item_id.in_(boq_ids))
+        .group_by(WeeklyProgressItem.boq_item_id)
+        .all()
+    )
+
+    buckets = {}
+    for b, f, l in items:
+        key = str(f.id)
+        bucket = buckets.setdefault(key, {
+            "facility_id": key,
+            "facility_code": f.facility_code,
+            "facility_name": f.facility_name,
+            "facility_type": f.facility_type,
+            "location_id": str(l.id),
+            "location_code": l.location_code,
+            "location_name": l.name,
+            "target_weight_pct": 0.0,
+            "actual_weight_pct": 0.0,
+            "item_count": 0,
+            "completed_item_count": 0,
+        })
+        w = float(b.weight_pct or 0)
+        p = float(latest_progress.get(b.id) or 0)
+        bucket["target_weight_pct"] += w
+        bucket["actual_weight_pct"] += w * p
+        bucket["item_count"] += 1
+        if p >= 0.999:
+            bucket["completed_item_count"] += 1
+
+    out = []
+    for v in buckets.values():
+        target = v["target_weight_pct"]
+        actual = v["actual_weight_pct"]
+        v["facility_progress_pct"] = (actual / target) if target > 0 else 0.0
+        out.append(v)
+    out.sort(key=lambda x: (x["location_code"], x["facility_code"]))
+    return out
 
 
 def recalculate_report_totals(db: Session, report: WeeklyReport):

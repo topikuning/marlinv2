@@ -438,6 +438,9 @@ class AddendumOut(ORMBase):
 class ProgressItemInput(BaseModel):
     boq_item_id: UUID
     volume_this_week: Decimal = Decimal("0")
+    # volume_cumulative tetap diterima untuk kompatibilitas mundur, tapi
+    # server akan override dengan perhitungan: previous_week + this_week.
+    # Lihat app.services.progress_service.update_progress_item_calculations.
     volume_cumulative: Decimal = Decimal("0")
     notes: Optional[str] = None
 
@@ -534,6 +537,7 @@ class WeeklyReportDetail(WeeklyReportOut):
 class DailyReportCreate(BaseModel):
     contract_id: UUID
     location_id: Optional[UUID] = None
+    facility_id: Optional[UUID] = None
     report_date: date
     activities: Optional[str] = None
     manpower_count: int = 0
@@ -550,6 +554,7 @@ class DailyReportCreate(BaseModel):
 
 class DailyReportUpdate(BaseModel):
     location_id: Optional[UUID] = None
+    facility_id: Optional[UUID] = None
     report_date: Optional[date] = None
     activities: Optional[str] = None
     manpower_count: Optional[int] = None

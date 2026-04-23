@@ -6,13 +6,13 @@ import {
   LayoutDashboard, FileText, CalendarDays, CalendarRange,
   TrendingUp, Wallet, ClipboardCheck, AlertTriangle, Database,
   Building2, UserCog, Tags, Settings, Users, ShieldCheck, History,
-  Layers,
+  Layers, Map,
 } from "lucide-react";
 
 const ICONS = {
   LayoutDashboard, FileText, CalendarDays, CalendarRange, TrendingUp,
   Wallet, ClipboardCheck, AlertTriangle, Database, Building2,
-  UserCog, Tags, Settings, Users, ShieldCheck, Bell, History, Layers,
+  UserCog, Tags, Settings, Users, ShieldCheck, Bell, History, Layers, Map,
 };
 
 export default function AppShell({ children }) {

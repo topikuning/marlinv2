@@ -5,6 +5,7 @@ import { PageLoader } from "@/components/ui";
 import AppShell from "@/components/layout/AppShell";
 import LoginPage from "@/pages/LoginPage";
 import DashboardPage from "@/pages/DashboardPage";
+import ExecutiveDashboardPage from "@/pages/ExecutiveDashboardPage";
 import ContractsPage from "@/pages/ContractsPage";
 import ContractDetailPage from "@/pages/ContractDetailPage";
 import WeeklyReportsPage from "@/pages/WeeklyReportsPage";
@@ -40,6 +41,7 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
+      <Route path="/eksekutif" element={<ProtectedRoute><ExecutiveDashboardPage /></ProtectedRoute>} />
       <Route path="/contracts" element={<ProtectedRoute><ContractsPage /></ProtectedRoute>} />
       <Route path="/contracts/:id" element={<ProtectedRoute><ContractDetailPage /></ProtectedRoute>} />
       <Route path="/reports/weekly" element={<ProtectedRoute><WeeklyReportsPage /></ProtectedRoute>} />
