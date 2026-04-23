@@ -294,8 +294,6 @@ export const analyticsAPI = {
   dashboard: () => api.get("/analytics/dashboard"),
   contractsSummary: () => api.get("/analytics/contracts-summary"),
   scurve: (cid) => api.get(`/analytics/scurve/${cid}`),
-  mapLocations: () => api.get("/analytics/map-locations"),
-  facilityPhotos: (fid) => api.get(`/analytics/facility-photos/${fid}`),
 };
 
 export const templatesAPI = {
