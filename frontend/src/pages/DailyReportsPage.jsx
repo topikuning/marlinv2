@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import toast from "react-hot-toast";
 import {
-  Plus, Calendar, Upload, Trash2, Image, Edit2,
+  Plus, Calendar, Upload, Trash2, Image, Edit2, Filter, X,
 } from "lucide-react";
 import { contractsAPI, dailyAPI } from "@/api";
 import {
@@ -12,6 +12,7 @@ import { fmtDate, parseApiError, assetUrl } from "@/utils/format";
 export default function DailyReportsPage() {
   const [contracts, setContracts] = useState([]);
   const [selected, setSelected] = useState("");
+  const [contractDetail, setContractDetail] = useState(null);
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(false);
   const [detail, setDetail] = useState(null);
@@ -19,12 +20,24 @@ export default function DailyReportsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [confirmDel, setConfirmDel] = useState(null);
 
+  // Filter state
+  const [filterLocation, setFilterLocation] = useState("");
+  const [filterFacility, setFilterFacility] = useState("");
+  const [filterDateFrom, setFilterDateFrom] = useState("");
+  const [filterDateTo, setFilterDateTo] = useState("");
+
   useEffect(() => {
     contractsAPI.list({ page_size: 500 }).then(({ data }) => setContracts(data.items || []));
   }, []);
 
   useEffect(() => {
-    if (!selected) return setReports([]);
+    if (!selected) {
+      setReports([]);
+      setContractDetail(null);
+      return;
+    }
+    // Load contract detail untuk dropdown filter lokasi/fasilitas
+    contractsAPI.get(selected).then(({ data }) => setContractDetail(data)).catch(() => {});
     refresh();
   }, [selected]);
 
@@ -34,6 +47,28 @@ export default function DailyReportsPage() {
       .listByContract(selected)
       .then(({ data }) => setReports(data.items || []))
       .finally(() => setLoading(false));
+  };
+
+  const locations = contractDetail?.locations || [];
+  const facilitiesInFilterLoc = (
+    locations.find((l) => l.id === filterLocation)?.facilities || []
+  );
+
+  // Apply filters client-side untuk responsif instan
+  const filteredReports = useMemo(() => {
+    return reports.filter((r) => {
+      if (filterLocation && r.location_id !== filterLocation) return false;
+      if (filterFacility && r.facility_id !== filterFacility) return false;
+      if (filterDateFrom && r.report_date < filterDateFrom) return false;
+      if (filterDateTo && r.report_date > filterDateTo) return false;
+      return true;
+    });
+  }, [reports, filterLocation, filterFacility, filterDateFrom, filterDateTo]);
+
+  const anyFilter = filterLocation || filterFacility || filterDateFrom || filterDateTo;
+  const resetFilters = () => {
+    setFilterLocation(""); setFilterFacility("");
+    setFilterDateFrom(""); setFilterDateTo("");
   };
 
   const openDetail = async (r) => {
@@ -74,19 +109,69 @@ export default function DailyReportsPage() {
         </select>
       </div>
 
+      {/* Filter panel */}
+      {selected && locations.length > 0 && (
+        <div className="card p-3 mb-4 flex items-center gap-2 flex-wrap">
+          <Filter size={13} className="text-ink-500 ml-1" />
+          <select
+            className="select py-1 text-xs"
+            value={filterLocation}
+            onChange={(e) => { setFilterLocation(e.target.value); setFilterFacility(""); }}
+          >
+            <option value="">Semua Lokasi</option>
+            {locations.map((l) => (
+              <option key={l.id} value={l.id}>[{l.location_code}] {l.name}</option>
+            ))}
+          </select>
+          <select
+            className="select py-1 text-xs"
+            value={filterFacility}
+            onChange={(e) => setFilterFacility(e.target.value)}
+            disabled={!filterLocation}
+          >
+            <option value="">Semua Fasilitas</option>
+            {facilitiesInFilterLoc.map((f) => (
+              <option key={f.id} value={f.id}>[{f.facility_code}] {f.facility_name}</option>
+            ))}
+          </select>
+          <span className="text-[11px] text-ink-500">Tanggal:</span>
+          <input
+            type="date"
+            className="input py-1 text-xs w-auto"
+            value={filterDateFrom}
+            onChange={(e) => setFilterDateFrom(e.target.value)}
+          />
+          <span className="text-xs text-ink-400">–</span>
+          <input
+            type="date"
+            className="input py-1 text-xs w-auto"
+            value={filterDateTo}
+            onChange={(e) => setFilterDateTo(e.target.value)}
+          />
+          {anyFilter && (
+            <button onClick={resetFilters} className="btn-ghost btn-xs">
+              <X size={11} /> Reset
+            </button>
+          )}
+          <span className="text-[11px] text-ink-500 ml-auto">
+            {filteredReports.length} / {reports.length} laporan
+          </span>
+        </div>
+      )}
+
       {!selected ? (
         <Empty icon={Calendar} title="Pilih kontrak dulu" />
       ) : loading ? (
         <PageLoader />
-      ) : reports.length === 0 ? (
+      ) : filteredReports.length === 0 ? (
         <Empty
           icon={Calendar}
-          title="Belum ada laporan harian"
+          title={anyFilter ? "Tidak ada laporan sesuai filter" : "Belum ada laporan harian"}
           description="Klik 'Laporan Hari Ini' untuk mulai"
         />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {reports.map((r) => (
+          {filteredReports.map((r) => (
             <div
               key={r.id}
               onClick={() => openDetail(r)}
@@ -224,10 +309,14 @@ function DailyReportModal({ contractId, initial, onClose, onSuccess }) {
   );
   const [contractDetail, setContractDetail] = useState(null);
   const [loading, setLoading] = useState(false);
+  // Stepper: "detail" → isi form & simpan. "photos" → upload foto ke laporan
+  // yang sudah tersimpan. Untuk edit (initial ada) langsung masuk step detail
+  // saja; tombol "Simpan & Lanjut Foto" hanya muncul untuk mode create.
+  const [step, setStep] = useState("detail");
+  const [savedReportId, setSavedReportId] = useState(initial?.id || null);
+  const [uploadedPhotos, setUploadedPhotos] = useState(initial?.photos || []);
+  const [uploading, setUploading] = useState(false);
 
-  // Load contract detail untuk dapat list Lokasi + Fasilitas yang
-  // tersedia. Daily report baru wajib merujuk ke fasilitas spesifik
-  // supaya foto masuk galeri Dashboard Eksekutif.
   useEffect(() => {
     contractsAPI
       .get(contractId)
@@ -238,8 +327,9 @@ function DailyReportModal({ contractId, initial, onClose, onSuccess }) {
   const locations = contractDetail?.locations || [];
   const selectedLocation = locations.find((l) => l.id === form.location_id);
   const facilitiesInLocation = selectedLocation?.facilities || [];
+  const selectedFacility = facilitiesInLocation.find((f) => f.id === form.facility_id);
 
-  const submit = async () => {
+  const submit = async (thenGoToPhotos = false) => {
     if (!form.location_id || !form.facility_id) {
       toast.error("Pilih Lokasi & Fasilitas terlebih dahulu.");
       return;
@@ -253,10 +343,20 @@ function DailyReportModal({ contractId, initial, onClose, onSuccess }) {
         manpower_unskilled: parseInt(form.manpower_unskilled) || 0,
         rain_hours: parseFloat(form.rain_hours) || 0,
       };
-      if (initial) await dailyAPI.update(initial.id, payload);
-      else await dailyAPI.create(payload);
-      toast.success("Tersimpan");
-      onSuccess?.();
+      let id = savedReportId;
+      if (id) {
+        await dailyAPI.update(id, payload);
+      } else {
+        const { data } = await dailyAPI.create(payload);
+        id = data.id;
+        setSavedReportId(id);
+      }
+      toast.success("Laporan tersimpan");
+      if (thenGoToPhotos) {
+        setStep("photos");
+      } else {
+        onSuccess?.();
+      }
     } catch (e) {
       toast.error(parseApiError(e));
     } finally {
@@ -264,21 +364,84 @@ function DailyReportModal({ contractId, initial, onClose, onSuccess }) {
     }
   };
 
+  const handlePhotoUpload = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length || !savedReportId) return;
+    setUploading(true);
+    try {
+      const newOnes = [];
+      for (const f of files) {
+        const { data } = await dailyAPI.uploadPhoto(savedReportId, f);
+        newOnes.push(data);
+      }
+      setUploadedPhotos((xs) => [...xs, ...newOnes]);
+      toast.success(`${files.length} foto ter-upload`);
+    } catch (err) {
+      toast.error(parseApiError(err));
+    } finally {
+      setUploading(false);
+      e.target.value = "";
+    }
+  };
+
+  const deletePhotoInline = async (pid) => {
+    if (!confirm("Hapus foto ini?")) return;
+    try {
+      await dailyAPI.deletePhoto(savedReportId, pid);
+      setUploadedPhotos((xs) => xs.filter((p) => p.id !== pid));
+    } catch (err) {
+      toast.error(parseApiError(err));
+    }
+  };
+
   return (
     <Modal
       open
       onClose={onClose}
-      title={initial ? "Edit Laporan Harian" : "Laporan Harian Baru"}
+      title={
+        initial
+          ? "Edit Laporan Harian"
+          : step === "detail"
+          ? "Laporan Harian Baru · 1. Detail"
+          : "Laporan Harian Baru · 2. Upload Foto"
+      }
       size="lg"
       footer={
-        <>
-          <button className="btn-secondary" onClick={onClose}>Batal</button>
-          <button className="btn-primary" onClick={submit} disabled={loading}>
-            {loading && <Spinner size={14} />} Simpan
-          </button>
-        </>
+        step === "detail" ? (
+          <>
+            <button className="btn-secondary" onClick={onClose}>Batal</button>
+            {!initial && (
+              <button
+                className="btn-secondary"
+                onClick={() => submit(false)}
+                disabled={loading}
+                title="Simpan tanpa upload foto"
+              >
+                {loading && <Spinner size={14} />} Simpan Saja
+              </button>
+            )}
+            <button
+              className="btn-primary"
+              onClick={() => submit(!initial)}
+              disabled={loading}
+            >
+              {loading && <Spinner size={14} />}
+              {initial ? "Simpan" : "Simpan & Lanjut Foto →"}
+            </button>
+          </>
+        ) : (
+          <>
+            <button className="btn-secondary" onClick={() => setStep("detail")}>
+              ← Kembali ke Detail
+            </button>
+            <button className="btn-primary" onClick={() => { onSuccess?.(); }}>
+              Selesai
+            </button>
+          </>
+        )
       }
     >
+      {step === "detail" && (
       <div className="space-y-4">
         {/* Pilih lokasi & fasilitas — wajib agar foto laporan harian masuk
             ke galeri Dashboard Eksekutif untuk fasilitas yang tepat. */}
@@ -416,6 +579,65 @@ function DailyReportModal({ contractId, initial, onClose, onSuccess }) {
           />
         </div>
       </div>
+      )}
+
+      {step === "photos" && (
+        <div className="space-y-4">
+          <div className="p-3 rounded-lg bg-brand-50 border border-brand-200 text-xs text-brand-800">
+            <p className="font-semibold">📌 Foto otomatis ter-tag ke fasilitas</p>
+            <p className="mt-1">
+              {selectedFacility ? (
+                <>Semua foto yang di-upload sekarang akan ter-tag ke{" "}
+                <strong>[{selectedFacility.facility_code}] {selectedFacility.facility_name}</strong>{" "}
+                dan langsung muncul di galeri Dashboard Eksekutif.</>
+              ) : "Foto di-tag ke fasilitas yang dipilih di step Detail."}
+            </p>
+          </div>
+
+          <label className="btn-primary cursor-pointer inline-flex">
+            <Upload size={13} /> Upload Foto (bisa banyak)
+            <input
+              type="file"
+              hidden
+              multiple
+              accept="image/*"
+              onChange={handlePhotoUpload}
+              disabled={uploading}
+            />
+          </label>
+          {uploading && (
+            <div className="text-xs text-ink-500 flex items-center gap-2">
+              <Spinner size={12} /> Meng-upload...
+            </div>
+          )}
+
+          {uploadedPhotos.length === 0 ? (
+            <Empty icon={Image} title="Belum ada foto" description="Klik tombol di atas untuk upload." />
+          ) : (
+            <div>
+              <p className="text-xs text-ink-600 mb-2">{uploadedPhotos.length} foto ter-upload:</p>
+              <div className="grid grid-cols-3 md:grid-cols-5 gap-2">
+                {uploadedPhotos.map((p) => (
+                  <div key={p.id} className="aspect-square rounded-lg overflow-hidden border border-ink-200 relative group">
+                    <img
+                      src={assetUrl(p.thumbnail_path || p.file_path)}
+                      alt=""
+                      className="w-full h-full object-cover"
+                    />
+                    <button
+                      onClick={() => deletePhotoInline(p.id)}
+                      className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 bg-red-600 text-white p-1 rounded"
+                      title="Hapus"
+                    >
+                      <Trash2 size={11} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </Modal>
   );
 }
