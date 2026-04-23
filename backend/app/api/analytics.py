@@ -270,6 +270,9 @@ def map_locations(
             }
 
     items = []
+    # Pre-fetch company + PPK names untuk search di dashboard eksekutif
+    company_map = {c.id: c.name for c in db.query(Company).all()}
+    ppk_map = {p.id: p.name for p in db.query(PPK).all()}
     for loc, c in locs:
         facilities = (
             db.query(Facility)
@@ -292,6 +295,8 @@ def map_locations(
             "contract_number": c.contract_number,
             "contract_name": c.contract_name,
             "contract_status": c.status.value if hasattr(c.status, "value") else c.status,
+            "company_name": company_map.get(c.company_id),
+            "ppk_name": ppk_map.get(c.ppk_id),
             "current_value": float(c.current_value or 0),
             "start_date": c.start_date.isoformat() if c.start_date else None,
             "end_date": c.end_date.isoformat() if c.end_date else None,
