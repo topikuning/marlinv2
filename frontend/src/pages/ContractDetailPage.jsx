@@ -320,6 +320,8 @@ export default function ContractDetailPage() {
                       </button>
                       <button
                         className="btn-ghost btn-xs"
+                        disabled={boqLocked}
+                        title={boqLocked ? "Import BOQ dikunci — revisi APPROVED. Buat Adendum untuk revisi baru, lalu import ke revisi DRAFT itu." : "Import BOQ dari Excel"}
                         onClick={() => {
                           setBoqLocation(loc);
                           setShowImport(true);
@@ -1953,16 +1955,27 @@ const CHAIN_STATUS_COLOR = {
 function ContractChainTimeline({ contract, onGoTab }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   useEffect(() => {
     setLoading(true);
+    setError(null);
     contractsAPI.chainStatus(contract.id)
       .then(({ data }) => setData(data))
-      .catch(() => setData(null))
+      .catch((e) => setError(parseApiError(e)))
       .finally(() => setLoading(false));
-  }, [contract.id, contract.updated_at]);
+  }, [contract.id]);
 
-  if (loading) return <div className="card p-4 text-xs text-ink-500">Memuat timeline...</div>;
-  if (!data?.timeline?.length) return null;
+  if (loading) return <div className="card p-4 text-xs text-ink-500">Memuat timeline rantai...</div>;
+  if (error) return (
+    <div className="card p-4 text-xs text-red-700 bg-red-50 border-red-200">
+      Timeline tidak tersedia: {error}. Kemungkinan backend belum restart setelah update (endpoint /chain-status baru).
+    </div>
+  );
+  if (!data?.timeline?.length) return (
+    <div className="card p-4 text-xs text-ink-500">
+      Belum ada event untuk ditampilkan.
+    </div>
+  );
 
   return (
     <div className="card p-4">
@@ -2030,9 +2043,10 @@ function ContractChainStatusPanel({ contract, onGoTab }) {
       .then(({ data }) => setData(data))
       .catch(() => setData(null))
       .finally(() => setLoading(false));
-  }, [contract.id, contract.updated_at]);
+  }, [contract.id]);
 
-  if (loading || !data?.summary) return null;
+  if (loading) return <div className="card p-4 text-xs text-ink-500">Memuat status rantai...</div>;
+  if (!data?.summary) return null;
   const s = data.summary;
   const actionTab = {
     approve_revision: "boq",
