@@ -1771,6 +1771,18 @@ function VOCreateModal({ contract, onClose, onSuccess }) {
     title: "", technical_justification: "", quantity_calculation: "", items: [],
   });
   const [saving, setSaving] = useState(false);
+  const [boqList, setBoqList] = useState([]);
+  const [boqLoading, setBoqLoading] = useState(true);
+
+  // Load semua leaf BOQ items di kontrak untuk dipakai sebagai picker
+  // (pengganti input UUID manual yang UX-nya payah).
+  useEffect(() => {
+    boqAPI.listByContractFlat(contract.id, true)
+      .then(({ data }) => setBoqList(data || []))
+      .catch(() => setBoqList([]))
+      .finally(() => setBoqLoading(false));
+  }, [contract.id]);
+
   const addItem = () => setForm((f) => ({ ...f, items: [...f.items, {
     action: "increase", boq_item_id: "", facility_id: "",
     description: "", unit: "", volume_delta: 0, unit_price: 0, notes: "",
@@ -1781,17 +1793,65 @@ function VOCreateModal({ contract, onClose, onSuccess }) {
   const removeItem = (idx) => setForm((f) => ({
     ...f, items: f.items.filter((_, i) => i !== idx),
   }));
+
+  // Saat user pilih BOQ item dari dropdown, auto-fill description/unit/
+  // unit_price supaya user hanya perlu isi volume_delta. Default volume_delta
+  // mengikuti action: kalau DECREASE, isi negatif-nya volume saat ini (user
+  // bisa adjust).
+  const pickBoqItem = (idx, boqItemId) => {
+    const boq = boqList.find((b) => b.id === boqItemId);
+    if (!boq) {
+      updateItem(idx, "boq_item_id", boqItemId);
+      return;
+    }
+    setForm((f) => ({
+      ...f,
+      items: f.items.map((it, i) =>
+        i === idx
+          ? {
+              ...it,
+              boq_item_id: boqItemId,
+              facility_id: boq.facility_id,
+              description: boq.description || "",
+              unit: boq.unit || "",
+              unit_price: boq.unit_price || 0,
+              master_work_code: boq.master_work_code || null,
+            }
+          : it
+      ),
+    }));
+  };
+
   const submit = async () => {
     if (form.technical_justification.length < 50) return toast.error("Justifikasi teknis minimal 50 karakter");
     if (!form.items.length) return toast.error("Tambahkan minimal 1 item perubahan");
+    // Validasi: item non-ADD wajib boq_item_id
+    for (const [idx, it] of form.items.entries()) {
+      if (it.action !== "add" && !it.boq_item_id) {
+        return toast.error(`Item ${idx + 1}: pilih BOQ item dari daftar`);
+      }
+      if (it.action === "add" && !it.facility_id) {
+        return toast.error(`Item ${idx + 1}: pilih fasilitas target`);
+      }
+    }
     setSaving(true);
     try {
-      await voAPI.create(contract.id, form);
+      // Normalisasi payload: volume_delta parseFloat supaya decimal dikirim benar
+      const payload = {
+        ...form,
+        items: form.items.map((it) => ({
+          ...it,
+          volume_delta: parseFloat(it.volume_delta) || 0,
+          unit_price: parseFloat(it.unit_price) || 0,
+        })),
+      };
+      await voAPI.create(contract.id, payload);
       toast.success("VO tersimpan sebagai DRAFT");
       onSuccess?.();
     } catch (e) { toast.error(parseApiError(e)); }
     finally { setSaving(false); }
   };
+
   const locations = contract.locations || [];
   const allFacilities = locations.flatMap((l) => (l.facilities || []).map((f) => ({ ...f, loc: l })));
   return (
@@ -1868,10 +1928,22 @@ function VOCreateModal({ contract, onClose, onSuccess }) {
                       </div>
                     ) : (
                       <div>
-                        <label className="label text-[10px]">BOQ Item ID</label>
-                        <input className="input py-1 text-xs font-mono" value={it.boq_item_id}
-                          onChange={(e) => updateItem(idx, "boq_item_id", e.target.value)}
-                          placeholder="UUID dari tab BOQ" />
+                        <label className="label text-[10px]">Pilih BOQ Item</label>
+                        <select
+                          className="select py-1 text-xs"
+                          value={it.boq_item_id}
+                          onChange={(e) => pickBoqItem(idx, e.target.value)}
+                          disabled={boqLoading}
+                        >
+                          <option value="">
+                            {boqLoading ? "memuat BOQ..." : `— pilih dari ${boqList.length} item —`}
+                          </option>
+                          {boqList.map((b) => (
+                            <option key={b.id} value={b.id}>
+                              [{b.location_code}/{b.facility_code}] {b.description?.slice(0, 60)}{(b.description?.length || 0) > 60 ? "…" : ""} · {b.unit} · vol {b.volume}
+                            </option>
+                          ))}
+                        </select>
                       </div>
                     )}
                   </div>

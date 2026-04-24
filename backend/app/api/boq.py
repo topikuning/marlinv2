@@ -668,6 +668,26 @@ async def import_excel(
 
         for cid in touched_contracts:
             recalculate_contract_weights(db, cid)
+            # Auto-sync nilai kontrak DRAFT: saat BOQ baru di-import ke
+            # V0 DRAFT, current_value kontrak ikut updated supaya Total BOQ
+            # di header kontrak sinkron. Untuk kontrak aktif (V0 sudah
+            # APPROVED), nilai kontrak tidak otomatis berubah — perubahan
+            # harus lewat Addendum resmi.
+            from app.models.models import BOQRevision, RevisionStatus
+            c = db.query(Contract).filter(Contract.id == cid).first()
+            if c and c.status == ContractStatus.DRAFT:
+                working_rev = (
+                    db.query(BOQRevision)
+                    .filter(
+                        BOQRevision.contract_id == cid,
+                        BOQRevision.status == RevisionStatus.DRAFT,
+                    )
+                    .order_by(BOQRevision.cco_number.desc())
+                    .first()
+                )
+                if working_rev and working_rev.total_value:
+                    c.original_value = working_rev.total_value
+                    c.current_value = working_rev.total_value
 
         db.commit()
         result.success = True

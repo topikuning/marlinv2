@@ -36,17 +36,40 @@ def contract_is_unlocked(c: Contract) -> bool:
 
 
 def _sum_active_boq(db: Session, contract: Contract) -> float:
-    from app.models.models import BOQRevision, BOQItem
+    """
+    Hitung total BOQ "working": revisi aktif dulu (V>=0 APPROVED), fallback
+    ke revisi DRAFT terbaru (V0 DRAFT saat kontrak belum aktif, atau V(N)
+    DRAFT saat sedang dalam fase addendum). Selaras dengan logic read path
+    _resolve_working_revision_id di boq.py sehingga angka di header kontrak
+    konsisten dengan isi tab BOQ.
+    """
+    from app.models.models import BOQRevision, BOQItem, RevisionStatus
+    # 1. Revisi APPROVED yang aktif — kondisi normal kontrak berjalan
     rev = (
         db.query(BOQRevision)
         .filter(BOQRevision.contract_id == contract.id, BOQRevision.is_active == True)  # noqa: E712
         .first()
     )
+    # 2. Fallback: revisi DRAFT terbaru (kontrak DRAFT atau adendum pending)
+    if not rev:
+        rev = (
+            db.query(BOQRevision)
+            .filter(
+                BOQRevision.contract_id == contract.id,
+                BOQRevision.status == RevisionStatus.DRAFT,
+            )
+            .order_by(BOQRevision.cco_number.desc())
+            .first()
+        )
     if not rev:
         return 0.0
     total = (
         db.query(func.coalesce(func.sum(BOQItem.total_price), 0))
-        .filter(BOQItem.boq_revision_id == rev.id)
+        .filter(
+            BOQItem.boq_revision_id == rev.id,
+            BOQItem.is_leaf == True,  # noqa: E712
+            BOQItem.is_active == True,  # noqa: E712
+        )
         .scalar()
     )
     return float(total or 0)

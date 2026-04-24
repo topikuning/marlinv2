@@ -617,6 +617,13 @@ def run():
                 "Jl. Pantai Losari No. 3, Makassar",
                 "Makassar", "Sulawesi Selatan",
                 "Yusuf Darmawan, ST", "0411-224433", "yusuf@mkt.co.id"),
+            # Kontraktor tambahan untuk K10, K14
+            "PT Samudera Biru Konstruksi": _company(
+                "PT Samudera Biru Konstruksi", "contractor",
+                "07.890.123.4-567.000",
+                "Jl. Pasar Ikan Raya No. 17, Baubau",
+                "Baubau", "Sulawesi Tenggara",
+                "Ir. Rafi Nasution, MT", "0402-445566", "rafi@sbk.co.id"),
         }
 
         ppks = {

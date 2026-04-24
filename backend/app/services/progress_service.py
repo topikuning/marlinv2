@@ -370,7 +370,15 @@ def get_scurve_data(db: Session, contract_id: str) -> SCurveResponse:
 
 
 def recalculate_facility_weights(db: Session, facility_id: str):
-    """Recalculate weight_pct of all active leaf items in one facility (proportional to total_price)."""
+    """
+    Recalculate weight_pct of all active leaf items in one facility
+    (proportional to total_price) + update facility.total_value cache.
+
+    total_value facility = sum(total_price leaf items) — dipakai untuk
+    tampilan ringkasan di UI (list fasilitas di detail kontrak, dll).
+    Kalau tidak di-refresh, UI akan menampilkan 0 meskipun BOQ sudah
+    di-import — seperti masalah visual "PERSIAPAN · 0".
+    """
     items = db.query(BOQItem).filter(
         BOQItem.facility_id == facility_id,
         BOQItem.is_active == True,
@@ -378,6 +386,13 @@ def recalculate_facility_weights(db: Session, facility_id: str):
     ).all()
 
     total = sum(float(i.total_price or 0) for i in items)
+
+    # Update facility.total_value cache (meskipun total == 0, supaya
+    # refresh saat semua item dihapus juga benar).
+    fac = db.query(Facility).filter(Facility.id == facility_id).first()
+    if fac:
+        fac.total_value = Decimal(str(total))
+
     if total <= 0:
         return
 
