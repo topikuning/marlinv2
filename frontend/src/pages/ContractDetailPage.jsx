@@ -1022,6 +1022,9 @@ function AddAddendumModal({ open, onClose, contract, onSuccess }) {
     description: "",
   });
   const [loading, setLoading] = useState(false);
+  const [approvedVOs, setApprovedVOs] = useState([]);
+  const [selectedVoIds, setSelectedVoIds] = useState([]);
+  const [loadingVOs, setLoadingVOs] = useState(false);
 
   useEffect(() => {
     if (open && contract) {
@@ -1034,8 +1037,29 @@ function AddAddendumModal({ open, onClose, contract, onSuccess }) {
         new_contract_value: contract.current_value || "",
         description: "",
       });
+      // Fetch VO APPROVED yang belum di-bundle
+      setLoadingVOs(true);
+      voAPI.listByContract(contract.id, { status: "approved" })
+        .then(({ data }) => {
+          const all = data?.items || [];
+          const available = all.filter((v) => !v.bundled_addendum_id);
+          setApprovedVOs(available);
+          setSelectedVoIds(available.map((v) => v.id)); // default pilih semua
+        })
+        .catch(() => setApprovedVOs([]))
+        .finally(() => setLoadingVOs(false));
     }
   }, [open, contract]);
+
+  const toggleVO = (id) => {
+    setSelectedVoIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  const totalCostImpact = approvedVOs
+    .filter((v) => selectedVoIds.includes(v.id))
+    .reduce((sum, v) => sum + (v.cost_impact || 0), 0);
 
   const submit = async () => {
     setLoading(true);
@@ -1046,8 +1070,13 @@ function AddAddendumModal({ open, onClose, contract, onSuccess }) {
         new_contract_value: form.new_contract_value
           ? parseFloat(form.new_contract_value)
           : null,
+        vo_ids: selectedVoIds,
       });
-      toast.success("Addendum tersimpan");
+      toast.success(
+        selectedVoIds.length > 0
+          ? `Addendum tersimpan — ${selectedVoIds.length} VO ter-bundle ke revisi baru`
+          : "Addendum tersimpan"
+      );
       onSuccess?.();
     } catch (e) {
       toast.error(parseApiError(e));
@@ -1138,6 +1167,63 @@ function AddAddendumModal({ open, onClose, contract, onSuccess }) {
             value={form.description}
             onChange={(e) => setForm({ ...form, description: e.target.value })}
           />
+        </div>
+
+        {/* VO Bundling — wajib untuk CCO supaya perubahan BOQ diterapkan */}
+        <div className="border-t border-ink-200 pt-3">
+          <div className="flex items-center justify-between mb-2">
+            <label className="label mb-0">
+              VO yang Di-bundle ke Addendum ini
+              <span className="text-[11px] text-ink-500 font-normal ml-1">
+                (perubahan BOQ hanya diterapkan kalau VO di-centang di sini)
+              </span>
+            </label>
+            {selectedVoIds.length > 0 && (
+              <span className="text-xs text-ink-600">
+                {selectedVoIds.length} dipilih · Total Δ{" "}
+                <span className={totalCostImpact >= 0 ? "font-semibold text-emerald-700" : "font-semibold text-red-700"}>
+                  {totalCostImpact >= 0 ? "+" : ""}{fmtCurrency(totalCostImpact)}
+                </span>
+              </span>
+            )}
+          </div>
+          {loadingVOs ? (
+            <p className="text-xs text-ink-500">Memuat VO...</p>
+          ) : approvedVOs.length === 0 ? (
+            <div className="p-3 rounded bg-amber-50 border border-amber-200 text-xs text-amber-800">
+              <p className="font-semibold">⚠ Belum ada VO APPROVED yang siap di-bundle</p>
+              <p className="mt-1">
+                Tanpa VO yang di-bundle, addendum ini hanya akan mengubah header kontrak
+                (durasi / nilai), BOQ V1 akan identik dengan V0. Pastikan VO sudah di-submit
+                dan di-approve PPK sebelum membuat addendum.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-1 max-h-48 overflow-y-auto border border-ink-200 rounded p-2">
+              {approvedVOs.map((vo) => (
+                <label key={vo.id} className="flex items-start gap-2 p-2 hover:bg-ink-50 rounded cursor-pointer text-xs">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={selectedVoIds.includes(vo.id)}
+                    onChange={() => toggleVO(vo.id)}
+                  />
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono font-semibold">{vo.vo_number}</span>
+                      <span className="text-ink-700">{vo.title}</span>
+                    </div>
+                    <div className="text-[11px] text-ink-500 mt-0.5">
+                      Δ Biaya:{" "}
+                      <span className={vo.cost_impact >= 0 ? "text-emerald-700 font-medium" : "text-red-700 font-medium"}>
+                        {vo.cost_impact >= 0 ? "+" : ""}{fmtCurrency(vo.cost_impact)}
+                      </span>
+                    </div>
+                  </div>
+                </label>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </Modal>
