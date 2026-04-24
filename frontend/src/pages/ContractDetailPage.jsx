@@ -397,26 +397,66 @@ export default function ContractDetailPage() {
           ) : (
             <div className="space-y-3">
               {contract.addenda.map((a) => (
-                <div key={a.id} className="card p-4 flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center">
+                <div key={a.id} className="card p-4 flex items-start gap-4">
+                  <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center flex-shrink-0">
                     <FileText size={16} className="text-amber-600" />
                   </div>
-                  <div className="flex-1">
-                    <p className="font-medium text-ink-900">{a.number}</p>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="font-medium text-ink-900">{a.number}</p>
+                      <span className="badge-gray text-[10px]">{a.addendum_type?.toUpperCase()}</span>
+                      {a.extension_days > 0 && (
+                        <span className="badge-yellow">+{a.extension_days} hari</span>
+                      )}
+                      {a.new_contract_value && (
+                        <span className="text-xs font-medium text-ink-700">
+                          {fmtCurrency(a.new_contract_value)}
+                        </span>
+                      )}
+                    </div>
                     <p className="text-xs text-ink-500 mt-0.5">
-                      {a.addendum_type?.toUpperCase()} · {fmtDate(a.effective_date)}
+                      Berlaku: {fmtDate(a.effective_date)}
+                      {a.bundled_vos?.length > 0 && (
+                        <span className="ml-2">· {a.bundled_vos.length} VO ter-bundle</span>
+                      )}
                     </p>
                     {a.description && (
                       <p className="text-xs text-ink-600 mt-1">{a.description}</p>
                     )}
+                    {a.bundled_vos?.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {a.bundled_vos.map((v) => (
+                          <span key={v.id} className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 font-mono">
+                            {v.vo_number}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                  {a.extension_days > 0 && (
-                    <span className="badge-yellow">+{a.extension_days} hari</span>
-                  )}
-                  {a.new_contract_value && (
-                    <span className="text-xs font-medium">
-                      {fmtCurrency(a.new_contract_value)}
-                    </span>
+                  {canEditContract && (
+                    <button
+                      className="btn-ghost btn-xs text-red-600 hover:bg-red-50"
+                      onClick={async () => {
+                        if (!confirm(
+                          `Hapus Addendum ${a.number}?\n\n` +
+                          `Konsekuensi:\n` +
+                          `- Revisi BOQ yang dihasilkan akan ikut terhapus\n` +
+                          `- VO yang ter-bundle akan kembali ke status APPROVED` +
+                          (a.old_contract_value ? `\n- Nilai kontrak dikembalikan ke ${fmtCurrency(a.old_contract_value)}` : "") +
+                          (a.old_end_date ? `\n- Tanggal selesai dikembalikan ke ${fmtDate(a.old_end_date)}` : "")
+                        )) return;
+                        try {
+                          const { data } = await contractsAPI.deleteAddendum(contract.id, a.id);
+                          toast.success(
+                            `Addendum dihapus` +
+                            (data?.unbundled_vos ? ` — ${data.unbundled_vos} VO di-unbundle` : "")
+                          );
+                          window.location.reload();
+                        } catch (e) { toast.error(parseApiError(e)); }
+                      }}
+                    >
+                      <Trash2 size={10} /> Hapus
+                    </button>
                   )}
                 </div>
               ))}

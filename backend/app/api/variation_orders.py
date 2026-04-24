@@ -156,6 +156,10 @@ def _recompute_cost_impact(db: Session, vo: VariationOrder) -> None:
     apply_items_from_payload, relationship cache bisa stale. Ini bug
     'Dampak 0 di list VO' yang dilaporkan: items tersimpan benar, tapi
     aggregate di header VO gagal karena loop pakai relationship lama.
+
+    REMOVE_FACILITY dapat perlakuan khusus: cost_impact = -facility.total_value
+    (volume_delta/unit_price selalu 0 untuk action ini, jadi formula delta×price
+    = 0 akan salah-menimpa nilai yang benar).
     """
     items = (
         db.query(VariationOrderItem)
@@ -164,9 +168,14 @@ def _recompute_cost_impact(db: Session, vo: VariationOrder) -> None:
     )
     total = Decimal("0")
     for it in items:
-        delta = Decimal(it.volume_delta or 0)
-        price = Decimal(it.unit_price or 0)
-        expected = delta * price
+        if it.action == VOItemAction.REMOVE_FACILITY:
+            # Re-query facility supaya sinkron kalau total_value berubah
+            fac = db.query(Facility).filter(Facility.id == it.facility_id).first() if it.facility_id else None
+            expected = -Decimal(str(fac.total_value or 0)) if fac else Decimal(str(it.cost_impact or 0))
+        else:
+            delta = Decimal(it.volume_delta or 0)
+            price = Decimal(it.unit_price or 0)
+            expected = delta * price
         # Normalisasi — setiap item cost_impact harus sinkron dengan
         # volume_delta × unit_price (kalau tidak, integrity rusak).
         if it.cost_impact is None or Decimal(it.cost_impact) != expected:

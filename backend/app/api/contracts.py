@@ -885,14 +885,33 @@ def delete_addendum(
     ).first()
     if not a:
         raise HTTPException(404, "Addendum tidak ditemukan")
+    # Role gate — hanya PPK / admin_pusat / KPA boleh rollback addendum
+    from app.api.deps import assert_role_in
+    from app.models.models import VariationOrder, VOStatus
+    c = db.query(Contract).filter(Contract.id == contract_id).first()
+    from app.services.vo_service import is_god_mode_active
+    gm = c is not None and is_god_mode_active(c)
+    if not gm:
+        assert_role_in(
+            db, current_user, "ppk", "admin_pusat", "kpa",
+            action="Hapus Addendum",
+        )
     # Hapus addendum hanya boleh saat kontrak masih dalam window scope-editable
     # (DRAFT atau ADDENDUM yang belum di-approve revisinya). Setelah kontrak
     # kembali ACTIVE / ON_HOLD / COMPLETED / TERMINATED, addendum sudah jadi
     # bagian dari history dan revisi BOQ-nya sudah tetap — rollback otomatis
     # tidak aman.
     assert_scope_editable_by_contract(db, contract_id, entity="addendum")
+    # Un-bundle VO yang sebelumnya ter-bundle ke addendum ini — kembalikan
+    # status BUNDLED → APPROVED supaya bisa di-bundle ulang ke addendum baru.
+    bundled = db.query(VariationOrder).filter(
+        VariationOrder.bundled_addendum_id == addendum_id
+    ).all()
+    for vo in bundled:
+        vo.bundled_addendum_id = None
+        if vo.status == VOStatus.BUNDLED:
+            vo.status = VOStatus.APPROVED
     # revert contract — best effort
-    c = db.query(Contract).filter(Contract.id == contract_id).first()
     if c and a.old_contract_value:
         c.current_value = a.old_contract_value
     if c and a.old_end_date:
@@ -900,8 +919,12 @@ def delete_addendum(
         c.duration_days = (c.end_date - c.start_date).days
     db.delete(a)
     db.commit()
-    log_audit(db, current_user, "delete", "addendum", addendum_id, request=request, commit=True)
-    return {"success": True}
+    log_audit(
+        db, current_user, "delete", "addendum", addendum_id,
+        changes={"unbundled_vo_ids": [str(v.id) for v in bundled]},
+        request=request, commit=True,
+    )
+    return {"success": True, "unbundled_vos": len(bundled)}
 
 
 # ═══════════════════════════════════════════ ACTIVATION / LIFECYCLE ══════════
