@@ -132,7 +132,21 @@ def _to_dict(vo: VariationOrder, with_items: bool = True, *, db: Session = None)
         "bundled_addendum_id": str(vo.bundled_addendum_id) if vo.bundled_addendum_id else None,
         "god_mode_bypass": vo.god_mode_bypass,
         "created_at": vo.created_at.isoformat() if vo.created_at else None,
+        "source_observation": None,
     }
+    # Enrichment — MC / observasi yang memicu VO ini
+    if vo.source_observation_id and db is not None:
+        from app.models.models import FieldObservation
+        obs = db.query(FieldObservation).filter(
+            FieldObservation.id == vo.source_observation_id
+        ).first()
+        if obs:
+            d["source_observation"] = {
+                "id": str(obs.id),
+                "type": obs.type.value if hasattr(obs.type, "value") else obs.type,
+                "title": obs.title,
+                "observation_date": obs.observation_date.isoformat() if obs.observation_date else None,
+            }
     if with_items:
         # Pakai query langsung (bukan vo.items relationship) untuk hindari
         # cache stale setelah update payload

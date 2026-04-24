@@ -46,6 +46,11 @@ export default function ContractDetailPage() {
   const [showImport, setShowImport] = useState(false);
   const [confirmDel, setConfirmDel] = useState(null);
   const [showEdit, setShowEdit] = useState(false);
+  // Cross-tab handoff: MC-0 → VO shortcut. Saat user simpan observasi dan
+  // confirm "buat VO sekarang", kita switch ke tab VO dan set prefill ini.
+  // VariationOrdersPanel akan auto-buka VOCreateModal dengan source_observation_id
+  // ter-isi sehingga koneksi MC ↔ VO eksplisit.
+  const [pendingVOFromObs, setPendingVOFromObs] = useState(null);
 
   useEffect(() => {
     load();
@@ -182,12 +187,6 @@ export default function ContractDetailPage() {
               onClick={() => navigate(`/scurve?contract=${id}`)}
             >
               <FileText size={14} /> Kurva S
-            </button>
-            <button
-              className="btn-secondary"
-              onClick={() => setShowAddendum(true)}
-            >
-              <Plus size={14} /> Addendum
             </button>
           </div>
         </div>
@@ -377,22 +376,46 @@ export default function ContractDetailPage() {
 
       {/* Variation Orders */}
       {tab === "variation_orders" && (
-        <VariationOrdersPanel contract={contract} onChange={load} canApprove={canApproveVO} />
+        <VariationOrdersPanel
+          contract={contract}
+          onChange={load}
+          canApprove={canApproveVO}
+          pendingFromObs={pendingVOFromObs}
+          onConsumePendingFromObs={() => setPendingVOFromObs(null)}
+        />
       )}
 
       {/* Field Observations (MC-0 / MC-N) */}
       {tab === "field_observations" && (
-        <FieldObservationsPanel contract={contract} onChange={load} />
+        <FieldObservationsPanel
+          contract={contract}
+          onChange={load}
+          onCreateVOFromObservation={(obs) => {
+            setPendingVOFromObs(obs);
+            setTab("variation_orders");
+          }}
+        />
       )}
 
       {/* Addenda */}
       {tab === "addenda" && (
         <div>
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+            <div className="text-xs text-ink-500">
+              {contract.addenda?.length || 0} addendum ·{" "}
+              <span className="font-medium">Legal</span> — titik perubahan BOQ yang ter-bundle dari VO APPROVED
+            </div>
+            {canEditContract && (
+              <button className="btn-primary btn-sm" onClick={() => setShowAddendum(true)}>
+                <Plus size={13} /> Addendum Baru
+              </button>
+            )}
+          </div>
           {!contract.addenda?.length ? (
             <Empty
               icon={FileText}
               title="Belum ada addendum"
-              description="Tambahkan ketika ada perubahan kontrak"
+              description="Buat addendum ketika ada VO APPROVED yang mau di-bundle, atau perpanjangan waktu / perubahan nilai"
             />
           ) : (
             <div className="space-y-3">
@@ -1892,10 +1915,11 @@ const VO_STATUS_BADGE = {
   bundled: "bg-indigo-50 text-indigo-700 border-indigo-200",
 };
 
-function VariationOrdersPanel({ contract, onChange, canApprove = false }) {
+function VariationOrdersPanel({ contract, onChange, canApprove = false, pendingFromObs, onConsumePendingFromObs }) {
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [prefillFromObs, setPrefillFromObs] = useState(null);
   const [editing, setEditing] = useState(null); // full VO data saat edit
   const [detail, setDetail] = useState(null);
   const [actionModal, setActionModal] = useState(null);
@@ -1907,6 +1931,16 @@ function VariationOrdersPanel({ contract, onChange, canApprove = false }) {
       .finally(() => setLoading(false));
   };
   useEffect(() => { refresh(); }, [contract.id]);
+
+  // Saat parent kirim observasi pending (handoff MC → VO), buka modal create
+  // dengan prefill source_observation_id. Sekali consumed, parent reset state.
+  useEffect(() => {
+    if (pendingFromObs) {
+      setPrefillFromObs(pendingFromObs);
+      setShowCreate(true);
+      onConsumePendingFromObs?.();
+    }
+  }, [pendingFromObs]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const doAction = async (vo, action, payload = {}) => {
     try {
@@ -1950,6 +1984,18 @@ function VariationOrdersPanel({ contract, onChange, canApprove = false }) {
                     {vo.god_mode_bypass && (
                       <span className="text-[10px] px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200" title="Dibuat/diubah via God-Mode (Unlock)">
                         ⚡ god-mode
+                      </span>
+                    )}
+                    {vo.source_observation && (
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-brand-50 text-brand-700 border border-brand-200"
+                        title={`Dipicu dari ${vo.source_observation.type === "mc_0" ? "MC-0" : "MC"}: ${vo.source_observation.title}`}>
+                        ↖ {vo.source_observation.type === "mc_0" ? "MC-0" : "MC"} · {fmtDate(vo.source_observation.observation_date)}
+                      </span>
+                    )}
+                    {vo.bundled_addendum_id && (
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200"
+                        title="VO ini sudah ter-bundle ke addendum">
+                        📎 ter-bundle
                       </span>
                     )}
                   </div>
@@ -2007,8 +2053,12 @@ function VariationOrdersPanel({ contract, onChange, canApprove = false }) {
       )}
 
       {showCreate && (
-        <VOCreateModal contract={contract} onClose={() => setShowCreate(false)}
-          onSuccess={() => { setShowCreate(false); refresh(); }} />
+        <VOCreateModal
+          contract={contract}
+          prefillFromObs={prefillFromObs}
+          onClose={() => { setShowCreate(false); setPrefillFromObs(null); }}
+          onSuccess={() => { setShowCreate(false); setPrefillFromObs(null); refresh(); }}
+        />
       )}
       {editing && (
         <VOCreateModal
@@ -2028,7 +2078,7 @@ function VariationOrdersPanel({ contract, onChange, canApprove = false }) {
   );
 }
 
-function VOCreateModal({ contract, initial, onClose, onSuccess }) {
+function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }) {
   const isEdit = !!initial;
   const [form, setForm] = useState(() =>
     initial
@@ -2036,6 +2086,7 @@ function VOCreateModal({ contract, initial, onClose, onSuccess }) {
           title: initial.title || "",
           technical_justification: initial.technical_justification || "",
           quantity_calculation: initial.quantity_calculation || "",
+          source_observation_id: initial.source_observation_id || null,
           items: (initial.items || []).map((it) => ({
             action: it.action,
             boq_item_id: it.boq_item_id || "",
@@ -2048,7 +2099,15 @@ function VOCreateModal({ contract, initial, onClose, onSuccess }) {
             notes: it.notes || "",
           })),
         }
-      : { title: "", technical_justification: "", quantity_calculation: "", items: [] }
+      : {
+          title: prefillFromObs ? `Tindak lanjut ${prefillFromObs.type === "mc_0" ? "MC-0" : "MC"}: ${prefillFromObs.title || ""}`.trim() : "",
+          technical_justification: prefillFromObs
+            ? `Berdasarkan temuan observasi lapangan "${prefillFromObs.title}" tanggal ${prefillFromObs.observation_date || "-"}: ${prefillFromObs.findings || ""}`
+            : "",
+          quantity_calculation: "",
+          source_observation_id: prefillFromObs?.id || null,
+          items: [],
+        }
   );
   const [saving, setSaving] = useState(false);
   const [boqList, setBoqList] = useState([]);
@@ -2158,6 +2217,20 @@ function VOCreateModal({ contract, initial, onClose, onSuccess }) {
       </>
     }>
       <div className="space-y-3 text-sm">
+        {prefillFromObs && !isEdit && (
+          <div className="p-2.5 rounded-md bg-brand-50 border border-brand-200 text-xs text-brand-800 flex items-start gap-2">
+            <span className="font-bold flex-shrink-0">↖</span>
+            <div className="flex-1">
+              <p className="font-semibold">
+                Dari {prefillFromObs.type === "mc_0" ? "MC-0" : "MC Lanjutan"}: {prefillFromObs.title}
+              </p>
+              <p className="text-[11px] mt-0.5 text-brand-700">
+                VO ini akan otomatis ter-link ke observasi tanggal {fmtDate(prefillFromObs.observation_date)}.
+                Judul & justifikasi sudah di-pre-fill dari temuan — silakan edit sesuai kebutuhan, lalu tambah item perubahan BOQ.
+              </p>
+            </div>
+          </div>
+        )}
         <div>
           <label className="label">Judul *</label>
           <input className="input" value={form.title} maxLength={200}
@@ -2478,6 +2551,16 @@ function VODetailModal({ vo, onClose }) {
               <span className="font-semibold text-ink-900">{vo.title}</span>
             </div>
             <p className="text-[11px] text-ink-500">Dibuat {fmtDate(vo.created_at)}</p>
+            {vo.source_observation && (
+              <p className="text-[11px] mt-1">
+                <span className="text-ink-500">↖ Asal:</span>{" "}
+                <span className="font-medium text-brand-700">
+                  {vo.source_observation.type === "mc_0" ? "MC-0" : "MC Lanjutan"}
+                </span>
+                <span className="text-ink-600"> · {vo.source_observation.title}</span>
+                <span className="text-ink-500"> · {fmtDate(vo.source_observation.observation_date)}</span>
+              </p>
+            )}
           </div>
           <div className="text-right">
             <p className="text-[10px] text-ink-500 uppercase">Total Δ Biaya</p>
@@ -2595,11 +2678,12 @@ function VOActionModal({ vo, action, onClose, onConfirm }) {
 // ════════════════════════════════════════════════════════════════════════════
 // Field Observations Panel — MC-0 + MC-N
 // ════════════════════════════════════════════════════════════════════════════
-function FieldObservationsPanel({ contract, onChange }) {
+function FieldObservationsPanel({ contract, onChange, onCreateVOFromObservation }) {
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [postSaveObs, setPostSaveObs] = useState(null); // obs yang baru disimpan → tawarkan buat VO
   const refresh = () => {
     setLoading(true);
     fieldObsAPI.listByContract(contract.id)
@@ -2644,6 +2728,20 @@ function FieldObservationsPanel({ contract, onChange }) {
                   <p className="font-medium text-ink-900 mt-1">{o.title}</p>
                   <p className="text-xs text-ink-600 mt-1 line-clamp-3 whitespace-pre-line">{o.findings}</p>
                   {o.attendees && (<p className="text-[11px] text-ink-500 mt-1">Hadir: {o.attendees}</p>)}
+                  {o.triggered_vos?.length > 0 && (
+                    <div className="mt-2 flex items-center flex-wrap gap-1 text-[11px]">
+                      <span className="text-ink-500">↗ memicu</span>
+                      {o.triggered_vos.map((v) => (
+                        <span
+                          key={v.id}
+                          className={`font-mono px-1.5 py-0.5 rounded border ${VO_STATUS_BADGE[v.status] || "bg-slate-100 border-slate-200"}`}
+                          title={`${v.vo_number} · ${VO_STATUS_LABEL[v.status] || v.status}`}
+                        >
+                          {v.vo_number}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="flex gap-1 flex-shrink-0">
                   <button className="btn-ghost btn-xs" onClick={() => setEditing(o)} title="Edit">
@@ -2661,12 +2759,56 @@ function FieldObservationsPanel({ contract, onChange }) {
       {showCreate && (
         <FOCreateModal contract={contract} hasMC0={hasMC0}
           onClose={() => setShowCreate(false)}
-          onSuccess={() => { setShowCreate(false); refresh(); }} />
+          onSuccess={(saved) => {
+            setShowCreate(false);
+            refresh();
+            if (saved) setPostSaveObs(saved); // trigger tawaran buat VO
+          }} />
       )}
       {editing && (
         <FOCreateModal contract={contract} hasMC0={hasMC0} initial={editing}
           onClose={() => setEditing(null)}
           onSuccess={() => { setEditing(null); refresh(); }} />
+      )}
+      {postSaveObs && (
+        <Modal
+          open
+          onClose={() => setPostSaveObs(null)}
+          title="Buat VO dari observasi ini?"
+          size="md"
+          footer={
+            <>
+              <button className="btn-secondary" onClick={() => setPostSaveObs(null)}>
+                Tidak, cukup BA
+              </button>
+              <button
+                className="btn-primary"
+                onClick={() => {
+                  const obs = postSaveObs;
+                  setPostSaveObs(null);
+                  onCreateVOFromObservation?.(obs);
+                }}
+              >
+                <Plus size={12} /> Ya, buat VO sekarang
+              </button>
+            </>
+          }
+        >
+          <div className="space-y-2 text-sm">
+            <p>
+              <span className="font-semibold">{postSaveObs.type === "mc_0" ? "MC-0" : "MC Lanjutan"}</span>{" "}
+              <span className="text-ink-600">· {postSaveObs.title}</span>
+            </p>
+            <p className="text-ink-600">
+              MC/observasi bersifat non-legal — BOQ tidak berubah hanya dari BA. Kalau ada
+              temuan yang memerlukan penyesuaian volume, tambahan item, atau penghapusan
+              fasilitas, buat VO sekarang supaya ada jejak usulan yang bisa di-review PPK.
+            </p>
+            <p className="text-xs text-ink-500">
+              VO yang dibuat akan otomatis punya referensi ke observasi ini.
+            </p>
+          </div>
+        </Modal>
       )}
     </div>
   );
@@ -2692,14 +2834,18 @@ function FOCreateModal({ contract, hasMC0, initial, onClose, onSuccess }) {
     if (form.findings.length < 10) return toast.error("Temuan minimal 10 karakter");
     setSaving(true);
     try {
+      let saved = null;
       if (isEdit) {
-        await fieldObsAPI.update(initial.id, form);
+        const { data } = await fieldObsAPI.update(initial.id, form);
+        saved = data;
         toast.success("Observasi diperbarui");
       } else {
-        await fieldObsAPI.create(contract.id, form);
+        const { data } = await fieldObsAPI.create(contract.id, form);
+        saved = data;
         toast.success("Observasi tersimpan");
       }
-      onSuccess?.();
+      // Hanya tawarkan VO-shortcut pada create (bukan edit)
+      onSuccess?.(isEdit ? null : saved);
     }
     catch (e) { toast.error(parseApiError(e)); }
     finally { setSaving(false); }
