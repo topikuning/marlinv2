@@ -143,6 +143,7 @@ export const fieldObsAPI = {
     api.get(`/field-observations/by-contract/${cid}`, { params }),
   create: (cid, data) =>
     api.post(`/field-observations/by-contract/${cid}`, data),
+  update: (id, data) => api.put(`/field-observations/${id}`, data),
   remove: (id) => api.delete(`/field-observations/${id}`),
 };
 

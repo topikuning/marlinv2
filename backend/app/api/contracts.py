@@ -470,6 +470,9 @@ def update_contract(
     """
     Edit a contract with status-aware rules:
 
+      * Role gate:  kontraktor DITOLAK — edit field admin kontrak
+                    (nama/nilai/tanggal/PPK/dll) hanya oleh PPK/admin.
+                    Kontraktor tetap bisa bikin VO via endpoint VO terpisah.
       * DRAFT         → all fields editable (fix for catatan #8: typo recovery)
       * ACTIVE        → only descriptive fields; value/dates/parties need an Addendum
       * COMPLETED /
@@ -482,8 +485,17 @@ def update_contract(
     if not c:
         raise HTTPException(404, "Kontrak tidak ditemukan")
 
-    status_value = c.status.value if hasattr(c.status, "value") else str(c.status)
+    # Role gate: kontraktor/konsultan tidak boleh edit field admin kontrak.
+    # God-mode (Unlock) tetap bypass karena superadmin yang trigger.
+    from app.api.deps import assert_role_in
     unlocked = contract_is_unlocked(c)
+    if not unlocked:
+        assert_role_in(
+            db, current_user, "ppk", "admin_pusat", "kpa",
+            action="Edit field administratif kontrak",
+        )
+
+    status_value = c.status.value if hasattr(c.status, "value") else str(c.status)
 
     # COMPLETED / TERMINATED normalnya read-only. Unlock mode menggantikan
     # batasan itu karena safety-valve didesain untuk koreksi retroaktif
@@ -629,6 +641,16 @@ def create_addendum(
 
     gm = is_god_mode_active(c)
 
+    # Role gate: sign_addendum = aksi LEGAL yang mengubah BOQ. Kontraktor
+    # boleh submit VO tapi TIDAK boleh sign addendum. Hanya PPK (atau KPA
+    # kalau nilai > 10%). God-mode superadmin bypass otomatis.
+    if not gm:
+        from app.api.deps import assert_role_in
+        assert_role_in(
+            db, current_user, "ppk", "admin_pusat", "kpa",
+            action="Tanda-tangan Addendum (sign_addendum)",
+        )
+
     # Threshold check (Perpres ps. 54 — 10% rule)
     needs_kpa = False
     if data.new_contract_value is not None:
@@ -752,6 +774,31 @@ def create_addendum(
     }
 
 
+def _cascade_remove_children(db: Session, revision_id, parent_id) -> None:
+    """
+    Cascade non-aktifkan seluruh descendant dari parent_id di revisi tertentu.
+    Traversal iteratif (BFS) — hindari rekursi stack overflow pada pohon dalam.
+    Selaras hirarki BOQ level 0-3 (atau lebih): hapus parent → semua children
+    & sub-children non-aktif dengan change_type="removed".
+    """
+    from app.models.models import BOQItem
+    to_visit = [parent_id]
+    visited = set()
+    while to_visit:
+        pid = to_visit.pop()
+        if pid in visited:
+            continue
+        visited.add(pid)
+        children = db.query(BOQItem).filter(
+            BOQItem.boq_revision_id == revision_id,
+            BOQItem.parent_id == pid,
+        ).all()
+        for ch in children:
+            ch.is_active = False
+            ch.change_type = "removed"
+            to_visit.append(ch.id)
+
+
 def _apply_vo_items_to_revision(db: Session, new_rev, bundled_vos):
     """
     Terapkan perubahan dari VO items ke revisi BOQ baru:
@@ -810,6 +857,18 @@ def _apply_vo_items_to_revision(db: Session, new_rev, bundled_vos):
                 if target:
                     target.is_active = False
                     target.change_type = "removed"
+                    # Cascade: anak-anak juga non-aktif
+                    _cascade_remove_children(db, new_rev.id, target.id)
+            elif vi.action == VOItemAction.REMOVE_FACILITY:
+                # Hilangkan seluruh fasilitas — set is_active=False pada semua
+                # item BOQ di fasilitas ini (di revisi baru).
+                items_in_fac = db.query(BOQItem).filter(
+                    BOQItem.boq_revision_id == new_rev.id,
+                    BOQItem.facility_id == vi.facility_id,
+                ).all()
+                for it in items_in_fac:
+                    it.is_active = False
+                    it.change_type = "removed"
     db.flush()
     recalc_revision_totals(db, new_rev)
 

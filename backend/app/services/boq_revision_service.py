@@ -341,31 +341,164 @@ def diff_revisions(
     new_rev: BOQRevision,
 ) -> List[dict]:
     """
-    Produce a row-level diff of new_rev vs its source revision.
-    Returns list of { change_type, new_item, old_item, delta_volume,
-    delta_unit_price, delta_total } suitable for a comparison table.
+    Produce a row-level diff of new_rev vs its source (predecessor) revision.
+
+    Enrichment vs versi lama:
+      - Include REMOVED items (yang ada di old tapi tidak di-clone ke new)
+      - Include UNCHANGED items sebagai referensi
+      - Tag change_type eksplisit per baris: added / modified / unchanged / removed
+      - Include metadata lokasi & fasilitas untuk groupable UI
+      - delta_volume dan delta_unit_price terpisah (bukan cuma delta_total)
+      - Sort output: removed di akhir (supaya added/modified yang baru lebih jelas
+        di atas)
+
+    Output row schema:
+      change_type: 'added' | 'modified' | 'unchanged' | 'removed'
+      new_id / old_id, description, unit, master_work_code,
+      facility_id, facility_code, facility_name,
+      location_code, location_name,
+      new_volume / old_volume, new_unit_price / old_unit_price,
+      new_total / old_total,
+      delta_volume, delta_unit_price, delta_total
     """
+    from app.models.models import Facility, Location
     out: List[dict] = []
-    new_items: List[BOQItem] = (
-        db.query(BOQItem).filter(BOQItem.boq_revision_id == new_rev.id).all()
-    )
+
+    # Resolve source revision (predecessor): kalau new_rev sudah pernah di-clone
+    # from, source = BOQRevision dengan cco_number = new_rev.cco_number - 1
+    source_rev = None
+    if new_rev.cco_number > 0:
+        source_rev = (
+            db.query(BOQRevision)
+            .filter(
+                BOQRevision.contract_id == new_rev.contract_id,
+                BOQRevision.cco_number == new_rev.cco_number - 1,
+            )
+            .first()
+        )
+
+    # Build enrichment map untuk lokasi/fasilitas
+    fac_ids = set()
+    new_items = db.query(BOQItem).filter(BOQItem.boq_revision_id == new_rev.id).all()
+    for n in new_items:
+        fac_ids.add(n.facility_id)
+    old_items = []
+    if source_rev:
+        old_items = db.query(BOQItem).filter(BOQItem.boq_revision_id == source_rev.id).all()
+        for o in old_items:
+            fac_ids.add(o.facility_id)
+    facilities = {
+        f.id: f for f in db.query(Facility).filter(Facility.id.in_(fac_ids)).all()
+    } if fac_ids else {}
+    loc_ids = {f.location_id for f in facilities.values()}
+    locations = {
+        l.id: l for l in db.query(Location).filter(Location.id.in_(loc_ids)).all()
+    } if loc_ids else {}
+
+    def _enrich(item):
+        """Return dict dengan fasilitas & lokasi info."""
+        fac = facilities.get(item.facility_id)
+        loc = locations.get(fac.location_id) if fac else None
+        return {
+            "facility_id": str(item.facility_id) if item.facility_id else None,
+            "facility_code": fac.facility_code if fac else None,
+            "facility_name": fac.facility_name if fac else None,
+            "location_code": loc.location_code if loc else None,
+            "location_name": loc.name if loc else None,
+        }
+
+    # Track source_item_ids yang sudah ter-referensi oleh new items →
+    # sisanya yang tidak di-refer = REMOVED
+    referenced_source_ids = set()
+
     for n in new_items:
         old = None
         if n.source_item_id:
-            old = db.query(BOQItem).filter(BOQItem.id == n.source_item_id).first()
+            # Cari old di map untuk hindari N+1 query
+            old = next((o for o in old_items if o.id == n.source_item_id), None)
+            if old:
+                referenced_source_ids.add(old.id)
+
+        new_vol = float(n.volume or 0)
+        old_vol = float(old.volume or 0) if old else 0.0
+        new_price = float(n.unit_price or 0)
+        old_price = float(old.unit_price or 0) if old else 0.0
+        new_total = float(n.total_price or 0)
+        old_total = float(old.total_price or 0) if old else 0.0
+
+        # Determine change_type — kalau model sudah punya, pakai itu;
+        # fallback: compute dari selisih
+        ct = n.change_type.value if n.change_type and hasattr(n.change_type, "value") else n.change_type
+        if not ct:
+            if not old:
+                ct = "added"
+            elif (new_vol == old_vol and new_price == old_price
+                  and n.description == old.description and n.unit == old.unit):
+                ct = "unchanged"
+            else:
+                ct = "modified"
+
+        # Skip yang di-mark removed (akan muncul di bagian akhir sebagai tombstone)
+        if not n.is_active and ct != "removed":
+            ct = "removed"
+
         entry = {
-            "change_type": n.change_type.value if n.change_type else None,
+            "change_type": ct,
             "new_id": str(n.id),
             "old_id": str(old.id) if old else None,
             "description": n.description,
             "unit": n.unit,
-            "new_volume": float(n.volume or 0),
-            "old_volume": float(old.volume or 0) if old else None,
-            "new_unit_price": float(n.unit_price or 0),
-            "old_unit_price": float(old.unit_price or 0) if old else None,
-            "new_total": float(n.total_price or 0),
-            "old_total": float(old.total_price or 0) if old else None,
-            "delta_total": float((n.total_price or 0) - (old.total_price if old else 0) or 0),
+            "master_work_code": n.master_work_code,
+            "level": n.level,
+            "is_leaf": n.is_leaf,
+            "new_volume": new_vol,
+            "old_volume": old_vol if old else None,
+            "new_unit_price": new_price,
+            "old_unit_price": old_price if old else None,
+            "new_total": new_total,
+            "old_total": old_total if old else None,
+            "delta_volume": new_vol - old_vol,
+            "delta_unit_price": new_price - old_price,
+            "delta_total": new_total - old_total,
+            **_enrich(n),
         }
         out.append(entry)
+
+    # Tambahkan items yang di old tapi tidak di new — pure REMOVED
+    # (misal: fasilitas dihapus seluruhnya via VO remove_facility sebelum clone)
+    for o in old_items:
+        if o.id in referenced_source_ids:
+            continue
+        if not o.is_active:
+            continue  # sudah tidak aktif di old, skip
+        entry = {
+            "change_type": "removed",
+            "new_id": None,
+            "old_id": str(o.id),
+            "description": o.description,
+            "unit": o.unit,
+            "master_work_code": o.master_work_code,
+            "level": o.level,
+            "is_leaf": o.is_leaf,
+            "new_volume": None,
+            "old_volume": float(o.volume or 0),
+            "new_unit_price": None,
+            "old_unit_price": float(o.unit_price or 0),
+            "new_total": None,
+            "old_total": float(o.total_price or 0),
+            "delta_volume": -float(o.volume or 0),
+            "delta_unit_price": -float(o.unit_price or 0),
+            "delta_total": -float(o.total_price or 0),
+            **_enrich(o),
+        }
+        out.append(entry)
+
+    # Sort: added → modified → unchanged → removed, lalu by location+facility
+    CT_ORDER = {"added": 0, "modified": 1, "unchanged": 2, "removed": 3}
+    out.sort(key=lambda e: (
+        CT_ORDER.get(e.get("change_type"), 9),
+        e.get("location_code") or "",
+        e.get("facility_code") or "",
+        e.get("description") or "",
+    ))
     return out

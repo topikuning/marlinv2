@@ -164,6 +164,7 @@ class VOItemAction(str, enum.Enum):
     DECREASE = "decrease"               # kurangi volume item existing
     MODIFY_SPEC = "modify_spec"         # ubah spesifikasi (deskripsi/satuan)
     REMOVE = "remove"                   # hilangkan item dari BOQ
+    REMOVE_FACILITY = "remove_facility" # hilangkan seluruh fasilitas beserta item-nya
 
 
 class NotificationStatus(str, enum.Enum):

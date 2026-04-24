@@ -469,12 +469,43 @@ def delete_boq_item(
                     },
                 )
 
-    item.is_active = False  # soft delete
+    # Soft delete item utama + cascade non-aktif ke seluruh children supaya
+    # parent-child hierarchy level 0-3 tetap valid (tidak ada orphan aktif).
+    item.is_active = False
+    children_count = _cascade_disable_children(db, item.boq_revision_id, item.id)
     db.flush()
     recalculate_facility_weights(db, str(item.facility_id))
     db.commit()
-    log_audit(db, current_user, "delete", "boq_item", str(item.id), request=request, commit=True)
-    return {"success": True}
+    log_audit(
+        db, current_user, "delete", "boq_item", str(item.id),
+        changes={"cascaded_children": children_count},
+        request=request, commit=True,
+    )
+    return {"success": True, "cascaded_children": children_count}
+
+
+def _cascade_disable_children(db: Session, revision_id, parent_id) -> int:
+    """BFS traversal: non-aktif semua descendant. Return jumlah children yang diproses."""
+    if not parent_id:
+        return 0
+    total = 0
+    to_visit = [parent_id]
+    visited = set()
+    while to_visit:
+        pid = to_visit.pop()
+        if pid in visited:
+            continue
+        visited.add(pid)
+        children = db.query(BOQItem).filter(
+            BOQItem.boq_revision_id == revision_id,
+            BOQItem.parent_id == pid,
+            BOQItem.is_active == True,  # noqa: E712
+        ).all()
+        for ch in children:
+            ch.is_active = False
+            total += 1
+            to_visit.append(ch.id)
+    return total
 
 
 # ═══════════════════════════════════════════ TEMPLATE ════════════════════════

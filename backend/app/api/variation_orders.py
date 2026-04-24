@@ -23,7 +23,10 @@ from app.models.models import (
 from app.schemas.schemas import (
     VariationOrderCreate, VariationOrderUpdate, VOActionRequest,
 )
-from app.api.deps import get_current_user, require_permission, user_can_access_contract
+from app.api.deps import (
+    get_current_user, require_permission, user_can_access_contract,
+    get_user_role_code, assert_role_in,
+)
 from app.services.audit_service import log_audit
 from app.services.vo_service import (
     is_god_mode_active, log_god_mode_bypass,
@@ -53,7 +56,7 @@ def _item_to_dict(i: VariationOrderItem) -> dict:
     }
 
 
-def _to_dict(vo: VariationOrder, with_items: bool = True) -> dict:
+def _to_dict(vo: VariationOrder, with_items: bool = True, *, db: Session = None) -> dict:
     d = {
         "id": str(vo.id),
         "contract_id": str(vo.contract_id),
@@ -79,19 +82,46 @@ def _to_dict(vo: VariationOrder, with_items: bool = True) -> dict:
         "created_at": vo.created_at.isoformat() if vo.created_at else None,
     }
     if with_items:
-        d["items"] = [_item_to_dict(it) for it in vo.items]
+        # Pakai query langsung (bukan vo.items relationship) untuk hindari
+        # cache stale setelah update payload
+        if db is not None:
+            items = (
+                db.query(VariationOrderItem)
+                .filter(VariationOrderItem.variation_order_id == vo.id)
+                .order_by(VariationOrderItem.created_at)
+                .all()
+            )
+        else:
+            items = vo.items or []
+        d["items"] = [_item_to_dict(it) for it in items]
     return d
 
 
-def _recompute_cost_impact(vo: VariationOrder) -> None:
-    """Jumlahkan cost_impact dari semua items — digunakan setelah items diupdate."""
+def _recompute_cost_impact(db: Session, vo: VariationOrder) -> None:
+    """
+    Jumlahkan cost_impact dari semua items → simpan ke vo.cost_impact.
+    Pakai query langsung (bukan vo.items relationship) karena setelah
+    apply_items_from_payload, relationship cache bisa stale. Ini bug
+    'Dampak 0 di list VO' yang dilaporkan: items tersimpan benar, tapi
+    aggregate di header VO gagal karena loop pakai relationship lama.
+    """
+    items = (
+        db.query(VariationOrderItem)
+        .filter(VariationOrderItem.variation_order_id == vo.id)
+        .all()
+    )
     total = Decimal("0")
-    for it in vo.items:
+    for it in items:
         delta = Decimal(it.volume_delta or 0)
         price = Decimal(it.unit_price or 0)
-        it.cost_impact = delta * price
-        total += it.cost_impact
+        expected = delta * price
+        # Normalisasi — setiap item cost_impact harus sinkron dengan
+        # volume_delta × unit_price (kalau tidak, integrity rusak).
+        if it.cost_impact is None or Decimal(it.cost_impact) != expected:
+            it.cost_impact = expected
+        total += expected
     vo.cost_impact = total
+    db.flush()
 
 
 def _apply_items_from_payload(vo: VariationOrder, items_input, db: Session):
@@ -103,12 +133,15 @@ def _apply_items_from_payload(vo: VariationOrder, items_input, db: Session):
 
     for it in items_input:
         action = VOItemAction(it.action)
-        # ADD needs facility_id; others need boq_item_id
-        if action == VOItemAction.ADD:
+        # Validasi field wajib per action:
+        #   ADD             → facility_id (item baru di fasilitas mana)
+        #   REMOVE_FACILITY → facility_id (fasilitas mana yang dihapus)
+        #   INCREASE/DECREASE/MODIFY_SPEC/REMOVE → boq_item_id (item yang diubah)
+        if action in (VOItemAction.ADD, VOItemAction.REMOVE_FACILITY):
             if not it.facility_id:
                 raise HTTPException(
                     400,
-                    "Item ADD harus menyertakan facility_id (di fasilitas mana item baru akan ditambahkan).",
+                    f"Item {action.value} harus menyertakan facility_id.",
                 )
         else:
             if not it.boq_item_id:
@@ -124,17 +157,33 @@ def _apply_items_from_payload(vo: VariationOrder, items_input, db: Session):
                 old_desc = old_desc or existing_boq.description
                 old_unit = old_unit or existing_boq.unit
 
+        # Cost impact untuk REMOVE_FACILITY = negatif dari total facility
+        # (sum total_price semua leaf item aktif di fasilitas ini).
+        # User tidak perlu input volume_delta/unit_price; dihitung otomatis.
+        if action == VOItemAction.REMOVE_FACILITY:
+            from app.models.models import Facility
+            fac = db.query(Facility).filter(Facility.id == it.facility_id).first()
+            fac_total = Decimal(str(fac.total_value or 0)) if fac else Decimal("0")
+            cost_impact_val = -fac_total
+            desc_override = it.description or (
+                f"Hilangkan seluruh fasilitas {fac.facility_code} {fac.facility_name}"
+                if fac else "Hilangkan fasilitas"
+            )
+        else:
+            cost_impact_val = Decimal(it.volume_delta or 0) * Decimal(it.unit_price or 0)
+            desc_override = it.description
+
         db.add(VariationOrderItem(
             variation_order_id=vo.id,
             action=action,
             boq_item_id=it.boq_item_id,
             facility_id=it.facility_id,
             master_work_code=it.master_work_code,
-            description=it.description,
+            description=desc_override,
             unit=it.unit,
-            volume_delta=it.volume_delta,
-            unit_price=it.unit_price,
-            cost_impact=Decimal(it.volume_delta or 0) * Decimal(it.unit_price or 0),
+            volume_delta=it.volume_delta if action != VOItemAction.REMOVE_FACILITY else Decimal("0"),
+            unit_price=it.unit_price if action != VOItemAction.REMOVE_FACILITY else Decimal("0"),
+            cost_impact=cost_impact_val,
             old_description=old_desc,
             old_unit=old_unit,
             notes=it.notes,
@@ -174,7 +223,7 @@ def get_vo(
         raise HTTPException(404, "VO tidak ditemukan")
     if not user_can_access_contract(db, current_user, str(vo.contract_id)):
         raise HTTPException(403, "Akses ditolak")
-    return _to_dict(vo)
+    return _to_dict(vo, db=db)
 
 
 # ─── Create / Edit (DRAFT) ──────────────────────────────────────────────────
@@ -208,7 +257,7 @@ def create_vo(
     db.add(vo)
     db.flush()
     _apply_items_from_payload(vo, data.items or [], db)
-    _recompute_cost_impact(vo)
+    _recompute_cost_impact(db, vo)
     db.commit()
     db.refresh(vo)
     if gm:
@@ -223,7 +272,7 @@ def create_vo(
         changes={"vo_number": vo.vo_number, "title": vo.title, "god_mode_bypass": gm},
         request=request, commit=True,
     )
-    return _to_dict(vo)
+    return _to_dict(vo, db=db)
 
 
 @router.put("/{vo_id}", response_model=dict)
@@ -257,7 +306,7 @@ def update_vo(
             setattr(vo, field, val)
     if data.items is not None:
         _apply_items_from_payload(vo, data.items, db)
-        _recompute_cost_impact(vo)
+        _recompute_cost_impact(db, vo)
     if gm:
         vo.god_mode_bypass = True
         log_god_mode_bypass(
@@ -272,7 +321,7 @@ def update_vo(
     log_audit(db, current_user, "update", "variation_order", str(vo.id),
               changes={"vo_number": vo.vo_number, "god_mode_bypass": gm},
               request=request, commit=True)
-    return _to_dict(vo)
+    return _to_dict(vo, db=db)
 
 
 @router.delete("/{vo_id}", response_model=dict)
@@ -396,7 +445,7 @@ def submit_vo(
     _transition(vo, VOStatus.UNDER_REVIEW, contract, current_user, db, request=request)
     db.commit()
     db.refresh(vo)
-    return _to_dict(vo)
+    return _to_dict(vo, db=db)
 
 
 @router.post("/{vo_id}/review", response_model=dict)
@@ -417,7 +466,7 @@ def review_vo(
     _transition(vo, VOStatus.DRAFT, contract, current_user, db, request=request, notes=vo.review_notes)
     db.commit()
     db.refresh(vo)
-    return _to_dict(vo)
+    return _to_dict(vo, db=db)
 
 
 @router.post("/{vo_id}/approve", response_model=dict)
@@ -431,10 +480,12 @@ def approve_vo(
     if not vo:
         raise HTTPException(404, "VO tidak ditemukan")
     contract = db.query(Contract).filter(Contract.id == vo.contract_id).first()
+    if not is_god_mode_active(contract):
+        assert_role_in(db, current_user, "ppk", "admin_pusat", action="Approve VO")
     _transition(vo, VOStatus.APPROVED, contract, current_user, db, request=request, notes=data.notes)
     db.commit()
     db.refresh(vo)
-    return _to_dict(vo)
+    return _to_dict(vo, db=db)
 
 
 @router.post("/{vo_id}/reject", response_model=dict)
@@ -448,7 +499,9 @@ def reject_vo(
     if not vo:
         raise HTTPException(404, "VO tidak ditemukan")
     contract = db.query(Contract).filter(Contract.id == vo.contract_id).first()
+    if not is_god_mode_active(contract):
+        assert_role_in(db, current_user, "ppk", "admin_pusat", action="Reject VO")
     _transition(vo, VOStatus.REJECTED, contract, current_user, db, request=request, reason=data.reason)
     db.commit()
     db.refresh(vo)
-    return _to_dict(vo)
+    return _to_dict(vo, db=db)

@@ -258,8 +258,8 @@ ROLES = [
      ["dashboard","contracts","reports_daily","reports_weekly","scurve","warnings"]),
 
     ("kontraktor","Kontraktor",
-     "Melihat data kontraknya saja", False,
-     ["contract.read","report.read","payment.read"],
+     "Mengajukan MC-0, VO, dan laporan harian/mingguan — tidak boleh edit field kontrak", False,
+     ["contract.read","contract.update","report.read","report.create","report.update","payment.read"],
      ["dashboard","contracts","reports_daily","reports_weekly","scurve","payments"]),
 
     ("itjen",     "Inspektorat / Reviewer",

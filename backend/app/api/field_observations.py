@@ -99,6 +99,43 @@ def create(
     return _to_dict(o)
 
 
+@router.put("/{obs_id}", response_model=dict)
+def update(
+    obs_id: str, data: FieldObservationCreate, request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contract.update")),
+):
+    o = db.query(FieldObservation).filter(FieldObservation.id == obs_id).first()
+    if not o:
+        raise HTTPException(404, "Observasi tidak ditemukan")
+    # MC-0 unique per kontrak — kalau user coba ubah tipe ke MC_0 sementara
+    # sudah ada MC_0 lain, tolak.
+    try:
+        new_type = FieldObservationType(data.type)
+    except ValueError:
+        raise HTTPException(400, "type harus 'mc_0' atau 'mc_interim'")
+    if new_type == FieldObservationType.MC_0 and o.type != FieldObservationType.MC_0:
+        conflict = db.query(FieldObservation).filter(
+            FieldObservation.contract_id == o.contract_id,
+            FieldObservation.type == FieldObservationType.MC_0,
+            FieldObservation.id != o.id,
+        ).first()
+        if conflict:
+            raise HTTPException(400, "MC-0 sudah ada untuk kontrak ini.")
+    o.type = new_type
+    o.observation_date = data.observation_date
+    o.title = data.title
+    o.findings = data.findings
+    o.attendees = data.attendees
+    db.commit()
+    db.refresh(o)
+    log_audit(
+        db, current_user, "update", "field_observation", str(o.id),
+        changes={"title": data.title}, request=request, commit=True,
+    )
+    return _to_dict(o)
+
+
 @router.delete("/{obs_id}", response_model=dict)
 def delete(
     obs_id: str, request: Request,
@@ -108,6 +145,17 @@ def delete(
     o = db.query(FieldObservation).filter(FieldObservation.id == obs_id).first()
     if not o:
         raise HTTPException(404, "Observasi tidak ditemukan")
+    # Role gate: hanya PPK yang boleh hapus BA (kontraktor tidak boleh hapus
+    # bukti lapangan yang sudah disepakati)
+    from app.api.deps import assert_role_in
+    from app.models.models import Contract
+    contract = db.query(Contract).filter(Contract.id == o.contract_id).first()
+    from app.services.vo_service import is_god_mode_active
+    if not (contract and is_god_mode_active(contract)):
+        assert_role_in(
+            db, current_user, "ppk", "admin_pusat",
+            action="Hapus Observasi Lapangan (BA)",
+        )
     # Kalau sudah dirujuk oleh VO, tolak delete
     from app.models.models import VariationOrder
     referenced = db.query(VariationOrder).filter(
