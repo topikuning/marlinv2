@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
   ChevronRight, Plus, MapPin, Layers, FileText, Upload,
   Trash2, Edit2, Download, Building2, GitBranch, ClipboardList,
-  Check, X as XIcon, Send, RotateCcw, AlertTriangle,
+  Check, X as XIcon, Send, RotateCcw, AlertTriangle, Search,
 } from "lucide-react";
 import {
   contractsAPI, locationsAPI, facilitiesAPI, boqAPI, masterAPI,
@@ -1929,21 +1929,12 @@ function VOCreateModal({ contract, onClose, onSuccess }) {
                     ) : (
                       <div>
                         <label className="label text-[10px]">Pilih BOQ Item</label>
-                        <select
-                          className="select py-1 text-xs"
+                        <BoqItemPicker
+                          items={boqList}
+                          loading={boqLoading}
                           value={it.boq_item_id}
-                          onChange={(e) => pickBoqItem(idx, e.target.value)}
-                          disabled={boqLoading}
-                        >
-                          <option value="">
-                            {boqLoading ? "memuat BOQ..." : `— pilih dari ${boqList.length} item —`}
-                          </option>
-                          {boqList.map((b) => (
-                            <option key={b.id} value={b.id}>
-                              [{b.location_code}/{b.facility_code}] {b.description?.slice(0, 60)}{(b.description?.length || 0) > 60 ? "…" : ""} · {b.unit} · vol {b.volume}
-                            </option>
-                          ))}
-                        </select>
+                          onChange={(id) => pickBoqItem(idx, id)}
+                        />
                       </div>
                     )}
                   </div>
@@ -2230,5 +2221,209 @@ function FOCreateModal({ contract, hasMC0, onClose, onSuccess }) {
         </div>
       </div>
     </Modal>
+  );
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// BoqItemPicker — searchable picker pengganti dropdown biasa
+// Untuk kontrak yang punya 500+ BOQ item, dropdown plain tidak manusiawi.
+// Komponen ini:
+//   - tombol ringkas menampilkan item terpilih (atau "Pilih BOQ Item…")
+//   - klik → popover dengan search box + list scrollable
+//   - query filter match: kode lokasi/fasilitas, deskripsi, satuan, kode BOQ
+//   - groupable by lokasi → fasilitas supaya list terstruktur saat di-scroll
+//   - keyboard: Esc tutup, ↑/↓ navigasi, Enter pilih
+// ════════════════════════════════════════════════════════════════════════════
+function BoqItemPicker({ items, loading, value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [highlightIdx, setHighlightIdx] = useState(0);
+  const rootRef = useRef(null);
+  const searchInputRef = useRef(null);
+
+  const selected = useMemo(
+    () => items.find((b) => b.id === value) || null,
+    [items, value]
+  );
+
+  // Filter items berdasarkan query. Multi-term: split by space, semua kata
+  // harus match (AND) di salah satu field. Case-insensitive.
+  const filtered = useMemo(() => {
+    if (!items?.length) return [];
+    const q = query.trim().toLowerCase();
+    if (!q) return items;
+    const terms = q.split(/\s+/).filter(Boolean);
+    return items.filter((b) => {
+      const hay = [
+        b.description, b.unit, b.original_code, b.full_code,
+        b.location_code, b.location_name,
+        b.facility_code, b.facility_name,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return terms.every((t) => hay.includes(t));
+    });
+  }, [items, query]);
+
+  // Close saat klik outside
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e) => {
+      if (rootRef.current && !rootRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  // Auto-focus search saat open + reset highlight
+  useEffect(() => {
+    if (open) {
+      setQuery("");
+      setHighlightIdx(0);
+      setTimeout(() => searchInputRef.current?.focus(), 30);
+    }
+  }, [open]);
+
+  // Reset highlight saat filter berubah supaya tidak index out-of-bound
+  useEffect(() => {
+    setHighlightIdx(0);
+  }, [query]);
+
+  const choose = (b) => {
+    onChange(b.id);
+    setOpen(false);
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      setOpen(false);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHighlightIdx((i) => Math.min(i + 1, filtered.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlightIdx((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (filtered[highlightIdx]) choose(filtered[highlightIdx]);
+    }
+  };
+
+  return (
+    <div className="relative" ref={rootRef}>
+      <button
+        type="button"
+        onClick={() => !loading && setOpen((o) => !o)}
+        disabled={loading}
+        className="input py-1 text-xs w-full text-left flex items-center gap-2 justify-between"
+      >
+        <span className="truncate flex-1">
+          {loading ? (
+            <span className="text-ink-400">memuat BOQ…</span>
+          ) : selected ? (
+            <>
+              <span className="font-mono text-[10px] text-brand-600 mr-1">
+                [{selected.location_code}/{selected.facility_code}]
+              </span>
+              {selected.description}
+            </>
+          ) : (
+            <span className="text-ink-400">Pilih BOQ Item… ({items.length} tersedia)</span>
+          )}
+        </span>
+        <ChevronRight size={11} className={`flex-shrink-0 text-ink-400 transition-transform ${open ? "rotate-90" : ""}`} />
+      </button>
+
+      {open && (
+        <div className="absolute z-50 mt-1 left-0 right-0 bg-white border border-ink-300 rounded-lg shadow-xl overflow-hidden">
+          <div className="border-b border-ink-200 p-2 flex items-center gap-2 bg-ink-50">
+            <Search size={13} className="text-ink-400 ml-1" />
+            <input
+              ref={searchInputRef}
+              type="text"
+              className="flex-1 bg-transparent text-xs outline-none py-0.5"
+              placeholder="Cari kode, deskripsi, lokasi, fasilitas… (multi-kata dipisah spasi)"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={onKeyDown}
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                className="text-ink-400 hover:text-ink-700 p-0.5"
+              >
+                <XIcon size={12} />
+              </button>
+            )}
+          </div>
+
+          <div className="max-h-72 overflow-y-auto">
+            {filtered.length === 0 ? (
+              <p className="px-3 py-4 text-xs text-ink-500 italic text-center">
+                {items.length === 0
+                  ? "Tidak ada BOQ item. Import BOQ dulu di tab BOQ."
+                  : "Tidak ada hasil. Coba kata kunci lain."}
+              </p>
+            ) : (
+              filtered.slice(0, 200).map((b, i) => {
+                const active = i === highlightIdx;
+                const isSelected = b.id === value;
+                return (
+                  <button
+                    type="button"
+                    key={b.id}
+                    onClick={() => choose(b)}
+                    onMouseEnter={() => setHighlightIdx(i)}
+                    className={`w-full text-left px-3 py-2 text-xs border-b border-ink-100 last:border-0 ${
+                      active ? "bg-brand-50" : "bg-white hover:bg-ink-50"
+                    } ${isSelected ? "ring-1 ring-brand-400" : ""}`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
+                          <span className="font-mono text-[10px] text-brand-600 font-semibold">
+                            [{b.location_code}/{b.facility_code}]
+                          </span>
+                          {b.original_code && (
+                            <span className="font-mono text-[10px] text-ink-500">{b.original_code}</span>
+                          )}
+                        </div>
+                        <p className="font-medium text-ink-800 line-clamp-2">
+                          {b.description}
+                        </p>
+                        <p className="text-[10px] text-ink-500 mt-0.5">
+                          {b.unit} · vol {b.volume} · Rp {Number(b.unit_price || 0).toLocaleString("id-ID")}
+                        </p>
+                      </div>
+                      {isSelected && (
+                        <Check size={14} className="text-brand-600 flex-shrink-0 mt-1" />
+                      )}
+                    </div>
+                  </button>
+                );
+              })
+            )}
+            {filtered.length > 200 && (
+              <p className="px-3 py-2 text-[11px] text-ink-500 italic text-center border-t border-ink-100 bg-ink-50">
+                Menampilkan 200 dari {filtered.length} hasil — persempit kata kunci untuk lebih spesifik.
+              </p>
+            )}
+          </div>
+
+          <div className="border-t border-ink-200 px-3 py-1.5 bg-ink-50 text-[10px] text-ink-500 flex items-center justify-between">
+            <span>
+              ↑↓ navigasi · Enter pilih · Esc tutup
+            </span>
+            <span>{filtered.length} / {items.length} item</span>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
