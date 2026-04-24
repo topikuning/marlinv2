@@ -6,7 +6,7 @@ import { AgGridReact } from "ag-grid-react";
 import { Plus, Save, Trash2, Tag, Lock, Search, X } from "lucide-react";
 import { boqAPI, masterAPI } from "@/api";
 import toast from "react-hot-toast";
-import { parseApiError, fmtNum } from "@/utils/format";
+import { parseApiError, fmtNum, fmtVolume } from "@/utils/format";
 import { Spinner } from "@/components/ui";
 import BOQItemPickerModal from "@/components/modals/BOQItemPickerModal";
 
@@ -407,11 +407,11 @@ export default function BOQGrid({
     {
       headerName: "Volume",
       field: "volume",
-      width: 92,
+      width: 100,
       editable: canEdit,
       type: "numericColumn",
       valueParser: (p) => parseFloat(p.newValue) || 0,
-      valueFormatter: (p) => fmtNum(p.value, 2),
+      valueFormatter: (p) => fmtVolume(p.value),
     },
     {
       headerName: "Harga Satuan",

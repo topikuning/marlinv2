@@ -14,7 +14,7 @@ import {
   PageLoader, Modal, Tabs, Empty, Spinner, ConfirmDialog,
 } from "@/components/ui";
 import {
-  fmtCurrency, fmtDate, contractStatusBadge, parseApiError, fmtNum,
+  fmtCurrency, fmtDate, contractStatusBadge, parseApiError, fmtNum, fmtVolume,
 } from "@/utils/format";
 import BOQGrid from "@/components/grids/BOQGrid";
 import BOQImportWizard from "@/components/modals/BOQImportWizard";
@@ -1345,7 +1345,7 @@ function RollupFacilityCard({ group: g }) {
                   </td>
                   <td className="table-td text-xs">{it.unit}</td>
                   <td className="table-td text-right text-xs font-mono">
-                    {fmtNum(it.volume, 2)}
+                    {fmtVolume(it.volume)}
                   </td>
                   <td className="table-td text-right text-xs font-mono">
                     {fmtNum(it.unit_price, 0)}
@@ -1599,10 +1599,10 @@ function RevisionDiffModal({ revision, onClose }) {
                   </td>
                   <td className="table-td">{r.description}</td>
                   <td className="table-td text-right font-mono">
-                    {r.old_volume != null ? fmtNum(r.old_volume, 2) : "—"}
+                    {r.old_volume != null ? fmtVolume(r.old_volume) : "—"}
                   </td>
                   <td className="table-td text-right font-mono">
-                    {fmtNum(r.new_volume, 2)}
+                    {fmtVolume(r.new_volume)}
                   </td>
                   <td className="table-td text-right font-mono">
                     {r.old_unit_price != null
@@ -1783,9 +1783,13 @@ function VOCreateModal({ contract, onClose, onSuccess }) {
       .finally(() => setBoqLoading(false));
   }, [contract.id]);
 
+  // Defaults sebagai STRING supaya controlled input-nya clean:
+  //   - volume_delta, unit_price: string numeric — parseFloat saat submit.
+  //     Konsisten dengan tipe DB: Numeric(18,4) untuk volume, Numeric(18,2)
+  //     untuk harga. UI input pakai type=number step=any → support desimal.
   const addItem = () => setForm((f) => ({ ...f, items: [...f.items, {
     action: "increase", boq_item_id: "", facility_id: "",
-    description: "", unit: "", volume_delta: 0, unit_price: 0, notes: "",
+    description: "", unit: "", volume_delta: "", unit_price: "", notes: "",
   }]}));
   const updateItem = (idx, key, val) => setForm((f) => ({
     ...f, items: f.items.map((it, i) => i === idx ? { ...it, [key]: val } : it),
@@ -1795,9 +1799,8 @@ function VOCreateModal({ contract, onClose, onSuccess }) {
   }));
 
   // Saat user pilih BOQ item dari dropdown, auto-fill description/unit/
-  // unit_price supaya user hanya perlu isi volume_delta. Default volume_delta
-  // mengikuti action: kalau DECREASE, isi negatif-nya volume saat ini (user
-  // bisa adjust).
+  // unit_price supaya user hanya perlu isi volume_delta. Unit_price datang
+  // dari DB sebagai number — convert ke string untuk controlled input.
   const pickBoqItem = (idx, boqItemId) => {
     const boq = boqList.find((b) => b.id === boqItemId);
     if (!boq) {
@@ -1814,7 +1817,7 @@ function VOCreateModal({ contract, onClose, onSuccess }) {
               facility_id: boq.facility_id,
               description: boq.description || "",
               unit: boq.unit || "",
-              unit_price: boq.unit_price || 0,
+              unit_price: boq.unit_price != null ? String(boq.unit_price) : "",
               master_work_code: boq.master_work_code || null,
             }
           : it
@@ -1950,16 +1953,47 @@ function VOCreateModal({ contract, onClose, onSuccess }) {
                         onChange={(e) => updateItem(idx, "unit", e.target.value)} />
                     </div>
                     <div>
-                      <label className="label text-[10px]">Volume Delta</label>
-                      <input type="number" step="any" className="input py-1 text-xs" value={it.volume_delta}
-                        onChange={(e) => updateItem(idx, "volume_delta", e.target.value)} />
+                      <label className="label text-[10px]">
+                        Volume Delta {it.action === "decrease" ? "(isi negatif)" : ""}
+                      </label>
+                      <input
+                        type="number"
+                        step="0.0001"
+                        inputMode="decimal"
+                        className="input py-1 text-xs font-mono"
+                        placeholder="0.0000"
+                        value={it.volume_delta ?? ""}
+                        onChange={(e) => updateItem(idx, "volume_delta", e.target.value)}
+                      />
                     </div>
                     <div>
-                      <label className="label text-[10px]">Harga Satuan</label>
-                      <input type="number" step="any" className="input py-1 text-xs" value={it.unit_price}
-                        onChange={(e) => updateItem(idx, "unit_price", e.target.value)} />
+                      <label className="label text-[10px]">Harga Satuan (Rp)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        inputMode="decimal"
+                        className="input py-1 text-xs font-mono"
+                        placeholder="0.00"
+                        value={it.unit_price ?? ""}
+                        onChange={(e) => updateItem(idx, "unit_price", e.target.value)}
+                      />
                     </div>
                   </div>
+                  {/* Live cost_impact preview — kalkulasi Number × Number */}
+                  {(it.volume_delta !== "" && it.unit_price !== "") && (() => {
+                    const vol = parseFloat(it.volume_delta) || 0;
+                    const price = parseFloat(it.unit_price) || 0;
+                    const impact = vol * price;
+                    return (
+                      <p className="text-[10px] text-ink-500">
+                        Dampak biaya item ini:{" "}
+                        <span className={`font-semibold ${impact >= 0 ? "text-ink-800" : "text-red-700"}`}>
+                          {impact >= 0 ? "+" : ""}{fmtCurrency(impact)}
+                        </span>
+                        {" "}(= {fmtVolume(vol)} × {fmtCurrency(price)})
+                      </p>
+                    );
+                  })()}
                 </div>
               ))}
             </div>
@@ -2023,7 +2057,7 @@ function VODetailModal({ vo, onClose }) {
                     <span className="font-medium">{it.description}</span>
                   </div>
                   <div className="text-ink-500 mt-0.5">
-                    Δ {it.volume_delta} {it.unit} × {fmtCurrency(it.unit_price)} = <span className="font-semibold">{fmtCurrency(it.cost_impact)}</span>
+                    Δ {fmtVolume(it.volume_delta)} {it.unit} × {fmtCurrency(it.unit_price)} = <span className="font-semibold">{fmtCurrency(it.cost_impact)}</span>
                   </div>
                 </div>
               ))}
@@ -2398,7 +2432,7 @@ function BoqItemPicker({ items, loading, value, onChange }) {
                           {b.description}
                         </p>
                         <p className="text-[10px] text-ink-500 mt-0.5">
-                          {b.unit} · vol {b.volume} · Rp {Number(b.unit_price || 0).toLocaleString("id-ID")}
+                          {b.unit} · vol {fmtVolume(b.volume)} · Rp {Number(b.unit_price || 0).toLocaleString("id-ID")}
                         </p>
                       </div>
                       {isSelected && (
