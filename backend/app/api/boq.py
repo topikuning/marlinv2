@@ -673,7 +673,7 @@ async def import_excel(
             # di header kontrak sinkron. Untuk kontrak aktif (V0 sudah
             # APPROVED), nilai kontrak tidak otomatis berubah — perubahan
             # harus lewat Addendum resmi.
-            from app.models.models import BOQRevision, RevisionStatus
+            from app.models.models import BOQRevision, RevisionStatus, ContractStatus
             c = db.query(Contract).filter(Contract.id == cid).first()
             if c and c.status == ContractStatus.DRAFT:
                 working_rev = (
