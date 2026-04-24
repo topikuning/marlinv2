@@ -918,6 +918,14 @@ def delete_addendum(
         c.end_date = a.old_end_date
         c.duration_days = (c.end_date - c.start_date).days
     db.delete(a)
+    db.flush()
+    # Kalau tidak ada addendum lain yang tersisa dan status kontrak masih
+    # ADDENDUM, kembalikan ke ACTIVE (restore state sebelum addendum dibuat).
+    remaining = db.query(ContractAddendum).filter(
+        ContractAddendum.contract_id == contract_id
+    ).count()
+    if c and remaining == 0 and c.status == ContractStatus.ADDENDUM:
+        c.status = ContractStatus.ACTIVE
     db.commit()
     log_audit(
         db, current_user, "delete", "addendum", addendum_id,

@@ -284,6 +284,13 @@ def get_vo(
         raise HTTPException(404, "VO tidak ditemukan")
     if not user_can_access_contract(db, current_user, str(vo.contract_id)):
         raise HTTPException(403, "Akses ditolak")
+    # Auto-heal: recompute cost_impact setiap kali detail dibuka.
+    # Penting untuk VO legacy yang cost_impact REMOVE_FACILITY-nya masih 0
+    # (bug lama). Idempotent & murah — query beberapa items + Facility.
+    # Skip kalau VO sudah BUNDLED (immutable ke addendum yang sudah signed).
+    if vo.status != VOStatus.BUNDLED:
+        _recompute_cost_impact(db, vo)
+        db.commit()
     return _to_dict(vo, db=db)
 
 
