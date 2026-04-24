@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useMemo } from "react";
+import React, { useEffect, useState, useRef, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
@@ -237,11 +237,15 @@ export default function ContractDetailPage() {
 
       {/* Overview */}
       {tab === "overview" && (
-        <div className="card p-6 text-sm text-ink-600">
-          <p className="font-medium text-ink-800 mb-2">Deskripsi Kontrak</p>
-          <p className="whitespace-pre-line">
-            {contract.description || "Tidak ada deskripsi."}
-          </p>
+        <div className="space-y-4">
+          <ContractChainStatusPanel contract={contract} onGoTab={setTab} />
+          <ContractChainTimeline contract={contract} onGoTab={setTab} />
+          <div className="card p-6 text-sm text-ink-600">
+            <p className="font-medium text-ink-800 mb-2">Deskripsi Kontrak</p>
+            <p className="whitespace-pre-line">
+              {contract.description || "Tidak ada deskripsi."}
+            </p>
+          </div>
         </div>
       )}
 
@@ -1896,6 +1900,190 @@ function RevisionDiffModal({ revision, onClose }) {
         </div>
       )}
     </Modal>
+  );
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// Contract Chain Timeline & Status Panel
+// Visualisasi rantai kronologis MC → VO → Adendum → Revisi BOQ.
+// ════════════════════════════════════════════════════════════════════════════
+
+const CHAIN_EVENT_META = {
+  contract_signed: { icon: "📝", color: "slate", tab: null },
+  boq_revision:    { icon: "📋", color: "blue",  tab: "boq" },
+  mc:              { icon: "🔍", color: "brand", tab: "field_observations" },
+  vo:              { icon: "📑", color: "amber", tab: "variation_orders" },
+  addendum:        { icon: "📎", color: "indigo", tab: "addenda" },
+};
+
+const CHAIN_STATUS_COLOR = {
+  done:         "bg-emerald-100 text-emerald-700 border-emerald-300",
+  approved:     "bg-emerald-100 text-emerald-700 border-emerald-300",
+  draft:        "bg-slate-100 text-slate-600 border-slate-300",
+  under_review: "bg-blue-100 text-blue-700 border-blue-300",
+  rejected:     "bg-red-100 text-red-700 border-red-300",
+  bundled:      "bg-indigo-100 text-indigo-700 border-indigo-300",
+};
+
+function ContractChainTimeline({ contract, onGoTab }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    setLoading(true);
+    contractsAPI.chainStatus(contract.id)
+      .then(({ data }) => setData(data))
+      .catch(() => setData(null))
+      .finally(() => setLoading(false));
+  }, [contract.id, contract.updated_at]);
+
+  if (loading) return <div className="card p-4 text-xs text-ink-500">Memuat timeline...</div>;
+  if (!data?.timeline?.length) return null;
+
+  return (
+    <div className="card p-4">
+      <div className="flex items-center justify-between mb-3">
+        <p className="font-semibold text-ink-800 text-sm">Rantai Perubahan Kontrak</p>
+        <p className="text-[11px] text-ink-500">{data.timeline.length} event kronologis</p>
+      </div>
+      <div className="relative overflow-x-auto pb-2">
+        <div className="flex items-stretch gap-2 min-w-max">
+          {data.timeline.map((e, i) => {
+            const meta = CHAIN_EVENT_META[e.type] || { icon: "•", color: "slate" };
+            const statusCls = CHAIN_STATUS_COLOR[e.status] || CHAIN_STATUS_COLOR.draft;
+            const clickable = !!meta.tab;
+            return (
+              <React.Fragment key={i}>
+                {i > 0 && (
+                  <div className="flex items-center self-center">
+                    <div className="w-6 h-0.5 bg-ink-200"></div>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  disabled={!clickable}
+                  onClick={() => clickable && onGoTab?.(meta.tab)}
+                  className={`flex flex-col items-center px-3 py-2 rounded-lg border ${statusCls} ${
+                    clickable ? "hover:scale-[1.02] hover:shadow-sm cursor-pointer transition" : "cursor-default"
+                  } min-w-[100px]`}
+                  title={e.title || e.label}
+                >
+                  <span className="text-base leading-none">{meta.icon}</span>
+                  <span className="text-[11px] font-semibold mt-1 text-center">{e.label}</span>
+                  {e.date && (
+                    <span className="text-[9px] opacity-75 mt-0.5">{fmtDate(e.date)}</span>
+                  )}
+                  {e.type === "vo" && (
+                    <span className={`text-[9px] font-mono mt-0.5 ${
+                      (e.cost_impact || 0) > 0 ? "text-emerald-700"
+                      : (e.cost_impact || 0) < 0 ? "text-red-700" : ""
+                    }`}>
+                      {e.cost_impact >= 0 ? "+" : ""}{fmtCurrency(e.cost_impact)}
+                    </span>
+                  )}
+                  {e.type === "addendum" && e.bundled_vo_count > 0 && (
+                    <span className="text-[9px] opacity-75 mt-0.5">{e.bundled_vo_count} VO</span>
+                  )}
+                </button>
+              </React.Fragment>
+            );
+          })}
+        </div>
+      </div>
+      <p className="text-[10px] text-ink-400 mt-2 italic">
+        Klik node untuk loncat ke tab terkait. Warna = status.
+      </p>
+    </div>
+  );
+}
+
+function ContractChainStatusPanel({ contract, onGoTab }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    setLoading(true);
+    contractsAPI.chainStatus(contract.id)
+      .then(({ data }) => setData(data))
+      .catch(() => setData(null))
+      .finally(() => setLoading(false));
+  }, [contract.id, contract.updated_at]);
+
+  if (loading || !data?.summary) return null;
+  const s = data.summary;
+  const actionTab = {
+    approve_revision: "boq",
+    create_addendum: "addenda",
+    approve_vo: "variation_orders",
+    create_mc0: "field_observations",
+  }[s.next_action];
+
+  return (
+    <div className="card p-4">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="flex-1 min-w-[200px]">
+          <p className="font-semibold text-ink-800 text-sm mb-2">Status Rantai</p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+            <StatChip
+              label="MC / Observasi"
+              value={s.mc_total}
+              sub={s.mc_0_done ? "MC-0 ✓" : "MC-0 belum"}
+              ok={s.mc_0_done}
+              onClick={() => onGoTab?.("field_observations")}
+            />
+            <StatChip
+              label="VO"
+              value={s.vo_total}
+              sub={`${s.vo_draft} draft · ${s.vo_under_review} review · ${s.vo_approved_unbundled} approved`}
+              onClick={() => onGoTab?.("variation_orders")}
+            />
+            <StatChip
+              label="Adendum"
+              value={s.addenda_count}
+              sub={s.active_revision_code ? `BOQ aktif: ${s.active_revision_code}` : "BOQ belum aktif"}
+              onClick={() => onGoTab?.("addenda")}
+            />
+            <StatChip
+              label="Revisi BOQ"
+              value={s.revisions_count}
+              sub={s.pending_revisions > 0 ? `${s.pending_revisions} DRAFT menunggu` : "semua ter-approve"}
+              warn={s.pending_revisions > 0}
+              onClick={() => onGoTab?.("boq")}
+            />
+          </div>
+        </div>
+        {s.next_action && s.next_action_message && (
+          <div className="flex-shrink-0 min-w-[240px] max-w-sm p-3 rounded-lg bg-amber-50 border border-amber-200">
+            <p className="text-[11px] font-semibold text-amber-800 uppercase flex items-center gap-1">
+              ⚠ Aksi Selanjutnya
+            </p>
+            <p className="text-xs text-amber-900 mt-1">{s.next_action_message}</p>
+            {actionTab && (
+              <button
+                className="btn-primary btn-xs mt-2"
+                onClick={() => onGoTab?.(actionTab)}
+              >
+                Buka tab →
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StatChip({ label, value, sub, ok, warn, onClick }) {
+  const ring = warn ? "border-amber-300 bg-amber-50" : ok ? "border-emerald-300 bg-emerald-50" : "border-ink-200 bg-white";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`p-2 rounded-lg border text-left hover:shadow-sm transition ${ring}`}
+    >
+      <p className="text-[10px] text-ink-500 uppercase">{label}</p>
+      <p className="text-xl font-bold text-ink-800 leading-tight">{value}</p>
+      <p className="text-[10px] text-ink-500 mt-0.5 line-clamp-2">{sub}</p>
+    </button>
   );
 }
 

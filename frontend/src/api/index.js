@@ -114,6 +114,7 @@ export const contractsAPI = {
   readiness: (id) => api.get(`/contracts/${id}/readiness`),
   activate: (id) => api.post(`/contracts/${id}/activate`),
   complete: (id) => api.post(`/contracts/${id}/complete`),
+  chainStatus: (id) => api.get(`/contracts/${id}/chain-status`),
 
   // Unlock Mode (safety valve superadmin)
   unlock: (id, reason, duration_minutes = 30) =>

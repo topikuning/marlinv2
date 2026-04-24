@@ -937,6 +937,177 @@ def delete_addendum(
 
 # ═══════════════════════════════════════════ ACTIVATION / LIFECYCLE ══════════
 
+@router.get("/{contract_id}/chain-status", response_model=dict)
+def get_chain_status(
+    contract_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contract.read")),
+):
+    """
+    Aggregate kronologis lifecycle kontrak untuk UI rantai MC→VO→Adendum.
+
+    Return:
+      - timeline: list event kronologis (TTD, BOQ V0, MC, VO, Adendum, revisi)
+      - summary: counter + next_action untuk panel status di Overview
+    """
+    from app.models.models import (
+        FieldObservation, VariationOrder, VOStatus, BOQRevision, RevisionStatus,
+    )
+    if not user_can_access_contract(db, current_user, contract_id):
+        raise HTTPException(403, "Akses ditolak")
+    c = db.query(Contract).filter(Contract.id == contract_id, Contract.deleted_at.is_(None)).first()
+    if not c:
+        raise HTTPException(404, "Kontrak tidak ditemukan")
+
+    events = []
+
+    # 1. Kontrak ditandatangani (start)
+    events.append({
+        "type": "contract_signed",
+        "date": c.start_date.isoformat() if c.start_date else None,
+        "label": "TTD Kontrak",
+        "status": "done",
+        "sort_key": c.start_date.isoformat() if c.start_date else "0000-00-00",
+    })
+
+    # 2. BOQ baseline V0 + revisi
+    revisions = (
+        db.query(BOQRevision)
+        .filter(BOQRevision.contract_id == contract_id)
+        .order_by(BOQRevision.version_number)
+        .all()
+    )
+    for r in revisions:
+        rs = r.status.value if hasattr(r.status, "value") else r.status
+        events.append({
+            "type": "boq_revision",
+            "date": (r.approved_at or r.created_at).isoformat() if (r.approved_at or r.created_at) else None,
+            "label": f"BOQ {r.revision_code or f'V{r.version_number}'}",
+            "status": "done" if r.is_active else rs,
+            "id": str(r.id),
+            "revision_code": r.revision_code,
+            "is_active": r.is_active,
+            "sort_key": (r.approved_at or r.created_at).isoformat() if (r.approved_at or r.created_at) else "0000-00-00",
+        })
+
+    # 3. MC / observasi
+    observations = (
+        db.query(FieldObservation)
+        .filter(FieldObservation.contract_id == contract_id)
+        .order_by(FieldObservation.observation_date)
+        .all()
+    )
+    for o in observations:
+        otype = o.type.value if hasattr(o.type, "value") else o.type
+        events.append({
+            "type": "mc",
+            "date": o.observation_date.isoformat() if o.observation_date else None,
+            "label": "MC-0" if otype == "mc_0" else "MC Lanjutan",
+            "status": "done",
+            "id": str(o.id),
+            "obs_type": otype,
+            "title": o.title,
+            "sort_key": o.observation_date.isoformat() if o.observation_date else "0000-00-00",
+        })
+
+    # 4. VO
+    vos = (
+        db.query(VariationOrder)
+        .filter(VariationOrder.contract_id == contract_id)
+        .order_by(VariationOrder.created_at)
+        .all()
+    )
+    for v in vos:
+        vs = v.status.value if hasattr(v.status, "value") else v.status
+        events.append({
+            "type": "vo",
+            "date": v.created_at.isoformat() if v.created_at else None,
+            "label": v.vo_number,
+            "status": vs,
+            "id": str(v.id),
+            "title": v.title,
+            "cost_impact": float(v.cost_impact or 0),
+            "bundled": v.bundled_addendum_id is not None,
+            "sort_key": v.created_at.isoformat() if v.created_at else "0000-00-00",
+        })
+
+    # 5. Adendum
+    addenda = (
+        db.query(ContractAddendum)
+        .filter(ContractAddendum.contract_id == contract_id)
+        .order_by(ContractAddendum.effective_date)
+        .all()
+    )
+    for i, a in enumerate(addenda, start=1):
+        bundled_count = db.query(VariationOrder).filter(
+            VariationOrder.bundled_addendum_id == a.id
+        ).count()
+        events.append({
+            "type": "addendum",
+            "date": a.effective_date.isoformat() if a.effective_date else None,
+            "label": f"Adendum-{i}",
+            "status": "done",
+            "id": str(a.id),
+            "number": a.number,
+            "addendum_type": a.addendum_type.value if hasattr(a.addendum_type, "value") else a.addendum_type,
+            "bundled_vo_count": bundled_count,
+            "sort_key": a.effective_date.isoformat() if a.effective_date else "0000-00-00",
+        })
+
+    # Sort kronologis
+    events.sort(key=lambda e: e.get("sort_key") or "")
+    for e in events:
+        e.pop("sort_key", None)
+
+    # Summary / next action
+    vo_approved_unbundled = [v for v in vos if v.status == VOStatus.APPROVED and not v.bundled_addendum_id]
+    vo_under_review = [v for v in vos if v.status == VOStatus.UNDER_REVIEW]
+    vo_draft = [v for v in vos if v.status == VOStatus.DRAFT]
+    has_mc0 = any(
+        (o.type.value if hasattr(o.type, "value") else o.type) == "mc_0"
+        for o in observations
+    )
+    active_rev = next((r for r in revisions if r.is_active), None)
+    pending_revs = [r for r in revisions if r.status == RevisionStatus.DRAFT]
+    vo_approved_unbundled_total = sum(float(v.cost_impact or 0) for v in vo_approved_unbundled)
+
+    # Next action heuristik
+    next_action = None
+    next_action_msg = None
+    if pending_revs:
+        next_action = "approve_revision"
+        next_action_msg = f"Revisi BOQ {pending_revs[0].revision_code or f'V{pending_revs[0].version_number}'} DRAFT menunggu approval PPK."
+    elif vo_approved_unbundled:
+        next_action = "create_addendum"
+        next_action_msg = (
+            f"Ada {len(vo_approved_unbundled)} VO APPROVED belum di-bundle "
+            f"(total Δ {vo_approved_unbundled_total:+,.0f}). Buat Adendum untuk menerapkannya ke BOQ."
+        )
+    elif vo_under_review:
+        next_action = "approve_vo"
+        next_action_msg = f"{len(vo_under_review)} VO menunggu review PPK."
+    elif not has_mc0 and (c.status.value if hasattr(c.status, "value") else c.status) in ("active", "addendum"):
+        next_action = "create_mc0"
+        next_action_msg = "MC-0 belum dibuat — pemeriksaan bersama awal biasanya dilakukan 7-14 hari setelah kontrak aktif."
+
+    summary = {
+        "mc_total": len(observations),
+        "mc_0_done": has_mc0,
+        "vo_total": len(vos),
+        "vo_draft": len(vo_draft),
+        "vo_under_review": len(vo_under_review),
+        "vo_approved_unbundled": len(vo_approved_unbundled),
+        "vo_approved_unbundled_total_cost": vo_approved_unbundled_total,
+        "addenda_count": len(addenda),
+        "revisions_count": len(revisions),
+        "pending_revisions": len(pending_revs),
+        "active_revision_code": active_rev.revision_code if active_rev else None,
+        "next_action": next_action,
+        "next_action_message": next_action_msg,
+    }
+    return {"timeline": events, "summary": summary}
+
+
 @router.get("/{contract_id}/readiness", response_model=dict)
 def get_activation_readiness(
     contract_id: str,
