@@ -974,7 +974,7 @@ def get_chain_status(
     revisions = (
         db.query(BOQRevision)
         .filter(BOQRevision.contract_id == contract_id)
-        .order_by(BOQRevision.version_number)
+        .order_by(BOQRevision.cco_number)
         .all()
     )
     for r in revisions:
@@ -982,7 +982,7 @@ def get_chain_status(
         events.append({
             "type": "boq_revision",
             "date": (r.approved_at or r.created_at).isoformat() if (r.approved_at or r.created_at) else None,
-            "label": f"BOQ {r.revision_code or f'V{r.version_number}'}",
+            "label": f"BOQ {r.revision_code or f'V{r.cco_number}'}",
             "status": "done" if r.is_active else rs,
             "id": str(r.id),
             "revision_code": r.revision_code,
@@ -1076,7 +1076,7 @@ def get_chain_status(
     next_action_msg = None
     if pending_revs:
         next_action = "approve_revision"
-        next_action_msg = f"Revisi BOQ {pending_revs[0].revision_code or f'V{pending_revs[0].version_number}'} DRAFT menunggu approval PPK."
+        next_action_msg = f"Revisi BOQ {pending_revs[0].revision_code or f'V{pending_revs[0].cco_number}'} DRAFT menunggu approval PPK."
     elif vo_approved_unbundled:
         next_action = "create_addendum"
         next_action_msg = (
