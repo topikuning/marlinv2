@@ -1990,11 +1990,15 @@ function VOCreateModal({ contract, initial, onClose, onSuccess }) {
     }
     setSaving(true);
     try {
-      // Normalisasi payload: volume_delta parseFloat supaya decimal dikirim benar
+      // Normalisasi payload:
+      // - volume_delta / unit_price parseFloat supaya decimal dikirim benar
+      // - UUID kosong ("") harus dikirim null, kalau tidak Pydantic UUID reject
       const payload = {
         ...form,
         items: form.items.map((it) => ({
           ...it,
+          boq_item_id: it.boq_item_id || null,
+          facility_id: it.facility_id || null,
           volume_delta: parseFloat(it.volume_delta) || 0,
           unit_price: parseFloat(it.unit_price) || 0,
         })),
