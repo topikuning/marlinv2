@@ -4,7 +4,7 @@ import toast from "react-hot-toast";
 import {
   ChevronRight, Plus, MapPin, Layers, FileText, Upload,
   Trash2, Edit2, Download, Building2, GitBranch, ClipboardList,
-  Check, X as XIcon, Send, RotateCcw, AlertTriangle, Search,
+  Check, X as XIcon, Send, RotateCcw, AlertTriangle, Search, Lock,
 } from "lucide-react";
 import {
   contractsAPI, locationsAPI, facilitiesAPI, boqAPI, masterAPI,
@@ -134,6 +134,12 @@ export default function ContractDetailPage() {
   const facilityLockReason = scopeLockReason;
   const locationLockReason = scopeLockReason;
 
+  // BOQ lock: berbeda dari scope lock. BOQ items lock saat revisi aktif
+  // sudah APPROVED dan tidak ada DRAFT yang sedang dikerjakan (mis. addendum
+  // belum dibuat). Unlock Mode bypass.
+  const boqLocked =
+    !isUnlocked && contract.working_revision?.status === "approved";
+
   return (
     <div className="p-6 max-w-screen-2xl mx-auto">
       {/* Breadcrumb */}
@@ -257,6 +263,18 @@ export default function ContractDetailPage() {
               {facilityLockReason}
             </div>
           )}
+          {boqLocked && (
+            <div className="mb-4 px-3 py-2 rounded-md bg-indigo-50 border border-indigo-200 text-xs text-indigo-800 flex items-start gap-2">
+              <Lock size={13} className="mt-0.5 flex-shrink-0" />
+              <div>
+                <p className="font-semibold">BOQ read-only — revisi aktif {contract.working_revision?.revision_code || "V0"} sudah APPROVED.</p>
+                <p className="mt-0.5">
+                  Klik fasilitas masih bisa untuk <span className="font-medium">melihat</span> BOQ,
+                  tapi item tidak bisa diubah. Untuk mengubah: buat VO, setujui PPK, lalu bundle ke Adendum.
+                </p>
+              </div>
+            </div>
+          )}
           <div className="flex justify-end mb-4">
             <button
               className="btn-primary"
@@ -329,8 +347,13 @@ export default function ContractDetailPage() {
                         <div
                           key={f.id}
                           className="group flex items-center gap-2 px-3 py-2 bg-ink-50 hover:bg-brand-50 rounded-lg border border-ink-200 hover:border-brand-300 transition"
+                          title={boqLocked ? "BOQ read-only — revisi APPROVED, buat Adendum untuk mengubah" : "Klik untuk edit BOQ"}
                         >
-                          <Layers size={12} className="text-brand-600 flex-shrink-0" />
+                          {boqLocked ? (
+                            <Lock size={12} className="text-indigo-600 flex-shrink-0" />
+                          ) : (
+                            <Layers size={12} className="text-brand-600 flex-shrink-0" />
+                          )}
                           <button
                             onClick={() => openBOQ(f, loc)}
                             className="flex-1 text-left min-w-0"
@@ -340,6 +363,7 @@ export default function ContractDetailPage() {
                             </p>
                             <p className="text-[10px] text-ink-400 font-mono">
                               {f.facility_code} · {fmtNum(f.total_value)}
+                              {boqLocked && <span className="ml-1 text-indigo-600">· read-only</span>}
                             </p>
                           </button>
                           {facilitiesEditable && (
