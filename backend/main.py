@@ -17,11 +17,32 @@ from app.api import (
 )
 
 
+def _ensure_enum_values():
+    """
+    Tambahan nilai enum Postgres yang muncul setelah DB pertama kali dibuat.
+    ALTER TYPE ... ADD VALUE IF NOT EXISTS idempotent dan aman dijalankan
+    berulang kali pada startup.
+    """
+    from sqlalchemy import text
+    pending = [
+        ("voitemaction", "REMOVE_FACILITY"),
+    ]
+    with engine.begin() as conn:
+        for enum_name, value in pending:
+            try:
+                conn.execute(text(
+                    f"ALTER TYPE {enum_name} ADD VALUE IF NOT EXISTS '{value}'"
+                ))
+            except Exception:
+                pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     for sub in ("daily", "weekly", "review", "payments", "documents"):
         os.makedirs(os.path.join(settings.UPLOAD_DIR, sub), exist_ok=True)
+    _ensure_enum_values()
     if settings.SCHEDULER_ENABLED:
         start_scheduler()
     yield
