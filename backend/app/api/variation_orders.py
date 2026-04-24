@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models.models import (
     Contract, VariationOrder, VariationOrderItem, VOStatus, VOItemAction,
-    BOQItem, User,
+    BOQItem, Facility, User,
 )
 from app.schemas.schemas import (
     VariationOrderCreate, VariationOrderUpdate, VOActionRequest,
@@ -38,8 +38,14 @@ from app.services.vo_service import (
 router = APIRouter(prefix="/variation-orders", tags=["variation_orders"])
 
 
-def _item_to_dict(i: VariationOrderItem) -> dict:
-    return {
+def _item_to_dict(i: VariationOrderItem, *, db: Session = None) -> dict:
+    """
+    Return item dict + enrichment target.
+    Enrichment memberi PPK konteks Sebelum vs Sesudah:
+      - target_boq: data BOQItem yang direfer (untuk INCREASE/DECREASE/MODIFY_SPEC/REMOVE)
+      - target_facility: data Facility (untuk ADD / REMOVE_FACILITY)
+    """
+    d = {
         "id": str(i.id),
         "action": i.action.value if hasattr(i.action, "value") else i.action,
         "boq_item_id": str(i.boq_item_id) if i.boq_item_id else None,
@@ -53,7 +59,53 @@ def _item_to_dict(i: VariationOrderItem) -> dict:
         "old_description": i.old_description,
         "old_unit": i.old_unit,
         "notes": i.notes,
+        "target_boq": None,
+        "target_facility": None,
     }
+    if db is None:
+        return d
+    # Enrichment — target BOQItem
+    if i.boq_item_id:
+        bi = db.query(BOQItem).filter(BOQItem.id == i.boq_item_id).first()
+        if bi:
+            fac = db.query(Facility).filter(Facility.id == bi.facility_id).first()
+            loc = None
+            if fac:
+                from app.models.models import Location
+                loc = db.query(Location).filter(Location.id == fac.location_id).first()
+            d["target_boq"] = {
+                "id": str(bi.id),
+                "description": bi.description,
+                "unit": bi.unit,
+                "volume": float(bi.volume or 0),
+                "unit_price": float(bi.unit_price or 0),
+                "total_price": float(bi.total_price or 0),
+                "full_code": bi.full_code,
+                "facility_code": fac.facility_code if fac else None,
+                "facility_name": fac.name if fac else None,
+                "location_code": loc.location_code if loc else None,
+                "location_name": loc.name if loc else None,
+            }
+    # Enrichment — target Facility
+    if i.facility_id:
+        fac = db.query(Facility).filter(Facility.id == i.facility_id).first()
+        if fac:
+            from app.models.models import Location
+            loc = db.query(Location).filter(Location.id == fac.location_id).first()
+            item_count = db.query(BOQItem).filter(
+                BOQItem.facility_id == fac.id,
+                BOQItem.is_active == True,  # noqa: E712
+            ).count()
+            d["target_facility"] = {
+                "id": str(fac.id),
+                "code": fac.facility_code,
+                "name": fac.name,
+                "total_value": float(fac.total_value or 0),
+                "item_count": item_count,
+                "location_code": loc.location_code if loc else None,
+                "location_name": loc.name if loc else None,
+            }
+    return d
 
 
 def _to_dict(vo: VariationOrder, with_items: bool = True, *, db: Session = None) -> dict:
@@ -93,7 +145,7 @@ def _to_dict(vo: VariationOrder, with_items: bool = True, *, db: Session = None)
             )
         else:
             items = vo.items or []
-        d["items"] = [_item_to_dict(it) for it in items]
+        d["items"] = [_item_to_dict(it, db=db) for it in items]
     return d
 
 

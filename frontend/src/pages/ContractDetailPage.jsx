@@ -1837,7 +1837,12 @@ function VariationOrdersPanel({ contract, onChange, canApprove = false }) {
                   </div>
                 </div>
                 <div className="flex gap-1 flex-wrap">
-                  <button className="btn-ghost btn-xs" onClick={() => setDetail(vo)}>Lihat</button>
+                  <button className="btn-ghost btn-xs" onClick={async () => {
+                    try {
+                      const { data } = await voAPI.get(vo.id);
+                      setDetail(data);
+                    } catch (e) { toast.error(parseApiError(e)); }
+                  }}>Lihat</button>
                   {vo.status === "draft" && (
                     <>
                       <button className="btn-ghost btn-xs" onClick={async () => {
@@ -2179,65 +2184,231 @@ function VOCreateModal({ contract, initial, onClose, onSuccess }) {
   );
 }
 
-function VODetailModal({ vo, onClose }) {
+const VO_ACTION_META = {
+  add: { label: "+ Tambah Item", color: "emerald", sign: "+" },
+  increase: { label: "↑ Tambah Volume", color: "emerald", sign: "+" },
+  decrease: { label: "↓ Kurang Volume", color: "amber", sign: "−" },
+  modify_spec: { label: "~ Ubah Spek", color: "blue", sign: "" },
+  remove: { label: "✕ Hapus Item", color: "red", sign: "−" },
+  remove_facility: { label: "✕✕ Hapus Fasilitas", color: "red", sign: "−" },
+};
+
+function VOActionBadge({ action }) {
+  const m = VO_ACTION_META[action] || { label: action, color: "slate" };
+  const cls = {
+    emerald: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    amber: "bg-amber-50 text-amber-800 border-amber-200",
+    red: "bg-red-50 text-red-700 border-red-200",
+    blue: "bg-blue-50 text-blue-700 border-blue-200",
+    slate: "bg-slate-100 text-slate-700 border-slate-200",
+  }[m.color];
   return (
-    <Modal open onClose={onClose} title={`Detail ${vo.vo_number}`} size="lg" footer={
-      <button className="btn-primary" onClick={onClose}>Tutup</button>
-    }>
-      <div className="space-y-3 text-sm">
-        <div className="flex items-center gap-2">
-          <span className={`text-[10px] px-2 py-0.5 rounded border font-medium ${VO_STATUS_BADGE[vo.status]}`}>
-            {VO_STATUS_LABEL[vo.status] || vo.status}
+    <span className={`text-[10px] px-2 py-0.5 rounded border font-semibold ${cls}`}>
+      {m.label}
+    </span>
+  );
+}
+
+function VOItemCard({ it }) {
+  const action = it.action;
+  const meta = VO_ACTION_META[action] || {};
+  const rowBg =
+    meta.color === "emerald" ? "bg-emerald-50/30 border-emerald-200"
+    : meta.color === "red" ? "bg-red-50/30 border-red-200"
+    : meta.color === "amber" ? "bg-amber-50/30 border-amber-200"
+    : meta.color === "blue" ? "bg-blue-50/30 border-blue-200"
+    : "bg-white border-ink-200";
+  const impactCls = it.cost_impact > 0 ? "text-emerald-700"
+    : it.cost_impact < 0 ? "text-red-700" : "text-ink-700";
+
+  // Build Before / After based on action type
+  let before = null, after = null;
+
+  if (action === "add") {
+    const fac = it.target_facility;
+    before = <span className="text-ink-400 italic">(item belum ada)</span>;
+    after = (
+      <div className="space-y-0.5">
+        <div>{it.description}</div>
+        {fac && <div className="text-[10px] text-ink-500 font-mono">pada {fac.location_code}/{fac.code} — {fac.name}</div>}
+        <div className="text-[11px] text-ink-600 font-mono">
+          Vol: <b>{fmtVolume(it.volume_delta)}</b> {it.unit} × {fmtCurrency(it.unit_price)}
+        </div>
+      </div>
+    );
+  } else if (action === "increase" || action === "decrease") {
+    const tgt = it.target_boq;
+    const oldVol = tgt?.volume ?? 0;
+    const newVol = oldVol + (it.volume_delta || 0);
+    before = tgt ? (
+      <div className="space-y-0.5">
+        <div>{tgt.description}</div>
+        <div className="text-[10px] text-ink-500 font-mono">{tgt.location_code}/{tgt.facility_code} · {tgt.full_code}</div>
+        <div className="text-[11px] font-mono">Vol: <b>{fmtVolume(tgt.volume)}</b> {tgt.unit} × {fmtCurrency(tgt.unit_price)}</div>
+      </div>
+    ) : <span className="text-ink-400">— target tidak ditemukan —</span>;
+    after = (
+      <div className="space-y-0.5">
+        <div className="text-[11px] font-mono">
+          Vol: <b>{fmtVolume(newVol)}</b> {tgt?.unit || it.unit}
+          <span className={`ml-2 ${action === "increase" ? "text-emerald-700" : "text-red-700"}`}>
+            ({action === "increase" ? "+" : ""}{fmtVolume(it.volume_delta)})
           </span>
-          <span className="font-medium text-ink-900">{vo.title}</span>
+        </div>
+        <div className="text-[11px] font-mono text-ink-600">
+          Harga: {fmtCurrency(it.unit_price || tgt?.unit_price || 0)}
+        </div>
+      </div>
+    );
+  } else if (action === "modify_spec") {
+    const tgt = it.target_boq;
+    before = tgt ? (
+      <div className="space-y-0.5">
+        <div>{it.old_description || tgt.description}</div>
+        <div className="text-[10px] text-ink-500 font-mono">
+          {tgt.location_code}/{tgt.facility_code} · Satuan: {it.old_unit || tgt.unit}
+        </div>
+      </div>
+    ) : <span className="text-ink-400">— target tidak ditemukan —</span>;
+    after = (
+      <div className="space-y-0.5">
+        <div>{it.description}</div>
+        <div className="text-[10px] text-ink-500 font-mono">Satuan: {it.unit}</div>
+      </div>
+    );
+  } else if (action === "remove") {
+    const tgt = it.target_boq;
+    before = tgt ? (
+      <div className="space-y-0.5">
+        <div>{tgt.description}</div>
+        <div className="text-[10px] text-ink-500 font-mono">{tgt.location_code}/{tgt.facility_code} · {tgt.full_code}</div>
+        <div className="text-[11px] font-mono">Vol: <b>{fmtVolume(tgt.volume)}</b> {tgt.unit} × {fmtCurrency(tgt.unit_price)} = {fmtCurrency(tgt.total_price)}</div>
+      </div>
+    ) : <span className="text-ink-400">— target tidak ditemukan —</span>;
+    after = <span className="text-red-600 font-semibold line-through">DIHAPUS (cascade ke children)</span>;
+  } else if (action === "remove_facility") {
+    const fac = it.target_facility;
+    before = fac ? (
+      <div className="space-y-0.5">
+        <div className="font-semibold">{fac.name}</div>
+        <div className="text-[10px] text-ink-500 font-mono">{fac.location_code}/{fac.code}</div>
+        <div className="text-[11px]">{fac.item_count} item · Nilai: <b>{fmtCurrency(fac.total_value)}</b></div>
+      </div>
+    ) : <span className="text-ink-400">— fasilitas tidak ditemukan —</span>;
+    after = <span className="text-red-600 font-semibold">SELURUH FASILITAS & SEMUA ITEM DIHAPUS</span>;
+  }
+
+  return (
+    <div className={`border rounded-lg p-3 text-xs ${rowBg}`}>
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <VOActionBadge action={action} />
+        <div className={`font-mono font-semibold ${impactCls}`}>
+          Δ Biaya: {it.cost_impact >= 0 ? "+" : ""}{fmtCurrency(it.cost_impact)}
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <p className="text-[10px] font-semibold text-ink-500 uppercase mb-1">⬅ Sebelum</p>
+          <div className="p-2 bg-white/60 border border-ink-100 rounded text-[11px] leading-relaxed">
+            {before}
+          </div>
         </div>
         <div>
+          <p className="text-[10px] font-semibold text-ink-500 uppercase mb-1">Sesudah ➡</p>
+          <div className="p-2 bg-white/60 border border-ink-100 rounded text-[11px] leading-relaxed">
+            {after}
+          </div>
+        </div>
+      </div>
+      {it.notes && (
+        <div className="mt-2 text-[11px] text-ink-600 italic border-t border-ink-100 pt-1">
+          Catatan: {it.notes}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VODetailModal({ vo, onClose }) {
+  // Summary per action
+  const summary = useMemo(() => {
+    const s = { add: 0, increase: 0, decrease: 0, modify_spec: 0, remove: 0, remove_facility: 0 };
+    (vo.items || []).forEach((it) => { if (s[it.action] != null) s[it.action] += 1; });
+    return s;
+  }, [vo.items]);
+
+  return (
+    <Modal open onClose={onClose} title={`Detail ${vo.vo_number}`} size="xl" footer={
+      <button className="btn-primary" onClick={onClose}>Tutup</button>
+    }>
+      <div className="space-y-4 text-sm">
+        {/* Header */}
+        <div className="flex items-start justify-between gap-3 pb-3 border-b border-ink-200">
+          <div className="flex-1">
+            <div className="flex items-center gap-2 mb-1">
+              <span className={`text-[10px] px-2 py-0.5 rounded border font-medium ${VO_STATUS_BADGE[vo.status]}`}>
+                {VO_STATUS_LABEL[vo.status] || vo.status}
+              </span>
+              <span className="font-semibold text-ink-900">{vo.title}</span>
+            </div>
+            <p className="text-[11px] text-ink-500">Dibuat {fmtDate(vo.created_at)}</p>
+          </div>
+          <div className="text-right">
+            <p className="text-[10px] text-ink-500 uppercase">Total Δ Biaya</p>
+            <p className={`text-lg font-bold ${
+              vo.cost_impact > 0 ? "text-emerald-700"
+              : vo.cost_impact < 0 ? "text-red-700" : "text-ink-700"
+            }`}>
+              {vo.cost_impact >= 0 ? "+" : ""}{fmtCurrency(vo.cost_impact)}
+            </p>
+          </div>
+        </div>
+
+        {/* Summary chips */}
+        {(vo.items?.length || 0) > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {Object.entries(summary).filter(([, n]) => n > 0).map(([act, n]) => (
+              <div key={act} className="flex items-center gap-1">
+                <VOActionBadge action={act} />
+                <span className="text-xs font-semibold text-ink-700">{n}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Justifikasi */}
+        <div>
           <p className="text-xs text-ink-500 font-medium mb-0.5">Justifikasi Teknis</p>
-          <p className="whitespace-pre-line text-sm">{vo.technical_justification}</p>
+          <p className="whitespace-pre-line text-[13px] p-2 bg-ink-50 rounded">{vo.technical_justification}</p>
         </div>
         {vo.quantity_calculation && (
           <div>
             <p className="text-xs text-ink-500 font-medium mb-0.5">Perhitungan Volume</p>
-            <p className="whitespace-pre-line text-sm">{vo.quantity_calculation}</p>
+            <p className="whitespace-pre-line text-[13px] p-2 bg-ink-50 rounded">{vo.quantity_calculation}</p>
           </div>
         )}
-        <div className="grid grid-cols-2 gap-3 text-xs">
-          <div>
-            <p className="text-ink-500">Dampak Biaya</p>
-            <p className={`font-semibold ${vo.cost_impact >= 0 ? "text-ink-800" : "text-red-700"}`}>
-              {vo.cost_impact >= 0 ? "+" : ""}{fmtCurrency(vo.cost_impact)}
-            </p>
-          </div>
-          <div>
-            <p className="text-ink-500">Dibuat</p>
-            <p>{fmtDate(vo.created_at)}</p>
-          </div>
-        </div>
+
         {vo.rejection_reason && (
           <div className="p-3 rounded bg-red-50 border border-red-200 text-xs text-red-800">
             <p className="font-semibold">Ditolak</p>
             <p className="mt-1">{vo.rejection_reason}</p>
           </div>
         )}
-        {vo.items?.length > 0 && (
+
+        {/* Items Before/After */}
+        {(vo.items?.length || 0) > 0 ? (
           <div>
-            <p className="text-xs text-ink-500 font-medium mb-1">{vo.items.length} Item Perubahan</p>
-            <div className="space-y-1">
-              {vo.items.map((it, i) => (
-                <div key={it.id || i} className="text-xs border border-ink-200 rounded p-2">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono uppercase text-[10px] bg-ink-100 px-1.5 py-0.5 rounded">
-                      {it.action}
-                    </span>
-                    <span className="font-medium">{it.description}</span>
-                  </div>
-                  <div className="text-ink-500 mt-0.5">
-                    Δ {fmtVolume(it.volume_delta)} {it.unit} × {fmtCurrency(it.unit_price)} = <span className="font-semibold">{fmtCurrency(it.cost_impact)}</span>
-                  </div>
-                </div>
-              ))}
+            <p className="text-xs font-semibold text-ink-700 mb-2">
+              Rincian Perubahan ({vo.items.length} item) — Sebelum vs Sesudah
+            </p>
+            <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
+              {vo.items.map((it, i) => <VOItemCard key={it.id || i} it={it} />)}
             </div>
           </div>
+        ) : (
+          <p className="text-xs text-ink-500 italic text-center py-4">
+            Belum ada item perubahan. Edit VO untuk menambah item.
+          </p>
         )}
       </div>
     </Modal>
