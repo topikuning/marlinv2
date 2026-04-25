@@ -2367,6 +2367,8 @@ function VariationOrdersPanel({ contract, onChange, canApprove = false, pendingF
 }
 
 function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }) {
+  const { user } = useAuthStore();
+  const role = user?.role?.code;
   const isEdit = !!initial;
   const [form, setForm] = useState(() =>
     initial
@@ -2377,8 +2379,8 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
           source_observation_id: initial.source_observation_id || null,
           items: (initial.items || []).map((it) => ({
             action: it.action,
-            boq_item_id: it.boq_item_id || "",
-            facility_id: it.facility_id || "",
+            boq_item_id: it.boq_item_id || null,
+            facility_id: it.facility_id || null,
             master_work_code: it.master_work_code || null,
             description: it.description || "",
             unit: it.unit || "",
@@ -2398,72 +2400,24 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
         }
   );
   const [saving, setSaving] = useState(false);
-  const [boqList, setBoqList] = useState([]);
-  const [boqLoading, setBoqLoading] = useState(true);
-
-  // Load semua leaf BOQ items di kontrak untuk dipakai sebagai picker
-  // (pengganti input UUID manual yang UX-nya payah).
-  useEffect(() => {
-    boqAPI.listByContractFlat(contract.id, true)
-      .then(({ data }) => setBoqList(data || []))
-      .catch(() => setBoqList([]))
-      .finally(() => setBoqLoading(false));
-  }, [contract.id]);
-
-  // Defaults sebagai STRING supaya controlled input-nya clean:
-  //   - volume_delta, unit_price: string numeric — parseFloat saat submit.
-  //     Konsisten dengan tipe DB: Numeric(18,4) untuk volume, Numeric(18,2)
-  //     untuk harga. UI input pakai type=number step=any → support desimal.
-  const addItem = () => setForm((f) => ({ ...f, items: [...f.items, {
-    action: "increase", boq_item_id: "", facility_id: "",
-    description: "", unit: "", volume_delta: "", unit_price: "", notes: "",
-  }]}));
-  const updateItem = (idx, key, val) => setForm((f) => ({
-    ...f, items: f.items.map((it, i) => i === idx ? { ...it, [key]: val } : it),
-  }));
-  const removeItem = (idx) => setForm((f) => ({
-    ...f, items: f.items.filter((_, i) => i !== idx),
-  }));
-
-  // Saat user pilih BOQ item dari dropdown, auto-fill description/unit/
-  // unit_price supaya user hanya perlu isi volume_delta. Unit_price datang
-  // dari DB sebagai number — convert ke string untuk controlled input.
-  const pickBoqItem = (idx, boqItemId) => {
-    const boq = boqList.find((b) => b.id === boqItemId);
-    if (!boq) {
-      updateItem(idx, "boq_item_id", boqItemId);
-      return;
-    }
-    setForm((f) => ({
-      ...f,
-      items: f.items.map((it, i) =>
-        i === idx
-          ? {
-              ...it,
-              boq_item_id: boqItemId,
-              facility_id: boq.facility_id,
-              description: boq.description || "",
-              unit: boq.unit || "",
-              unit_price: boq.unit_price != null ? String(boq.unit_price) : "",
-              master_work_code: boq.master_work_code || null,
-            }
-          : it
-      ),
-    }));
-  };
 
   const submit = async () => {
     if (form.technical_justification.length < 50) return toast.error("Justifikasi teknis minimal 50 karakter");
-    if (!form.items.length) return toast.error("Tambahkan minimal 1 item perubahan");
-    // Validasi field wajib per action
+    if (!form.items.length) return toast.error("Edit minimal 1 item perubahan di grid");
+    // Validasi field wajib per action + nilai
     for (const [idx, it] of form.items.entries()) {
       const needFac = it.action === "add" || it.action === "remove_facility";
       const needBoq = !needFac;
       if (needBoq && !it.boq_item_id) {
-        return toast.error(`Item ${idx + 1}: pilih BOQ item dari daftar`);
+        return toast.error(`Item ${idx + 1}: boq_item_id hilang`);
       }
       if (needFac && !it.facility_id) {
-        return toast.error(`Item ${idx + 1}: pilih fasilitas`);
+        return toast.error(`Item ${idx + 1}: facility_id hilang`);
+      }
+      if (it.action === "add") {
+        if (!it.description?.trim()) return toast.error(`Item baru #${idx + 1}: deskripsi wajib`);
+        if (parseFloat(it.volume_delta) <= 0) return toast.error(`Item baru #${idx + 1}: volume harus > 0`);
+        if (parseFloat(it.unit_price) <= 0) return toast.error(`Item baru #${idx + 1}: harga satuan harus > 0`);
       }
     }
     setSaving(true);
@@ -2493,8 +2447,6 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
     finally { setSaving(false); }
   };
 
-  const locations = contract.locations || [];
-  const allFacilities = locations.flatMap((l) => (l.facilities || []).map((f) => ({ ...f, loc: l })));
   return (
     <Modal open onClose={onClose} title={isEdit ? `Edit ${initial.vo_number}` : "VO Baru · DRAFT"} size="xl" footer={
       <>
@@ -2541,133 +2493,499 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
         </div>
         <div>
           <div className="flex items-center justify-between mb-2">
-            <label className="label mb-0">Items Perubahan</label>
-            <button type="button" className="btn-ghost btn-xs" onClick={addItem}>
-              <Plus size={11} /> Tambah Item
-            </button>
+            <label className="label mb-0">Item Perubahan BOQ</label>
+            <p className="text-[11px] text-ink-500">
+              Pilih fasilitas → edit Vol Baru langsung di tabel. Action auto-detected dari perubahan volume.
+            </p>
           </div>
-          {form.items.length === 0 ? (
-            <p className="text-xs text-ink-500 italic p-3 bg-ink-50 rounded">Belum ada item — klik "Tambah Item"</p>
-          ) : (
-            <div className="space-y-2">
-              {form.items.map((it, idx) => (
-                <div key={idx} className="border border-ink-200 rounded-lg p-3 text-xs space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium text-ink-700">Item {idx + 1}</span>
-                    <button className="text-red-600" onClick={() => removeItem(idx)}>
-                      <Trash2 size={11} />
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="label text-[10px]">Aksi</label>
-                      <select className="select py-1 text-xs" value={it.action}
-                        onChange={(e) => updateItem(idx, "action", e.target.value)}>
-                        <option value="add">Tambah Item Baru</option>
-                        <option value="increase">Tambah Volume</option>
-                        <option value="decrease">Kurangi Volume</option>
-                        <option value="modify_spec">Ubah Spesifikasi</option>
-                        <option value="remove">Hilangkan Item</option>
-                        <option value="remove_facility">Hilangkan Fasilitas (semua item di dalamnya)</option>
-                      </select>
-                    </div>
-                    {(it.action === "add" || it.action === "remove_facility") ? (
-                      <div>
-                        <label className="label text-[10px]">
-                          {it.action === "remove_facility" ? "Fasilitas yang Dihapus" : "Fasilitas Target"}
-                        </label>
-                        <select className="select py-1 text-xs" value={it.facility_id}
-                          onChange={(e) => updateItem(idx, "facility_id", e.target.value)}>
-                          <option value="">— pilih —</option>
-                          {allFacilities.map((f) => (
-                            <option key={f.id} value={f.id}>
-                              [{f.loc.location_code}] {f.facility_code} {f.facility_name}
-                              {it.action === "remove_facility" && f.total_value ? ` — ${fmtCurrency(f.total_value)}` : ""}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    ) : (
-                      <div>
-                        <label className="label text-[10px]">Pilih BOQ Item</label>
-                        <BoqItemPicker
-                          items={boqList}
-                          loading={boqLoading}
-                          value={it.boq_item_id}
-                          onChange={(id) => pickBoqItem(idx, id)}
-                        />
-                      </div>
-                    )}
-                  </div>
-                  {it.action === "remove_facility" && (
-                    <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
-                      ⚠ Seluruh item BOQ di fasilitas yang dipilih akan ikut
-                      dihapus. Cost impact akan dihitung otomatis sebagai
-                      negatif dari total nilai fasilitas.
-                    </p>
-                  )}
-                  <div>
-                    <label className="label text-[10px]">Deskripsi</label>
-                    <input className="input py-1 text-xs" value={it.description}
-                      onChange={(e) => updateItem(idx, "description", e.target.value)} />
-                  </div>
-                  {it.action !== "remove_facility" && (
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className="label text-[10px]">Satuan</label>
-                      <input className="input py-1 text-xs" value={it.unit}
-                        onChange={(e) => updateItem(idx, "unit", e.target.value)} />
-                    </div>
-                    <div>
-                      <label className="label text-[10px]">
-                        Volume Delta {it.action === "decrease" ? "(isi negatif)" : ""}
-                      </label>
-                      <input
-                        type="number"
-                        step="0.0001"
-                        inputMode="decimal"
-                        className="input py-1 text-xs font-mono"
-                        placeholder="0.0000"
-                        value={it.volume_delta ?? ""}
-                        onChange={(e) => updateItem(idx, "volume_delta", e.target.value)}
-                      />
-                    </div>
-                    <div>
-                      <label className="label text-[10px]">Harga Satuan (Rp)</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        inputMode="decimal"
-                        className="input py-1 text-xs font-mono"
-                        placeholder="0.00"
-                        value={it.unit_price ?? ""}
-                        onChange={(e) => updateItem(idx, "unit_price", e.target.value)}
-                      />
-                    </div>
-                  </div>
-                  )}
-                  {/* Live cost_impact preview — kalkulasi Number × Number */}
-                  {it.action !== "remove_facility" && (it.volume_delta !== "" && it.unit_price !== "") && (() => {
-                    const vol = parseFloat(it.volume_delta) || 0;
-                    const price = parseFloat(it.unit_price) || 0;
-                    const impact = vol * price;
-                    return (
-                      <p className="text-[10px] text-ink-500">
-                        Dampak biaya item ini:{" "}
-                        <span className={`font-semibold ${impact >= 0 ? "text-ink-800" : "text-red-700"}`}>
-                          {impact >= 0 ? "+" : ""}{fmtCurrency(impact)}
-                        </span>
-                        {" "}(= {fmtVolume(vol)} × {fmtCurrency(price)})
-                      </p>
-                    );
-                  })()}
-                </div>
-              ))}
-            </div>
-          )}
+          <VOItemsGrid
+            contract={contract}
+            items={form.items}
+            onChange={(newItems) => setForm({ ...form, items: newItems })}
+            isAdmin={role === "superadmin" || role === "admin_pusat"}
+          />
         </div>
       </div>
     </Modal>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// VOItemsGrid — grid editor untuk item VO per fasilitas.
+// User edit Vol Baru langsung; action (INCREASE/DECREASE/REMOVE/ADD) di-infer
+// dari selisih ke Vol Awal. Harga Satuan read-only by default (kontrak →
+// harga tidak boleh diubah); admin/superadmin bisa toggle override.
+// ════════════════════════════════════════════════════════════════════════════
+function VOItemsGrid({ contract, items, onChange, isAdmin = false }) {
+  const allFacilities = useMemo(() =>
+    (contract.locations || []).flatMap((l) =>
+      (l.facilities || []).map((f) => ({
+        ...f,
+        location_code: l.location_code,
+        location_name: l.name,
+      }))
+    ), [contract.locations]
+  );
+  const [facilityId, setFacilityId] = useState(allFacilities[0]?.id || "");
+  const [boqItems, setBoqItems] = useState([]);
+  const [loadingBoq, setLoadingBoq] = useState(false);
+  const [allowPriceEdit, setAllowPriceEdit] = useState(false);
+
+  // Cache BOQ per facility (avoid re-fetch saat pindah-pindah facility)
+  const [boqCache, setBoqCache] = useState({});
+
+  useEffect(() => {
+    if (!facilityId) return;
+    if (boqCache[facilityId]) {
+      setBoqItems(boqCache[facilityId]);
+      return;
+    }
+    setLoadingBoq(true);
+    boqAPI.listByFacility(facilityId)
+      .then(({ data }) => {
+        setBoqItems(data || []);
+        setBoqCache((prev) => ({ ...prev, [facilityId]: data || [] }));
+      })
+      .catch(() => setBoqItems([]))
+      .finally(() => setLoadingBoq(false));
+  }, [facilityId]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const facility = allFacilities.find((f) => f.id === facilityId);
+  const facilityRemoved = items.some(
+    (it) => it.action === "remove_facility" && it.facility_id === facilityId
+  );
+
+  // Build rows untuk leaf BOQ items, merge dengan VO items existing
+  const leafItems = useMemo(() => boqItems.filter((b) => b.is_leaf !== false), [boqItems]);
+  const rows = useMemo(() => {
+    return leafItems.map((b) => {
+      const existing = items.find(
+        (it) => it.boq_item_id === b.id &&
+          ["increase", "decrease", "remove", "modify_spec"].includes(it.action)
+      );
+      const origVol = parseFloat(b.volume || 0);
+      const origPrice = parseFloat(b.unit_price || 0);
+      let newVolume = origVol;
+      let unitPrice = origPrice;
+      if (existing) {
+        const delta = parseFloat(existing.volume_delta || 0);
+        newVolume = existing.action === "remove" ? 0 : origVol + delta;
+        if (existing.unit_price && parseFloat(existing.unit_price) > 0) {
+          unitPrice = parseFloat(existing.unit_price);
+        }
+      }
+      const delta = newVolume - origVol;
+      let action = null;
+      if (newVolume === 0 && origVol > 0) action = "remove";
+      else if (delta > 0) action = "increase";
+      else if (delta < 0) action = "decrease";
+      else if (unitPrice !== origPrice) action = "modify_spec";
+      return {
+        boq_item_id: b.id,
+        original_code: b.original_code || b.full_code || "",
+        description: b.description,
+        unit: b.unit,
+        original_volume: origVol,
+        original_unit_price: origPrice,
+        new_volume: newVolume,
+        unit_price: unitPrice,
+        delta,
+        action,
+        delta_value: newVolume * unitPrice - origVol * origPrice,
+        invalid: newVolume < 0,
+      };
+    });
+  }, [leafItems, items]);
+
+  // ADD rows: items dengan action=add dan facility_id sama
+  const addRows = useMemo(() =>
+    items
+      .map((it, i) => ({ ...it, _idx: i }))
+      .filter((it) => it.action === "add" && it.facility_id === facilityId),
+    [items, facilityId]
+  );
+
+  // Helpers untuk modify items[]
+  const replaceItem = (predicate, newItem) => {
+    const filtered = items.filter((it) => !predicate(it));
+    if (newItem) filtered.push(newItem);
+    onChange(filtered);
+  };
+
+  const updateRowVolume = (boq_item_id, newVolStr) => {
+    const newVol = newVolStr === "" ? 0 : parseFloat(newVolStr);
+    const row = rows.find((r) => r.boq_item_id === boq_item_id);
+    if (!row) return;
+    const orig = row.original_volume;
+    const delta = newVol - orig;
+    const priceChanged = row.unit_price !== row.original_unit_price;
+
+    if (newVol === orig && !priceChanged) {
+      // tidak ada perubahan → hapus dari items
+      replaceItem((it) => it.boq_item_id === boq_item_id, null);
+      return;
+    }
+    let action;
+    if (newVol === 0 && orig > 0) action = "remove";
+    else if (delta > 0) action = "increase";
+    else if (delta < 0) action = "decrease";
+    else if (priceChanged) action = "modify_spec";
+    else return;
+
+    replaceItem((it) => it.boq_item_id === boq_item_id, {
+      action,
+      boq_item_id,
+      facility_id: facilityId,
+      description: row.description,
+      unit: row.unit,
+      volume_delta: delta,
+      unit_price: row.unit_price,
+    });
+  };
+
+  const updateRowPrice = (boq_item_id, newPriceStr) => {
+    const newPrice = newPriceStr === "" ? 0 : parseFloat(newPriceStr);
+    const row = rows.find((r) => r.boq_item_id === boq_item_id);
+    if (!row) return;
+    if (newPrice === row.original_unit_price && row.new_volume === row.original_volume) {
+      replaceItem((it) => it.boq_item_id === boq_item_id, null);
+      return;
+    }
+    const delta = row.new_volume - row.original_volume;
+    let action;
+    if (row.new_volume === 0 && row.original_volume > 0) action = "remove";
+    else if (delta > 0) action = "increase";
+    else if (delta < 0) action = "decrease";
+    else action = "modify_spec";
+    replaceItem((it) => it.boq_item_id === boq_item_id, {
+      action,
+      boq_item_id,
+      facility_id: facilityId,
+      description: row.description,
+      unit: row.unit,
+      volume_delta: delta,
+      unit_price: newPrice,
+    });
+  };
+
+  const resetRow = (boq_item_id) => {
+    replaceItem((it) => it.boq_item_id === boq_item_id, null);
+  };
+
+  const addNewItem = () => {
+    onChange([
+      ...items,
+      {
+        action: "add",
+        boq_item_id: null,
+        facility_id: facilityId,
+        description: "",
+        unit: "",
+        volume_delta: "",
+        unit_price: "",
+      },
+    ]);
+  };
+
+  const updateAddRow = (idx, key, val) => {
+    onChange(items.map((it, i) => (i === idx ? { ...it, [key]: val } : it)));
+  };
+  const removeAddRow = (idx) => {
+    onChange(items.filter((_, i) => i !== idx));
+  };
+
+  const removeFacility = () => {
+    if (!facility) return;
+    if (!confirm(
+      `Hapus seluruh fasilitas "${facility.facility_name}"?\n\n` +
+      `Semua perubahan item lain di fasilitas ini akan ditimpa dengan satu aksi REMOVE_FACILITY.`
+    )) return;
+    const filtered = items.filter((it) => it.facility_id !== facilityId);
+    filtered.push({
+      action: "remove_facility",
+      boq_item_id: null,
+      facility_id: facilityId,
+      description: `Hilangkan seluruh fasilitas ${facility.facility_code} ${facility.facility_name}`,
+      unit: "",
+      volume_delta: 0,
+      unit_price: 0,
+    });
+    onChange(filtered);
+  };
+
+  const cancelRemoveFacility = () => {
+    onChange(items.filter(
+      (it) => !(it.action === "remove_facility" && it.facility_id === facilityId)
+    ));
+  };
+
+  // Aggregates
+  const facilityChangeCount = items.filter(
+    (it) => it.facility_id === facilityId ||
+      (it.boq_item_id && rows.some((r) => r.boq_item_id === it.boq_item_id))
+  ).length;
+  const totalDelta = items.reduce((sum, it) => sum + (parseFloat(it.cost_impact) || (parseFloat(it.volume_delta || 0) * parseFloat(it.unit_price || 0))), 0);
+  const hasInvalid = rows.some((r) => r.invalid);
+
+  if (!allFacilities.length) {
+    return (
+      <div className="p-3 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
+        Kontrak ini belum punya fasilitas. Tambah lokasi & fasilitas dulu sebelum membuat VO.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {/* Toolbar */}
+      <div className="flex items-center gap-2 flex-wrap p-2 bg-ink-50 rounded border border-ink-200">
+        <label className="text-xs font-medium text-ink-700">Fasilitas:</label>
+        <select
+          className="select py-1 text-xs flex-1 min-w-[260px] max-w-md"
+          value={facilityId}
+          onChange={(e) => setFacilityId(e.target.value)}
+        >
+          {allFacilities.map((f) => (
+            <option key={f.id} value={f.id}>
+              [{f.location_code}] {f.facility_code} · {f.facility_name}
+              {f.total_value ? ` — ${fmtCurrency(f.total_value)}` : ""}
+            </option>
+          ))}
+        </select>
+        {!facilityRemoved && (
+          <>
+            <button type="button" className="btn-ghost btn-xs" onClick={addNewItem}>
+              <Plus size={11} /> Item Baru
+            </button>
+            <button
+              type="button"
+              className="btn-ghost btn-xs text-red-600"
+              onClick={removeFacility}
+              title="Tandai seluruh fasilitas untuk dihapus"
+            >
+              <Trash2 size={11} /> Hapus Fasilitas
+            </button>
+          </>
+        )}
+        {isAdmin && !facilityRemoved && (
+          <label className="text-[11px] text-ink-600 ml-auto flex items-center gap-1 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={allowPriceEdit}
+              onChange={(e) => setAllowPriceEdit(e.target.checked)}
+            />
+            Override harga satuan
+          </label>
+        )}
+      </div>
+
+      {facilityRemoved ? (
+        <div className="p-3 rounded bg-red-50 border border-red-200 text-xs text-red-800 flex items-start gap-2">
+          <span className="text-base">✕✕</span>
+          <div className="flex-1">
+            <p className="font-semibold">Seluruh fasilitas ini ditandai untuk DIHAPUS.</p>
+            <p className="mt-0.5">
+              Saat addendum dibuat dengan VO ini di-bundle, semua item BOQ di fasilitas
+              "{facility?.facility_name}" akan di-non-aktifkan (cascade ke children).
+            </p>
+            <button
+              type="button"
+              className="btn-secondary btn-xs mt-2"
+              onClick={cancelRemoveFacility}
+            >
+              Batalkan Hapus Fasilitas
+            </button>
+          </div>
+        </div>
+      ) : loadingBoq ? (
+        <p className="text-xs text-ink-500 p-3">Memuat BOQ fasilitas...</p>
+      ) : leafItems.length === 0 && addRows.length === 0 ? (
+        <div className="p-3 rounded bg-ink-50 border border-ink-200 text-xs text-ink-600">
+          Fasilitas ini belum punya item BOQ. Klik "+ Item Baru" untuk menambah, atau pilih fasilitas lain.
+        </div>
+      ) : (
+        <div className="overflow-x-auto border border-ink-200 rounded">
+          <table className="w-full text-xs">
+            <thead className="bg-ink-100">
+              <tr>
+                <th className="table-th text-left w-24">Kode</th>
+                <th className="table-th text-left">Uraian</th>
+                <th className="table-th text-left w-16">Satuan</th>
+                <th className="table-th text-right w-24">Vol Awal</th>
+                <th className="table-th text-right w-28">Vol Baru *</th>
+                <th className="table-th text-right w-24">Δ Vol</th>
+                <th className="table-th text-right w-32">Harga {allowPriceEdit ? "*" : "(RO)"}</th>
+                <th className="table-th text-right w-28">Δ Nilai</th>
+                <th className="table-th text-center w-24">Status</th>
+                <th className="table-th text-center w-16"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-ink-100">
+              {rows.map((r) => {
+                const rowBg =
+                  r.invalid ? "bg-red-100"
+                  : r.action === "add" || r.action === "increase" ? "bg-emerald-50/50"
+                  : r.action === "decrease" ? "bg-amber-50/50"
+                  : r.action === "remove" ? "bg-red-50/50 line-through"
+                  : r.action === "modify_spec" ? "bg-blue-50/50"
+                  : "";
+                return (
+                  <tr key={r.boq_item_id} className={rowBg}>
+                    <td className="table-td font-mono text-[10px] text-ink-500">{r.original_code}</td>
+                    <td className="table-td">{r.description}</td>
+                    <td className="table-td">{r.unit}</td>
+                    <td className="table-td text-right font-mono text-ink-500">{fmtVolume(r.original_volume)}</td>
+                    <td className="table-td text-right">
+                      <input
+                        type="number"
+                        step="0.0001"
+                        min="0"
+                        className={`input py-0.5 text-xs font-mono w-24 text-right ${r.invalid ? "border-red-400 bg-red-50" : ""}`}
+                        value={r.new_volume}
+                        onChange={(e) => updateRowVolume(r.boq_item_id, e.target.value)}
+                        title={r.invalid ? "Vol Baru tidak boleh negatif" : ""}
+                      />
+                    </td>
+                    <td className={`table-td text-right font-mono text-[11px] ${
+                      r.delta > 0 ? "text-emerald-700" : r.delta < 0 ? "text-red-700" : "text-ink-400"
+                    }`}>
+                      {r.delta === 0 ? "—" : (r.delta > 0 ? "+" : "") + fmtVolume(r.delta)}
+                    </td>
+                    <td className="table-td text-right">
+                      {allowPriceEdit ? (
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="input py-0.5 text-xs font-mono w-28 text-right"
+                          value={r.unit_price}
+                          onChange={(e) => updateRowPrice(r.boq_item_id, e.target.value)}
+                        />
+                      ) : (
+                        <span className="font-mono text-ink-500">{fmtCurrency(r.original_unit_price)}</span>
+                      )}
+                    </td>
+                    <td className={`table-td text-right font-mono text-[11px] font-semibold ${
+                      r.delta_value > 0 ? "text-emerald-700" : r.delta_value < 0 ? "text-red-700" : "text-ink-400"
+                    }`}>
+                      {r.delta_value === 0 ? "—" : (r.delta_value > 0 ? "+" : "") + fmtCurrency(r.delta_value)}
+                    </td>
+                    <td className="table-td text-center">
+                      {r.action ? <VOActionBadge action={r.action} /> : <span className="text-ink-400 text-[10px]">tetap</span>}
+                    </td>
+                    <td className="table-td text-center">
+                      {r.action && (
+                        <button
+                          type="button"
+                          className="text-ink-400 hover:text-ink-700 text-[10px]"
+                          onClick={() => resetRow(r.boq_item_id)}
+                          title="Kembalikan ke vol awal"
+                        >
+                          ↺
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+
+              {/* ADD rows (item baru di facility ini) */}
+              {addRows.map((r) => {
+                const newVol = parseFloat(r.volume_delta) || 0;
+                const newPrice = parseFloat(r.unit_price) || 0;
+                const value = newVol * newPrice;
+                return (
+                  <tr key={`add-${r._idx}`} className="bg-emerald-100/40">
+                    <td className="table-td">
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-semibold">BARU</span>
+                    </td>
+                    <td className="table-td">
+                      <input
+                        className="input py-0.5 text-xs"
+                        value={r.description || ""}
+                        onChange={(e) => updateAddRow(r._idx, "description", e.target.value)}
+                        placeholder="Uraian item baru"
+                      />
+                    </td>
+                    <td className="table-td">
+                      <input
+                        className="input py-0.5 text-xs w-14"
+                        value={r.unit || ""}
+                        onChange={(e) => updateAddRow(r._idx, "unit", e.target.value)}
+                        placeholder="m³"
+                      />
+                    </td>
+                    <td className="table-td text-ink-400">—</td>
+                    <td className="table-td text-right">
+                      <input
+                        type="number"
+                        step="0.0001"
+                        min="0"
+                        className="input py-0.5 text-xs font-mono w-24 text-right"
+                        value={r.volume_delta}
+                        onChange={(e) => updateAddRow(r._idx, "volume_delta", e.target.value)}
+                      />
+                    </td>
+                    <td className="table-td text-right text-emerald-700 font-mono text-[11px]">
+                      +{fmtVolume(newVol)}
+                    </td>
+                    <td className="table-td text-right">
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        className="input py-0.5 text-xs font-mono w-28 text-right"
+                        value={r.unit_price}
+                        onChange={(e) => updateAddRow(r._idx, "unit_price", e.target.value)}
+                        placeholder="0"
+                      />
+                    </td>
+                    <td className="table-td text-right text-emerald-700 font-mono text-[11px] font-semibold">
+                      +{fmtCurrency(value)}
+                    </td>
+                    <td className="table-td text-center">
+                      <VOActionBadge action="add" />
+                    </td>
+                    <td className="table-td text-center">
+                      <button
+                        type="button"
+                        className="text-red-600 hover:text-red-800"
+                        onClick={() => removeAddRow(r._idx)}
+                        title="Hapus baris ini"
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Footer summary */}
+      <div className="flex items-center justify-between p-2 bg-ink-50 rounded text-xs">
+        <div className="text-ink-600">
+          <span className="font-semibold">{items.length}</span> item perubahan total di VO ini
+          {hasInvalid && (
+            <span className="ml-2 text-red-700 font-semibold">⚠ ada Vol Baru negatif — tidak bisa simpan</span>
+          )}
+        </div>
+        <div className="text-ink-600">
+          Total Δ Nilai:{" "}
+          <span className={`font-bold ${
+            totalDelta > 0 ? "text-emerald-700" : totalDelta < 0 ? "text-red-700" : ""
+          }`}>
+            {totalDelta >= 0 ? "+" : ""}{fmtCurrency(totalDelta)}
+          </span>
+        </div>
+      </div>
+      <p className="text-[10px] text-ink-500">
+        💡 Edit Vol Baru → action auto (naik=Tambah Vol, turun=Kurang Vol, 0=Hapus Item).
+        {!allowPriceEdit && " Harga satuan kontrak tidak boleh diubah secara default."}
+      </p>
+    </div>
   );
 }
 
