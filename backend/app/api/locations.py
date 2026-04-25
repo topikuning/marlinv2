@@ -165,9 +165,24 @@ def update_location(
     loc = db.query(Location).filter(Location.id == location_id).first()
     if not loc:
         raise HTTPException(404, "Lokasi tidak ditemukan")
-    assert_scope_editable_by_location(db, location_id, entity="location")
-    for k, v in data.model_dump(exclude_unset=True).items():
-        setattr(loc, k, v)
+    payload = data.model_dump(exclude_unset=True)
+
+    # Field atribut-geografis (koordinat, alamat) selalu boleh diupdate —
+    # tidak mempengaruhi referensi BOQ / kontrak. User sering lupa mengisi
+    # koordinat saat create, harus bisa dilengkapi kapan saja.
+    SAFE_FIELDS = {"village", "district", "city", "province", "latitude", "longitude", "is_active"}
+    # Field identitas yang dipakai sebagai reference (location_code, name)
+    # harus ikut aturan scope — cuma boleh diubah di DRAFT/ADDENDUM/unlock.
+    STRICT_FIELDS = {"location_code", "name"}
+    has_strict_change = any(
+        k in STRICT_FIELDS and getattr(loc, k) != v for k, v in payload.items()
+    )
+    if has_strict_change:
+        assert_scope_editable_by_location(db, location_id, entity="location")
+
+    for k, v in payload.items():
+        if k in SAFE_FIELDS or k in STRICT_FIELDS:
+            setattr(loc, k, v)
     db.commit()
     log_audit(db, current_user, "update", "location", str(loc.id), request=request, commit=True)
     return {"success": True}

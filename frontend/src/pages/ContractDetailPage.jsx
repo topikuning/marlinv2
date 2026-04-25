@@ -38,6 +38,7 @@ export default function ContractDetailPage() {
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState("overview");
   const [showAddLocation, setShowAddLocation] = useState(false);
+  const [editLocation, setEditLocation] = useState(null); // location obj untuk edit
   const [showAddFacility, setShowAddFacility] = useState(null); // location obj
   const [showAddendum, setShowAddendum] = useState(false);
   const [boqFacility, setBoqFacility] = useState(null);
@@ -306,10 +307,26 @@ export default function ContractDetailPage() {
                         <MapPin size={11} />
                         {[loc.village, loc.district, loc.city, loc.province]
                           .filter(Boolean)
-                          .join(", ")}
+                          .join(", ") || <span className="italic text-ink-400">alamat belum diisi</span>}
+                      </p>
+                      <p className="text-[10px] text-ink-500 mt-0.5 font-mono">
+                        {loc.latitude != null && loc.longitude != null ? (
+                          <span className="text-emerald-700">
+                            📍 {Number(loc.latitude).toFixed(6)}, {Number(loc.longitude).toFixed(6)}
+                          </span>
+                        ) : (
+                          <span className="text-amber-700">⚠ koordinat belum diisi — klik Edit untuk menambahkan</span>
+                        )}
                       </p>
                     </div>
                     <div className="flex gap-1">
+                      <button
+                        className="btn-ghost btn-xs"
+                        onClick={() => setEditLocation(loc)}
+                        title="Edit lokasi (termasuk koordinat)"
+                      >
+                        <Edit2 size={11} /> Edit
+                      </button>
                       <button
                         className="btn-ghost btn-xs"
                         onClick={() => setShowAddFacility(loc)}
@@ -575,6 +592,16 @@ export default function ContractDetailPage() {
           load();
         }}
       />
+      <AddLocationModal
+        open={!!editLocation}
+        onClose={() => setEditLocation(null)}
+        contractId={id}
+        initial={editLocation}
+        onSuccess={() => {
+          setEditLocation(null);
+          load();
+        }}
+      />
       <AddFacilityModal
         open={!!showAddFacility}
         onClose={() => setShowAddFacility(null)}
@@ -631,7 +658,8 @@ export default function ContractDetailPage() {
 // Add Location Modal — single + bulk
 // ════════════════════════════════════════════════════════════════════════════
 
-function AddLocationModal({ open, onClose, contractId, onSuccess }) {
+function AddLocationModal({ open, onClose, contractId, initial, onSuccess }) {
+  const isEdit = !!initial;
   const [mode, setMode] = useState("single");
   const [form, setForm] = useState({
     location_code: "", name: "", village: "", district: "", city: "", province: "",
@@ -641,10 +669,35 @@ function AddLocationModal({ open, onClose, contractId, onSuccess }) {
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
 
+  // Prefill saat mode edit
+  useEffect(() => {
+    if (isEdit && initial) {
+      setMode("single");
+      setForm({
+        location_code: initial.location_code || "",
+        name: initial.name || "",
+        village: initial.village || "",
+        district: initial.district || "",
+        city: initial.city || "",
+        province: initial.province || "",
+        latitude: initial.latitude != null ? String(initial.latitude) : "",
+        longitude: initial.longitude != null ? String(initial.longitude) : "",
+      });
+    }
+  }, [isEdit, initial]);
+
   const submit = async () => {
     setLoading(true);
     try {
-      if (mode === "single") {
+      if (isEdit) {
+        const payload = {
+          ...form,
+          latitude: form.latitude !== "" ? parseFloat(form.latitude) : null,
+          longitude: form.longitude !== "" ? parseFloat(form.longitude) : null,
+        };
+        await locationsAPI.update(initial.id, payload);
+        toast.success("Lokasi diperbarui");
+      } else if (mode === "single") {
         const payload = {
           ...form,
           latitude: form.latitude !== "" ? parseFloat(form.latitude) : null,
@@ -682,7 +735,7 @@ function AddLocationModal({ open, onClose, contractId, onSuccess }) {
     <Modal
       open={open}
       onClose={onClose}
-      title="Tambah Lokasi"
+      title={isEdit ? `Edit Lokasi · ${initial?.location_code || ""}` : "Tambah Lokasi"}
       size="lg"
       footer={
         <>
@@ -693,19 +746,21 @@ function AddLocationModal({ open, onClose, contractId, onSuccess }) {
         </>
       }
     >
-      <div className="flex gap-1 border-b border-ink-200 mb-4">
-        {["single", "bulk", "excel"].map((m) => (
-          <button
-            key={m}
-            onClick={() => setMode(m)}
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition ${
-              mode === m ? "border-brand-600 text-brand-700" : "border-transparent text-ink-500"
-            }`}
-          >
-            {m === "single" ? "Satu Lokasi" : m === "bulk" ? "Banyak Sekaligus" : "Import Excel"}
-          </button>
-        ))}
-      </div>
+      {!isEdit && (
+        <div className="flex gap-1 border-b border-ink-200 mb-4">
+          {["single", "bulk", "excel"].map((m) => (
+            <button
+              key={m}
+              onClick={() => setMode(m)}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition ${
+                mode === m ? "border-brand-600 text-brand-700" : "border-transparent text-ink-500"
+              }`}
+            >
+              {m === "single" ? "Satu Lokasi" : m === "bulk" ? "Banyak Sekaligus" : "Import Excel"}
+            </button>
+          ))}
+        </div>
+      )}
 
       {mode === "single" && (
         <div className="grid grid-cols-2 gap-3">

@@ -435,6 +435,33 @@ function CreateContractModal({ open, onClose, onSuccess }) {
                       onChange={(e) => setLoc(i, "province", e.target.value)}
                     />
                   </div>
+                  <div>
+                    <label className="label">Latitude</label>
+                    <input
+                      className="input"
+                      type="number"
+                      step="any"
+                      placeholder="-6.2088"
+                      value={l.latitude}
+                      onChange={(e) => setLoc(i, "latitude", e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Longitude</label>
+                    <input
+                      className="input"
+                      type="number"
+                      step="any"
+                      placeholder="106.8456"
+                      value={l.longitude}
+                      onChange={(e) => setLoc(i, "longitude", e.target.value)}
+                    />
+                  </div>
+                  <p className="md:col-span-4 text-[11px] text-ink-500 -mt-1">
+                    💡 Koordinat opsional tapi disarankan — diperlukan agar lokasi muncul di peta dashboard.
+                    Cara cepat: buka Google Maps, klik kanan titik lokasi, salin koordinat. Bisa diisi nanti
+                    via tombol Edit di kartu lokasi.
+                  </p>
                 </div>
               </div>
             ))}
