@@ -940,7 +940,7 @@ def approve_revision(
     db.commit()
     log_audit(
         db, current_user, "approve", "boq_revision", str(rev.id),
-        changes={"revision_code": rev.revision_code, "total_value": actual},
+        changes={"revision_code": rev.revision_code, "total_value": boq_pre},
         request=request, commit=True,
     )
     return {
