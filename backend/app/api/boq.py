@@ -912,7 +912,9 @@ def approve_revision(
     ppn_amount = boq_pre * (ppn_pct / 100.0)
     boq_with_ppn = boq_pre + ppn_amount
     diff = round(boq_with_ppn - contract_value, 2)
-    if diff > 0.01:
+    # Tolerance 1 Rp — absorb floating-point error PPN. Selisih sub-Rupiah
+    # tidak relevan untuk validasi legal.
+    if diff >= 1:
         raise HTTPException(
             409,
             {

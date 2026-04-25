@@ -216,8 +216,11 @@ export default function ContractDetailPage() {
             const ppnAmount = boqTotal * (ppnPct / 100);
             const boqWithPpn = boqTotal + ppnAmount;
             const diff = boqWithPpn - contractValue;
-            const inSync = boqTotal > 0 && Math.abs(diff) < 0.01;
-            const exceeds = boqTotal > 0 && diff > 0.01; // BOQ+PPN > kontrak
+            // Tolerance 1 Rp — absorb floating-point error dari kalkulasi
+            // PPN, sambil tetap detect mismatch nyata (selisih ≥ 1 Rp).
+            const TOL = 1;
+            const inSync = boqTotal > 0 && Math.abs(diff) < TOL;
+            const exceeds = boqTotal > 0 && diff >= TOL; // BOQ+PPN > kontrak
             const money = (n) => [fmtCurrency(n, false), fmtCurrency(n, true)];
             // Hint Total BOQ
             const boqHint = boqTotal > 0
@@ -1988,8 +1991,9 @@ function RevisionsPanel({ contract, onChange }) {
                   const ppnAmount = boqPre * (ppnPct / 100);
                   const boqWithPpn = boqPre + ppnAmount;
                   const diff = Math.round((boqWithPpn - contractValue) * 100) / 100;
-                  const inSync = Math.abs(diff) < 0.01;
-                  const exceeds = diff > 0.01;
+                  // Tolerance 1 Rp untuk absorb floating-point error PPN
+                  const inSync = Math.abs(diff) < 1;
+                  const exceeds = diff >= 1;
                   if (inSync) {
                     return (
                       <p className="text-[11px] text-green-700 mt-1 font-medium">
@@ -2040,7 +2044,8 @@ function RevisionsPanel({ contract, onChange }) {
                   const ppnAmount = boqPre * (Number(contract.ppn_pct || 0) / 100);
                   const boqWithPpn = boqPre + ppnAmount;
                   const contractValue = Number(contract.current_value || 0);
-                  const exceeds = boqWithPpn - contractValue > 0.01;
+                  // Tolerance 1 Rp absorb floating-point error
+                  const exceeds = boqWithPpn - contractValue >= 1;
                   return (
                     <button
                       className="btn-primary btn-xs disabled:opacity-50"
