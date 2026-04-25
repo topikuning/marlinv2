@@ -241,7 +241,7 @@ ROLES = [
 
     ("ppk",       "PPK (Pejabat Pembuat Komitmen)",
      "PPK yang membawahi kontrak tertentu", False,
-     ["contract.read","contract.update","report.read",
+     ["contract.read","contract.create","contract.update","report.read",
       "payment.read","payment.update","review.read","review.update"],
      ["dashboard","contracts","reports_daily","reports_weekly",
       "scurve","payments","reviews","warnings"]),
