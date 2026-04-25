@@ -109,17 +109,57 @@ export const contractsAPI = {
   listAddenda: (id) => api.get(`/contracts/${id}/addenda`),
   createAddendum: (id, data) => api.post(`/contracts/${id}/addenda`, data),
   deleteAddendum: (cId, aId) => api.delete(`/contracts/${cId}/addenda/${aId}`),
+  updateAddendum: (cId, aId, data) => api.put(`/contracts/${cId}/addenda/${aId}`, data),
+  signAddendum: (cId, aId) => api.post(`/contracts/${cId}/addenda/${aId}/sign`),
 
   // Tahap 2: activation / lifecycle
   readiness: (id) => api.get(`/contracts/${id}/readiness`),
   activate: (id) => api.post(`/contracts/${id}/activate`),
   complete: (id) => api.post(`/contracts/${id}/complete`),
+  chainStatus: (id) => api.get(`/contracts/${id}/chain-status`),
 
   // Unlock Mode (safety valve superadmin)
   unlock: (id, reason, duration_minutes = 30) =>
     api.post(`/contracts/${id}/unlock`, { reason, duration_minutes }),
   lock: (id) => api.post(`/contracts/${id}/lock`),
   syncStatus: (id) => api.get(`/contracts/${id}/sync-status`),
+
+  // BOQ Lifecycle
+  bast: (id) => api.get(`/contracts/${id}/bast`),
+};
+
+export const voAPI = {
+  listByContract: (cid, params) =>
+    api.get(`/variation-orders/by-contract/${cid}`, { params }),
+  get: (id) => api.get(`/variation-orders/${id}`),
+  create: (cid, data) => api.post(`/variation-orders/by-contract/${cid}`, data),
+  update: (id, data) => api.put(`/variation-orders/${id}`, data),
+  remove: (id) => api.delete(`/variation-orders/${id}`),
+  submit: (id) => api.post(`/variation-orders/${id}/submit`),
+  review: (id, data) => api.post(`/variation-orders/${id}/review`, data),
+  approve: (id, data) => api.post(`/variation-orders/${id}/approve`, data),
+  reject: (id, data) => api.post(`/variation-orders/${id}/reject`, data),
+  exportExcelSnapshot: (cid, params) =>
+    api.get(`/variation-orders/by-contract/${cid}/excel-snapshot`, {
+      params, responseType: "blob",
+    }),
+  parseExcelSnapshot: (cid, file, params) => {
+    const form = new FormData();
+    form.append("file", file);
+    return api.post(`/variation-orders/by-contract/${cid}/excel-parse`, form, {
+      params,
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+  },
+};
+
+export const fieldObsAPI = {
+  listByContract: (cid, params) =>
+    api.get(`/field-observations/by-contract/${cid}`, { params }),
+  create: (cid, data) =>
+    api.post(`/field-observations/by-contract/${cid}`, data),
+  update: (id, data) => api.put(`/field-observations/${id}`, data),
+  remove: (id) => api.delete(`/field-observations/${id}`),
 };
 
 export const locationsAPI = {

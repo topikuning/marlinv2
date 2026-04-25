@@ -108,7 +108,7 @@ export default function ContractActivationPanel({ contract, onChange }) {
   const items = [
     { key: "has_locations", label: "Minimal 1 lokasi" },
     { key: "has_facilities", label: "Setiap lokasi punya ≥1 fasilitas" },
-    { key: "has_approved_cco_zero", label: "BOQ CCO-0 sudah Approved" },
+    { key: "has_approved_cco_zero", label: "BOQ V0 (baseline) sudah Approved" },
     {
       key: "value_ok",
       label: readiness

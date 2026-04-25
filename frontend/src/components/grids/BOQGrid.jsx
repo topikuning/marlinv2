@@ -6,7 +6,7 @@ import { AgGridReact } from "ag-grid-react";
 import { Plus, Save, Trash2, Tag, Lock, Search, X } from "lucide-react";
 import { boqAPI, masterAPI } from "@/api";
 import toast from "react-hot-toast";
-import { parseApiError, fmtNum } from "@/utils/format";
+import { parseApiError, fmtNum, fmtVolume } from "@/utils/format";
 import { Spinner } from "@/components/ui";
 import BOQItemPickerModal from "@/components/modals/BOQItemPickerModal";
 
@@ -244,6 +244,190 @@ const kbdStyle = {
 };
 
 /**
+ * ParentPickerPopover — searchable picker untuk kolom Parent.
+ * Sama pola dengan WorkCodePickerPopover: trigger via onCellClicked,
+ * render via portal, set value via rowNode.setDataValue("parent_id").
+ */
+function ParentPickerPopover({ open, anchorRect, rowNode, rows, onClose }) {
+  const [query, setQuery] = useState("");
+  const [activeIdx, setActiveIdx] = useState(0);
+  const inputRef = useRef(null);
+  const listRef = useRef(null);
+  const itemRefs = useRef({});
+
+  // Daftar parent kandidat: SEMUA item lain di facility (kecuali baris ini),
+  // sort by full_code untuk hirarki visual.
+  const candidates = useMemo(() => {
+    const own = rowNode?.data?.id;
+    return (rows || [])
+      .filter((r) => r.id !== own && (r.description || r.original_code))
+      .sort((a, b) => (a.full_code || "").localeCompare(b.full_code || ""));
+  }, [rows, rowNode]);
+
+  // Saat open: focus input, dan set activeIdx + scroll ke parent yang
+  // sudah dipilih (kalau ada). Kalau belum ada, default ke index 0 (root).
+  useEffect(() => {
+    if (!open) return;
+    setQuery("");
+    const currentParentId = rowNode?.data?.parent_id;
+    let targetIdx = 0;  // 0 = "(root)"
+    if (currentParentId) {
+      const idx = candidates.findIndex((c) => c.id === currentParentId);
+      if (idx >= 0) targetIdx = idx + 1; // +1 karena root di index 0
+    }
+    setActiveIdx(targetIdx);
+    setTimeout(() => {
+      inputRef.current?.focus();
+      // Scroll ke item aktif setelah popover render
+      const el = itemRefs.current[targetIdx];
+      if (el && el.scrollIntoView) {
+        el.scrollIntoView({ block: "center", behavior: "auto" });
+      }
+    }, 30);
+  }, [open, candidates, rowNode]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const filtered = useMemo(() => {
+    const q = (query || "").trim().toLowerCase();
+    if (!q) return candidates;
+    return candidates.filter((c) =>
+      (c.description || "").toLowerCase().includes(q) ||
+      (c.full_code || "").toLowerCase().includes(q) ||
+      (c.original_code || "").toLowerCase().includes(q)
+    );
+  }, [candidates, query]);
+
+  const total = filtered.length + 1; // +1 for "(root)" option
+  const isRootActive = activeIdx === 0;
+
+  // Scroll active item ke view setiap kali activeIdx berubah (keyboard nav)
+  useEffect(() => {
+    if (!open) return;
+    const el = itemRefs.current[activeIdx];
+    if (el && el.scrollIntoView) {
+      el.scrollIntoView({ block: "nearest", behavior: "auto" });
+    }
+  }, [activeIdx, open]);
+
+  const select = (parentId) => {
+    if (rowNode) {
+      queueMicrotask(() => {
+        rowNode.setDataValue("parent_id", parentId || null);
+        // Re-derive level di FE supaya display indent ikut: parent.level + 1
+        if (parentId) {
+          const parent = (rows || []).find((r) => r.id === parentId);
+          if (parent) rowNode.setDataValue("level", (parent.level || 0) + 1);
+        } else {
+          rowNode.setDataValue("level", 0);
+        }
+      });
+    }
+    onClose?.();
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); onClose?.(); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); setActiveIdx((i) => Math.min(i + 1, total - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActiveIdx((i) => Math.max(i - 1, 0)); }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      if (isRootActive) select(null);
+      else select(filtered[activeIdx - 1]?.id);
+    }
+  };
+
+  if (!open || !anchorRect) return null;
+  const top = (anchorRect.bottom || 0) + 2;
+  const left = Math.min((anchorRect.left || 0), window.innerWidth - 460);
+
+  return createPortal(
+    <div
+      style={{
+        position: "fixed", top, left, width: 440, zIndex: 1000,
+        background: "white", border: "1px solid #cbd5e1", borderRadius: 8,
+        boxShadow: "0 10px 30px rgba(15,23,42,0.18)",
+      }}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <div style={{ padding: 8, borderBottom: "1px solid #e2e8f0" }}>
+        <input
+          ref={inputRef}
+          type="text"
+          placeholder={`Cari parent (${candidates.length} item)...`}
+          value={query}
+          onChange={(e) => { setQuery(e.target.value); setActiveIdx(0); }}
+          onKeyDown={onKeyDown}
+          style={{
+            width: "100%", padding: "6px 8px", fontSize: 12,
+            border: "1px solid #cbd5e1", borderRadius: 4, outline: "none",
+          }}
+        />
+      </div>
+      <div ref={listRef} style={{ maxHeight: 280, overflowY: "auto" }}>
+        <button
+          type="button"
+          ref={(el) => { itemRefs.current[0] = el; }}
+          onClick={() => select(null)}
+          onKeyDown={onKeyDown}
+          style={{
+            display: "block", width: "100%", textAlign: "left",
+            padding: "6px 10px", fontSize: 11, fontStyle: "italic",
+            background: isRootActive ? "#dbeafe" : "transparent",
+            color: "#475569", border: "none", cursor: "pointer",
+            fontWeight: !rowNode?.data?.parent_id ? 600 : 400,
+          }}
+        >
+          — (root) tanpa parent —{" "}
+          {!rowNode?.data?.parent_id && <span style={{ color: "#1e3a8a" }}>← saat ini</span>}
+        </button>
+        {filtered.length === 0 ? (
+          <p style={{ padding: 12, fontSize: 11, color: "#94a3b8", fontStyle: "italic" }}>
+            Tidak ada match.
+          </p>
+        ) : filtered.slice(0, 200).map((c, i) => {
+          const active = activeIdx === i + 1;
+          const isCurrent = rowNode?.data?.parent_id === c.id;
+          return (
+            <button
+              key={c.id}
+              type="button"
+              ref={(el) => { itemRefs.current[i + 1] = el; }}
+              onClick={() => select(c.id)}
+              style={{
+                display: "block", width: "100%", textAlign: "left",
+                padding: "6px 10px", fontSize: 11, fontFamily: "monospace",
+                background: active ? "#dbeafe" : isCurrent ? "#fef3c7" : "transparent",
+                fontWeight: isCurrent ? 600 : 400,
+                border: "none", cursor: "pointer", whiteSpace: "nowrap",
+                overflow: "hidden", textOverflow: "ellipsis",
+              }}
+            >
+              <span style={{ paddingLeft: (c.level || 0) * 12 }}>
+                {c.full_code || c.original_code || "?"} — {(c.description || "").slice(0, 50)}
+                {isCurrent && <span style={{ color: "#92400e" }}>  ← saat ini</span>}
+              </span>
+            </button>
+          );
+        })}
+        {filtered.length > 200 && (
+          <p style={{ padding: 6, fontSize: 9, color: "#94a3b8", fontStyle: "italic", textAlign: "center" }}>
+            {filtered.length - 200} lainnya — perketat pencarian
+          </p>
+        )}
+      </div>
+      <div style={{
+        padding: "4px 10px", fontSize: 10, color: "#64748b",
+        background: "#f8fafc", borderTop: "1px solid #e2e8f0",
+        display: "flex", justifyContent: "space-between",
+      }}>
+        <span>↑/↓ nav · Enter pilih · Esc batal</span>
+        <span>{filtered.length} dari {candidates.length}</span>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+/**
  * BOQ editor grid.
  *
  * Mode:
@@ -282,6 +466,8 @@ export default function BOQGrid({
   const [workCodes, setWorkCodes] = useState([]);
   // Popover pencarian kode di kolom Uraian.
   const [codePicker, setCodePicker] = useState(null); // { node, rect, initial }
+  // Popover pencarian parent di kolom Parent.
+  const [parentPicker, setParentPicker] = useState(null); // { node, rect }
 
   const canEdit = !readonly && !revisionLocked;
 
@@ -360,13 +546,35 @@ export default function BOQGrid({
       cellRenderer: MasterCodeRenderer,
     },
     {
-      headerName: "Lvl",
-      field: "level",
-      width: 62,
-      editable: canEdit,
-      cellEditor: "agSelectCellEditor",
-      cellEditorParams: { values: [0, 1, 2, 3] },
-      cellStyle: { fontFamily: "monospace", color: "#64748b", fontSize: 12 },
+      headerName: "Parent",
+      field: "parent_id",
+      width: 180,
+      // Non-editable di AG Grid — buka custom popover via onCellClicked.
+      editable: false,
+      onCellClicked: (p) => {
+        if (!canEdit) return;
+        const r = p.event?.target?.getBoundingClientRect?.() ||
+                  p.eventPath?.[0]?.getBoundingClientRect?.();
+        setParentPicker({
+          node: p.node,
+          rect: r || { left: 0, top: 0, bottom: 0, width: 240 },
+        });
+      },
+      valueFormatter: (p) => {
+        if (!p.value) return canEdit ? "Klik untuk pilih…" : "(root)";
+        const parent = (rows || []).find((r) => r.id === p.value);
+        if (!parent) return "(invalid)";
+        const code = parent.full_code || parent.original_code || "";
+        const desc = (parent.description || "").slice(0, 30);
+        return `${code} — ${desc}`;
+      },
+      cellStyle: (p) => ({
+        fontSize: 11,
+        color: !p.value ? "#94a3b8" : "#475569",
+        fontFamily: "monospace",
+        fontStyle: !p.value ? "italic" : undefined,
+        cursor: canEdit ? "pointer" : "default",
+      }),
     },
     {
       headerName: "Kode Item",
@@ -385,16 +593,24 @@ export default function BOQGrid({
       editable: false,
       cellStyle: (p) => {
         const empty = canEdit && !p.data?.description;
+        const lvl = p.data?.level ?? 0;
+        const isParent = p.data?.is_leaf === false;
         return {
-          fontWeight: (p.data?.level ?? 0) <= 1 ? 600 : 400,
-          paddingLeft: `${8 + (p.data?.level ?? 0) * 10}px`,
+          fontWeight: lvl <= 1 || isParent ? 700 : 400,
+          // Indent lebih tegas (20px per level) supaya hirarki kelihatan
+          paddingLeft: `${8 + lvl * 20}px`,
           cursor: canEdit ? "pointer" : "default",
-          color: empty ? "#94a3b8" : undefined,
+          color: empty ? "#94a3b8" : isParent ? "#1e3a8a" : undefined,
           fontStyle: empty ? "italic" : undefined,
+          backgroundColor: isParent ? "#eff6ff" : undefined,
         };
       },
+      // Prefix 📁 untuk parent rows supaya hirarki visible sekilas.
       // Placeholder visible bila description masih kosong.
-      valueFormatter: (p) => p.value || (canEdit ? "Klik untuk pilih…" : ""),
+      valueFormatter: (p) => {
+        if (!p.value) return canEdit ? "Klik untuk pilih…" : "";
+        return p.data?.is_leaf === false ? `📁 ${p.value}` : p.value;
+      },
     },
     {
       headerName: "Satuan",
@@ -407,11 +623,11 @@ export default function BOQGrid({
     {
       headerName: "Volume",
       field: "volume",
-      width: 92,
+      width: 100,
       editable: canEdit,
       type: "numericColumn",
       valueParser: (p) => parseFloat(p.newValue) || 0,
-      valueFormatter: (p) => fmtNum(p.value, 2),
+      valueFormatter: (p) => fmtVolume(p.value),
     },
     {
       headerName: "Harga Satuan",
@@ -430,9 +646,22 @@ export default function BOQGrid({
       type: "numericColumn",
       valueGetter: (p) => computeTotal(p.data),
       valueFormatter: (p) => fmtNum(p.value, 0),
-      cellStyle: {
-        fontWeight: 600, backgroundColor: "#f8fafc", color: "#0f172a",
+      // Parent row (is_leaf=false): total parent TIDAK dihitung ke
+      // Total BOQ — strikethrough + warna abu supaya user sadar.
+      // Tooltip menjelaskan kenapa.
+      cellStyle: (p) => {
+        const isParent = p.data?.is_leaf === false;
+        return {
+          fontWeight: 600,
+          backgroundColor: isParent ? "#f1f5f9" : "#f8fafc",
+          color: isParent ? "#94a3b8" : "#0f172a",
+          textDecoration: isParent ? "line-through" : "none",
+        };
       },
+      tooltipValueGetter: (p) =>
+        p.data?.is_leaf === false
+          ? "Parent row — tidak dihitung ke Total BOQ. Total dihitung dari sum sub-items (children)."
+          : null,
     },
     {
       headerName: "Bobot %",
@@ -507,7 +736,7 @@ export default function BOQGrid({
         await boqAPI.bulk(newRowsToCreate.map((r) => ({
           facility_id: facilityId,
           master_work_code: r.master_work_code || null,
-          parent_id: null,
+          parent_id: r.parent_id || null,
           original_code: r.original_code || null,
           level: parseInt(r.level) || 0,
           display_order: 0,
@@ -529,6 +758,8 @@ export default function BOQGrid({
           unit_price: parseFloat(r.unit_price) || 0,
           total_price: computeTotal(r),
           master_work_code: r.master_work_code || null,
+          parent_id: r.parent_id || null,
+          level: parseInt(r.level) || 0,
         });
         r._dirty = false;
       }
@@ -566,7 +797,15 @@ export default function BOQGrid({
     e.api.refreshCells({ rowNodes: [e.node], force: true });
   };
 
-  const total = rows.reduce((a, r) => a + computeTotal(r), 0);
+  // Sum leaf-only — non-leaf rows itu group/parent dengan total_price
+  // mungkin placeholder atau aggregate, jangan dijumlah supaya tidak
+  // double-count. Konsisten dengan facility.total_value & rev.total_value.
+  const leafRows = rows.filter((r) => r.is_leaf !== false);
+  const parentRows = rows.filter((r) => r.is_leaf === false);
+  const total = leafRows.reduce((a, r) => a + computeTotal(r), 0);
+  // Parent rows yg punya total > 0 → flag potensial salah hirarki
+  const parentWithValue = parentRows.filter((r) => computeTotal(r) > 0);
+  const parentValueOrphan = parentWithValue.reduce((a, r) => a + computeTotal(r), 0);
   const masterCount = rows.filter((r) => r.master_work_code).length;
   const customCount = rows.filter((r) => !r.master_work_code && r.description).length;
 
@@ -591,7 +830,13 @@ export default function BOQGrid({
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="text-xs text-ink-500 flex items-center gap-3 flex-wrap">
           <span>
-            {rows.length} item ·{" "}
+            {rows.length} item ({leafRows.length} leaf
+            {parentRows.length > 0 && (
+              <span title="Parent rows tidak dihitung ke Total — hanya container untuk children">
+                {" + "}{parentRows.length} parent
+              </span>
+            )}
+            ) ·{" "}
             {selectedCount > 0 && (
               <span className="text-brand-600 font-medium">
                 {selectedCount} dipilih ·{" "}
@@ -599,6 +844,14 @@ export default function BOQGrid({
             )}
             Total <span className="font-semibold text-ink-800">{fmtNum(total)}</span>
           </span>
+          {parentValueOrphan > 0 && (
+            <span
+              className="text-[10px] px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200"
+              title={`${parentWithValue.length} parent row(s) punya total ${fmtNum(parentValueOrphan)} tapi tidak dihitung. Cek hirarki kalau ada item yang seharusnya leaf tapi salah ditandai parent.`}
+            >
+              ⚠ {fmtNum(parentValueOrphan)} dari {parentWithValue.length} parent tidak dihitung
+            </span>
+          )}
           <span className="flex items-center gap-1.5">
             {masterCount > 0 && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
@@ -685,6 +938,13 @@ export default function BOQGrid({
         initialValue={codePicker?.initial}
         workCodes={workCodes}
         onClose={() => setCodePicker(null)}
+      />
+      <ParentPickerPopover
+        open={!!parentPicker}
+        anchorRect={parentPicker?.rect}
+        rowNode={parentPicker?.node}
+        rows={rows}
+        onClose={() => setParentPicker(null)}
       />
 
       {canEdit && workCodes.length > 0 && (

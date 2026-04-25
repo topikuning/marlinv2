@@ -62,6 +62,7 @@ export default function EditContractModal({ open, contract, onClose, onSuccess }
       konsultan_id: contract.konsultan_id || "",
       fiscal_year: contract.fiscal_year || new Date().getFullYear(),
       original_value: contract.original_value || 0,
+      ppn_pct: contract.ppn_pct ?? 11,
       start_date: contract.start_date || "",
       end_date: contract.end_date || "",
       description: contract.description || "",
@@ -104,7 +105,7 @@ export default function EditContractModal({ open, contract, onClose, onSuccess }
         if (isFieldDisabled(k)) continue;
         let v = form[k];
         if (
-          ["original_value"].includes(k) &&
+          ["original_value", "ppn_pct"].includes(k) &&
           v !== "" &&
           v !== null
         )
@@ -275,9 +276,9 @@ export default function EditContractModal({ open, contract, onClose, onSuccess }
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
-        <div>
-          <label className="label">Nilai Kontrak (Rp) *</label>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
+        <div className="md:col-span-2">
+          <label className="label">Nilai Kontrak (Rp) — sudah termasuk PPN *</label>
           <input
             type="number"
             className="input"
@@ -285,6 +286,19 @@ export default function EditContractModal({ open, contract, onClose, onSuccess }
             onChange={(e) => set("original_value", e.target.value)}
             disabled={isFieldDisabled("original_value")}
           />
+        </div>
+        <div>
+          <label className="label">PPN (%)</label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            max="100"
+            className="input"
+            value={form.ppn_pct ?? 11}
+            onChange={(e) => set("ppn_pct", e.target.value)}
+          />
+          <p className="text-[10px] text-ink-500 mt-0.5">UU HPP 2021 = 11%. Boleh 0% kalau bebas PPN.</p>
         </div>
         <div>
           <label className="label">Tanggal Mulai *</label>

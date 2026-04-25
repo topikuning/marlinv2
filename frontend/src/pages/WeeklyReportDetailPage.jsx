@@ -11,7 +11,7 @@ import {
   PageLoader, Modal, Spinner, Tabs, Empty,
 } from "@/components/ui";
 import {
-  fmtPct, fmtDate, deviationBadge, parseApiError, fmtNum, assetUrl,
+  fmtPct, fmtDate, deviationBadge, parseApiError, fmtNum, fmtVolume, assetUrl,
 } from "@/utils/format";
 
 export default function WeeklyReportDetailPage() {
@@ -349,7 +349,7 @@ function ProgressGrid({ report, boqItems, onSaved }) {
         field: "volume_boq",
         width: 95,
         type: "numericColumn",
-        valueFormatter: (p) => fmtNum(p.value, 2),
+        valueFormatter: (p) => fmtVolume(p.value),
       },
       {
         headerName: "Bobot %",
@@ -364,7 +364,7 @@ function ProgressGrid({ report, boqItems, onSaved }) {
         width: 140,
         editable: false,
         type: "numericColumn",
-        valueFormatter: (p) => fmtNum(p.value, 2),
+        valueFormatter: (p) => fmtVolume(p.value),
         cellStyle: {
           backgroundColor: "#f8fafc",
           color: "#64748b",
@@ -377,7 +377,7 @@ function ProgressGrid({ report, boqItems, onSaved }) {
         width: 140,
         editable: !report.is_locked,
         type: "numericColumn",
-        valueFormatter: (p) => fmtNum(p.value, 2),
+        valueFormatter: (p) => fmtVolume(p.value),
         cellStyle: (p) => {
           const base = {
             backgroundColor: "#fefce8",
@@ -396,7 +396,7 @@ function ProgressGrid({ report, boqItems, onSaved }) {
         width: 140,
         editable: false,
         type: "numericColumn",
-        valueFormatter: (p) => fmtNum(p.value, 2),
+        valueFormatter: (p) => fmtVolume(p.value),
         cellStyle: (p) => {
           const base = {
             backgroundColor: "#eff6ff",

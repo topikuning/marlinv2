@@ -40,7 +40,8 @@ def template_boq_simple() -> bytes:
 
     headers = [
         "facility_code", "facility_name",
-        "level", "code", "description", "unit",
+        "code", "parent_code",
+        "description", "unit",
         "volume", "unit_price", "total_price",
         "planned_start_week", "planned_duration_weeks",
     ]
@@ -48,11 +49,11 @@ def template_boq_simple() -> bytes:
     _style_header(ws)
 
     examples = [
-        ["GB-01", "Gudang Beku", 0, "4",   "PEKERJAAN PONDASI GUDANG BEKU", "", 0,   0,        0,         None, None],
-        ["GB-01", "Gudang Beku", 1, "A",   "PEKERJAAN STRUKTUR PONDASI",     "", 0,   0,        0,         None, None],
-        ["GB-01", "Gudang Beku", 2, "1",   "Pekerjaan Bouwplank",            "M", 42,  176668.75, 7420087.5, 1,    2],
-        ["GB-01", "Gudang Beku", 2, "2",   "Pekerjaan Pondasi Batu Belah",   "",  0,   0,        0,         None, None],
-        ["GB-01", "Gudang Beku", 3, "a",   "Penggalian tanah",               "M³", 33.36, 89929.71, 3000055.13, 1, 2],
+        ["GB-01", "Gudang Beku", "4",   "",    "PEKERJAAN PONDASI GUDANG BEKU", "",   0,     0,         0,          None, None],
+        ["GB-01", "Gudang Beku", "A",   "4",   "PEKERJAAN STRUKTUR PONDASI",     "",   0,     0,         0,          None, None],
+        ["GB-01", "Gudang Beku", "1",   "A",   "Pekerjaan Bouwplank",            "M",  42,    176668.75, 7420087.5,  1,    2],
+        ["GB-01", "Gudang Beku", "2",   "A",   "Pekerjaan Pondasi Batu Belah",   "",   0,     0,         0,          None, None],
+        ["GB-01", "Gudang Beku", "a",   "2",   "Penggalian tanah",               "M³", 33.36, 89929.71,  3000055.13, 1,    2],
     ]
     for ex in examples:
         ws.append(ex)
@@ -67,16 +68,28 @@ def template_boq_simple() -> bytes:
         "2. facility_code: Kode unik fasilitas dalam lokasi (mis. GB-01 untuk Gudang Beku).",
         "   Semua baris dengan facility_code yang sama akan masuk ke fasilitas yang sama.",
         "3. facility_name: Nama fasilitas. Cukup diisi di baris pertama per facility_code.",
-        "4. level: Hirarki item.",
-        "   0 = root / group utama (judul pekerjaan besar)",
-        "   1 = sub-group (A, B, ...)",
-        "   2 = item (1, 2, ...)",
-        "   3 = sub-item (a, b, ...)",
-        "5. volume, unit_price, total_price: hanya isi untuk item level 2/3 (leaf items).",
-        "   Jika total_price kosong, sistem akan hitung dari volume × unit_price.",
-        "6. planned_start_week: minggu ke berapa item mulai dikerjakan (opsional, default 1).",
-        "7. planned_duration_weeks: berapa minggu durasi pekerjaan (opsional).",
-        "8. Bobot % akan dihitung otomatis oleh sistem dari total_price.",
+        "",
+        "4. code: Kode lokal item dalam facility (mis. '4', 'A', '1', 'a').",
+        "   - WAJIB UNIK per facility — dipakai sebagai referensi parent_code dari item lain.",
+        "   - Boleh apa saja: angka, huruf, gabungan ('PER-006', 'STR.01').",
+        "   - Kalau dikosongkan, sistem auto-generate (R1, R2, R3, …).",
+        "",
+        "5. parent_code: Kode item parent dalam facility yang sama.",
+        "   - Kosong = item root (top-level, tidak di bawah siapa-siapa).",
+        "   - Diisi = item ini menjadi child dari item ber-code = nilai ini.",
+        "   - Inilah satu-satunya cara mengatur hirarki. Level auto-dihitung",
+        "     dari rantai parent (root=0, anak root=1, cucu=2, dst).",
+        "",
+        "6. description: Uraian pekerjaan. Wajib diisi.",
+        "7. volume, unit_price, total_price: hanya isi untuk leaf item (item paling bawah",
+        "   di rantai, yang TIDAK punya child). Group/sub-group biarkan 0 atau kosong.",
+        "   Kalau total_price kosong, dihitung dari volume × unit_price.",
+        "8. planned_start_week, planned_duration_weeks: opsional, untuk schedule.",
+        "9. Sistem otomatis hitung level, full_code (rantai code parent.code), is_leaf,",
+        "   dan bobot %. Anda tidak perlu input itu manual.",
+        "",
+        "Tips: urutan baris di Excel tidak harus rapi parent-dulu-child. Selama",
+        "parent_code merujuk ke code yang ada (di mana saja), sistem rangkai otomatis.",
     ]
     for i, line in enumerate(instructions, start=2):
         ws2[f"A{i}"] = line

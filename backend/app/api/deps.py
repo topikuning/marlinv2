@@ -85,6 +85,24 @@ def get_user_role_code(db: Session, user: User) -> Optional[str]:
     return role.code if role else None
 
 
+def assert_role_in(db: Session, user: User, *allowed_roles: str, action: str = "aksi ini") -> None:
+    """
+    Tolak 403 bila role user tidak ada di allowed_roles. Superadmin selalu
+    lolos (bypass seperti permission check). Dipakai untuk guard endpoint
+    yang butuh gate role-specific (mis. sign_addendum hanya PPK, reject_vo
+    hanya PPK, dll) di atas permission coarse.
+    """
+    role = get_user_role_code(db, user)
+    if role == "superadmin":
+        return
+    if role not in allowed_roles:
+        raise HTTPException(
+            403,
+            f"{action} hanya diizinkan untuk role: {', '.join(allowed_roles)}. "
+            f"Role Anda: {role or 'tidak diketahui'}.",
+        )
+
+
 def user_can_access_contract(db: Session, user: User, contract_id: str) -> bool:
     """
     Decide whether the given user can read a specific contract.

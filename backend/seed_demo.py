@@ -6,31 +6,46 @@ Jalankan seed_master.py DULU, lalu baru file ini:
     python seed_demo.py
 
 Isi demo:
-  6 kontrak tersebar di 4 provinsi:
-    K1 — Makassar (6 lokasi, AKTIF minggu 10/16, sedikit terlambat)
-    K2 — NTB / Mataram (5 lokasi, AKTIF minggu 7/20, on-track)
-    K3 — Sulawesi Tenggara / Kendari (4 lokasi, AKTIF minggu 4/12, cepat)
-    K4 — Sulawesi Selatan / Pare-Pare (3 lokasi, AKTIF minggu 12/16, kritis)
-    K5 — Kalimantan Selatan / Banjarmasin (2 lokasi, DRAFT siap aktivasi)
-    K6 — Jawa Timur / Surabaya (1 lokasi, DRAFT baru dibuat)
-
-  Total: 21 lokasi aktif + 3 draft = 24 ... tapi karena K1-K4 punya
-  sub-lokasi per kelurahan, totalnya 6+5+4+3+2+1 = 21 lokasi. Tambahan
-  9 lokasi dari kontrak ke-7 (multi-lokasi 9 buah) = 30 total.
+  15 kontrak tersebar di 8 provinsi, 65 lokasi total:
+    K1  — Makassar, Sulsel         (6 lokasi, ACTIVE  w10/16, warning)
+    K2  — Mataram, NTB             (5 lokasi, ACTIVE  w7/20,  normal)
+    K3  — Kendari, Sultra          (4 lokasi, ACTIVE  w4/12,  fast)
+    K4  — Pare-Pare, Sulsel        (3 lokasi, ACTIVE  w12/16, critical)
+    K5  — Banjarmasin, Kalsel      (2 lokasi, DRAFT   siap aktivasi)
+    K6  — Surabaya, Jatim          (1 lokasi, DRAFT   baru)
+    K7  — Mamuju, Sulbar           (9 lokasi, ACTIVE  w8/20,  normal)
+    K8  — Bone, Sulsel             (5 lokasi, ACTIVE  w5/18,  +VO draft/review)
+    K9  — Bima, NTB                (4 lokasi, ADDENDUM w9/14, +VO approved pending)
+    K10 — Baubau/Buton, Sultra     (3 lokasi, ACTIVE  w6/12,  fast)
+    K11 — Takalar, Sulsel          (4 lokasi, ACTIVE  w9/16,  critical +VO rejected)
+    K12 — Polewali, Sulbar         (4 lokasi, COMPLETED)
+    K13 — Lombok Tengah, NTB       (5 lokasi, ACTIVE  w11/22, +VO bundled)
+    K14 — Larantuka, NTT           (5 lokasi, ADDENDUM w13/18, +VO approved/draft)
+    K15 — Donggala, Sulteng        (5 lokasi, COMPLETED)
 
   Setiap lokasi aktif punya:
     - 2–5 fasilitas (revetmen, tambatan, gudang beku, kantor, dll)
     - BOQ per fasilitas dengan leaf items + bobot %
-    - CCO-0 revision (APPROVED untuk aktif, DRAFT untuk draft)
+    - BOQ V0 (baseline kontrak) — APPROVED untuk aktif, DRAFT untuk draft
     - Weekly reports (sesuai minggu berjalan)
-    - Progress items per BOQ
+    - Progress items per BOQ dengan volume_cumulative auto-compute
     - Daily reports 7 hari terakhir (khusus kontrak aktif)
+    - MC-0 (Mutual Check awal) untuk kontrak non-DRAFT
+    - Payment terms (UM 20%, Termin-1 40%, Termin-2 40%, retensi 5%)
+      dengan boq_revision_id anchor saat status SUBMITTED/PAID
 
-  Demo users:
-    konsultan.demo@knmp.id  / Demo@123!
-    ppk.demo@knmp.id        / Demo@123!
-    kontraktor.demo@knmp.id / Demo@123!
-    manager.demo@knmp.id    / Demo@123!
+  Beberapa kontrak dilengkapi Variation Orders dengan status mix:
+    K8 / K14  — VO DRAFT + UNDER_REVIEW (usulan baru)
+    K9 / K13  — VO APPROVED / BUNDLED (pipeline addendum)
+    K11       — VO REJECTED (ditolak dengan alasan)
+
+  Demo users (password: Demo@123!):
+    konsultan.demo@marlin.id
+    ppk.demo@marlin.id
+    kontraktor.demo@marlin.id
+    manager.demo@marlin.id
+    kpa.demo@marlin.id          (KPA — tt-tangan addendum > 10%)
+    itjen.demo@marlin.id        (Inspektorat — audit read-only)
 """
 import sys
 import random
@@ -99,7 +114,58 @@ LOCATIONS_K7 = [  # 9 lokasi — Sulawesi Barat
     ("K7-LOK08", "Kel. Rimuku",         "Rimuku",         "Mamuju",       "Mamuju",    "Sulawesi Barat",    -2.6512, 118.9278),
     ("K7-LOK09", "Kel. Mamunyu",        "Mamunyu",        "Mamuju Utara", "Mamuju",    "Sulawesi Barat",    -2.6234, 118.9534),
 ]
-# Total: 6+5+4+3+2+1+9 = 30 lokasi ✓
+LOCATIONS_K8 = [  # 5 lokasi — Bone, Sulsel
+    ("K8-LOK01", "Kel. Bajoe",          "Bajoe",          "Tanete Riattang","Bone",    "Sulawesi Selatan",  -4.5345, 120.3712),
+    ("K8-LOK02", "Kel. Watampone",      "Watampone",      "Tanete Riattang","Bone",    "Sulawesi Selatan",  -4.5421, 120.3367),
+    ("K8-LOK03", "Kel. Pattiro Bajo",   "Pattiro Bajo",   "Sibulue",      "Bone",      "Sulawesi Selatan",  -4.4789, 120.4123),
+    ("K8-LOK04", "Kel. Lappa Riaja",    "Lappa Riaja",    "Kajuara",      "Bone",      "Sulawesi Selatan",  -4.6234, 120.4587),
+    ("K8-LOK05", "Kel. Macope",         "Macope",         "Awangpone",    "Bone",      "Sulawesi Selatan",  -4.5912, 120.3945),
+]
+LOCATIONS_K9 = [  # 4 lokasi — Bima, NTB
+    ("K9-LOK01", "Kel. Jatibaru",       "Jatibaru",       "Asakota",      "Bima",      "Nusa Tenggara Barat", -8.4578, 118.7234),
+    ("K9-LOK02", "Kel. Melayu",         "Melayu",         "Rasanae Barat","Bima",      "Nusa Tenggara Barat", -8.4612, 118.7312),
+    ("K9-LOK03", "Kel. Tanjung",        "Tanjung",        "Rasanae Barat","Bima",      "Nusa Tenggara Barat", -8.4521, 118.7456),
+    ("K9-LOK04", "Kel. Dara",           "Dara",           "Rasanae Barat","Bima",      "Nusa Tenggara Barat", -8.4645, 118.7123),
+]
+LOCATIONS_K10 = [  # 3 lokasi — Buton, Sultra
+    ("K10-LOK01","Kel. Baubau",         "Baubau",         "Kokalukuna",   "Baubau",    "Sulawesi Tenggara",  -5.4723, 122.5912),
+    ("K10-LOK02","Kel. Wameo",          "Wameo",          "Batupoaro",    "Baubau",    "Sulawesi Tenggara",  -5.4812, 122.6034),
+    ("K10-LOK03","Kel. Nganganaumala",  "Nganganaumala",  "Batupoaro",    "Baubau",    "Sulawesi Tenggara",  -5.4945, 122.5878),
+]
+LOCATIONS_K11 = [  # 4 lokasi — Takalar, Sulsel
+    ("K11-LOK01","Kel. Bontokadatto",   "Bontokadatto",   "Polombangkeng Utara","Takalar", "Sulawesi Selatan",-5.4123, 119.4567),
+    ("K11-LOK02","Kel. Bulukunyi",      "Bulukunyi",      "Polongbangkeng Selatan","Takalar","Sulawesi Selatan",-5.4312,119.4423),
+    ("K11-LOK03","Kel. Pa'lalakkang",   "Pa'lalakkang",   "Galesong",     "Takalar",   "Sulawesi Selatan",  -5.2834, 119.3678),
+    ("K11-LOK04","Kel. Sampulungan",    "Sampulungan",    "Galesong Utara","Takalar",  "Sulawesi Selatan",  -5.2712, 119.3512),
+]
+LOCATIONS_K12 = [  # 4 lokasi — Polewali, Sulbar
+    ("K12-LOK01","Kel. Polewali",       "Polewali",       "Polewali",     "Polewali Mandar","Sulawesi Barat",-3.4267,119.3412),
+    ("K12-LOK02","Kel. Manding",        "Manding",        "Polewali",     "Polewali Mandar","Sulawesi Barat",-3.4178,119.3567),
+    ("K12-LOK03","Kel. Darma",          "Darma",          "Polewali",     "Polewali Mandar","Sulawesi Barat",-3.4312,119.3523),
+    ("K12-LOK04","Kel. Sulewatang",     "Sulewatang",     "Polewali",     "Polewali Mandar","Sulawesi Barat",-3.4089,119.3278),
+]
+LOCATIONS_K13 = [  # 5 lokasi — Lombok Tengah, NTB
+    ("K13-LOK01","Kel. Kuta",           "Kuta",           "Pujut",        "Lombok Tengah","Nusa Tenggara Barat",-8.8934,116.2712),
+    ("K13-LOK02","Kel. Selong Belanak", "Selong Belanak", "Praya Barat",  "Lombok Tengah","Nusa Tenggara Barat",-8.8723,116.1578),
+    ("K13-LOK03","Kel. Tanjung Aan",    "Tanjung Aan",    "Pujut",        "Lombok Tengah","Nusa Tenggara Barat",-8.9012,116.3034),
+    ("K13-LOK04","Kel. Gerupuk",        "Gerupuk",        "Pujut",        "Lombok Tengah","Nusa Tenggara Barat",-8.9123,116.3212),
+    ("K13-LOK05","Kel. Mawun",          "Mawun",          "Praya Barat",  "Lombok Tengah","Nusa Tenggara Barat",-8.8812,116.1734),
+]
+LOCATIONS_K14 = [  # 5 lokasi — Larantuka/Flores Timur, NTT
+    ("K14-LOK01","Kel. Larantuka",      "Larantuka",      "Larantuka",    "Flores Timur","Nusa Tenggara Timur",-8.3412,122.9878),
+    ("K14-LOK02","Kel. Waibalun",       "Waibalun",       "Larantuka",    "Flores Timur","Nusa Tenggara Timur",-8.3523,122.9934),
+    ("K14-LOK03","Kel. Lewolere",       "Lewolere",       "Larantuka",    "Flores Timur","Nusa Tenggara Timur",-8.3289,122.9812),
+    ("K14-LOK04","Kel. Sarotari",       "Sarotari",       "Larantuka",    "Flores Timur","Nusa Tenggara Timur",-8.3634,123.0012),
+    ("K14-LOK05","Kel. Balela",         "Balela",         "Larantuka",    "Flores Timur","Nusa Tenggara Timur",-8.3723,123.0134),
+]
+LOCATIONS_K15 = [  # 5 lokasi — Donggala, Sulteng
+    ("K15-LOK01","Kel. Ganti",          "Ganti",          "Banawa",       "Donggala",  "Sulawesi Tengah",   -0.6812, 119.7423),
+    ("K15-LOK02","Kel. Labuan Bajo",    "Labuan Bajo",    "Labuan",       "Donggala",  "Sulawesi Tengah",   -0.6523, 119.7534),
+    ("K15-LOK03","Kel. Kabonga Besar",  "Kabonga Besar",  "Banawa",       "Donggala",  "Sulawesi Tengah",   -0.6912, 119.7234),
+    ("K15-LOK04","Kel. Tanjung Batu",   "Tanjung Batu",   "Banawa",       "Donggala",  "Sulawesi Tengah",   -0.7012, 119.7112),
+    ("K15-LOK05","Kel. Tovale",         "Tovale",         "Sindue",       "Donggala",  "Sulawesi Tengah",   -0.5823, 119.7812),
+]
+# Total: 6+5+4+3+2+1+9+5+4+3+4+4+5+5+5 = 65 lokasi ✓
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -221,7 +287,7 @@ CONTRACTS = [
         "lokasi":  LOCATIONS_K3,
         "fac_profiles": ["lengkap","sedang","sedang","minimal"],
         "kontraktor": "PT Tirta Samudera Konstruksi",
-        "konsultan":  "CV Mitra Teknik Bahari",
+        "konsultan":  "CV Mitra Konsultan Teknik",
         "ppk":        "Drs. Ahmad Fauzi, M.Si",
     },
     {
@@ -249,7 +315,7 @@ CONTRACTS = [
         "lokasi":  LOCATIONS_K5,
         "fac_profiles": ["sedang","minimal"],
         "kontraktor": "PT Barito Konstruksi Bahari",
-        "konsultan":  "CV Mitra Teknik Bahari",
+        "konsultan":  "CV Mitra Konsultan Teknik",
         "ppk":        "Drs. Ahmad Fauzi, M.Si",
     },
     {
@@ -280,6 +346,131 @@ CONTRACTS = [
         "kontraktor": "PT Tirta Samudera Konstruksi",
         "konsultan":  "PT Konsultan Kelautan Indonesia",
         "ppk":        "Drs. Ahmad Fauzi, M.Si",
+    },
+    # K8 — Bone, Sulsel — ACTIVE dengan VO (akan di-generate di generator section)
+    {
+        "nomor":   "KKP-DEMO-2025-008",
+        "nama":    "Pembangunan KNMP Kabupaten Bone",
+        "provinsi":"Sulawesi Selatan",
+        "nilai":   Decimal("11_400_000_000"),
+        "total_weeks": 18, "current_week": 5,
+        "status":  ContractStatus.ACTIVE,
+        "profil":  "normal",
+        "lokasi":  LOCATIONS_K8,
+        "fac_profiles": ["lengkap","sedang","sedang","minimal","minimal"],
+        "kontraktor": "PT Bangun Bahari Nusantara",
+        "konsultan":  "CV Mitra Konsultan Teknik",
+        "ppk":        "Drs. Ahmad Fauzi, M.Si",
+        "generate_vo": ["draft", "under_review"],
+    },
+    # K9 — Bima, NTB — ADDENDUM_PENDING dengan VO APPROVED menunggu di-bundle
+    {
+        "nomor":   "KKP-DEMO-2025-009",
+        "nama":    "Pembangunan KNMP Kota Bima NTB",
+        "provinsi":"Nusa Tenggara Barat",
+        "nilai":   Decimal("7_800_000_000"),
+        "total_weeks": 14, "current_week": 9,
+        "status":  ContractStatus.ADDENDUM,
+        "profil":  "warning",
+        "lokasi":  LOCATIONS_K9,
+        "fac_profiles": ["sedang","sedang","minimal","minimal"],
+        "kontraktor": "CV Karya Laut Mandiri",
+        "konsultan":  "CV Mitra Konsultan Teknik",
+        "ppk":        "Ir. Dewi Permatasari, M.Sc",
+        "generate_vo": ["approved"],
+    },
+    # K10 — Buton/Baubau, Sultra — ACTIVE
+    {
+        "nomor":   "KKP-DEMO-2025-010",
+        "nama":    "Pembangunan KNMP Kota Baubau Buton",
+        "provinsi":"Sulawesi Tenggara",
+        "nilai":   Decimal("5_600_000_000"),
+        "total_weeks": 12, "current_week": 6,
+        "status":  ContractStatus.ACTIVE,
+        "profil":  "fast",
+        "lokasi":  LOCATIONS_K10,
+        "fac_profiles": ["sedang","minimal","minimal"],
+        "kontraktor": "PT Samudera Biru Konstruksi",
+        "konsultan":  "PT Konsultan Kelautan Indonesia",
+        "ppk":        "Muh. Ridwan, S.T., M.T.",
+    },
+    # K11 — Takalar, Sulsel — ACTIVE critical (butuh tindak lanjut)
+    {
+        "nomor":   "KKP-DEMO-2025-011",
+        "nama":    "Pembangunan KNMP Kabupaten Takalar",
+        "provinsi":"Sulawesi Selatan",
+        "nilai":   Decimal("8_900_000_000"),
+        "total_weeks": 16, "current_week": 9,
+        "status":  ContractStatus.ACTIVE,
+        "profil":  "critical",
+        "lokasi":  LOCATIONS_K11,
+        "fac_profiles": ["sedang","sedang","minimal","minimal"],
+        "kontraktor": "PT Bangun Bahari Nusantara",
+        "konsultan":  "CV Mitra Konsultan Teknik",
+        "ppk":        "Drs. Ahmad Fauzi, M.Si",
+        "generate_vo": ["rejected"],
+    },
+    # K12 — Polewali, Sulbar — COMPLETED
+    {
+        "nomor":   "KKP-DEMO-2024-012",
+        "nama":    "Pembangunan KNMP Polewali Mandar Tahap I",
+        "provinsi":"Sulawesi Barat",
+        "nilai":   Decimal("6_200_000_000"),
+        "total_weeks": 20, "current_week": 20,
+        "status":  ContractStatus.COMPLETED,
+        "profil":  "normal",
+        "lokasi":  LOCATIONS_K12,
+        "fac_profiles": ["sedang","sedang","minimal","minimal"],
+        "kontraktor": "PT Tirta Samudera Konstruksi",
+        "konsultan":  "PT Konsultan Kelautan Indonesia",
+        "ppk":        "Ir. Hartono Wijaya, M.Si",
+    },
+    # K13 — Lombok Tengah, NTB — ACTIVE dengan VO bundled (pernah ada addendum)
+    {
+        "nomor":   "KKP-DEMO-2025-013",
+        "nama":    "Pembangunan KNMP Lombok Tengah Paket II",
+        "provinsi":"Nusa Tenggara Barat",
+        "nilai":   Decimal("13_500_000_000"),
+        "total_weeks": 22, "current_week": 11,
+        "status":  ContractStatus.ACTIVE,
+        "profil":  "normal",
+        "lokasi":  LOCATIONS_K13,
+        "fac_profiles": ["lengkap","sedang","sedang","minimal","minimal"],
+        "kontraktor": "CV Karya Laut Mandiri",
+        "konsultan":  "CV Mitra Konsultan Teknik",
+        "ppk":        "Ir. Dewi Permatasari, M.Sc",
+        "generate_vo": ["bundled"],
+    },
+    # K14 — Flores Timur, NTT — ADDENDUM_PENDING
+    {
+        "nomor":   "KKP-DEMO-2025-014",
+        "nama":    "Pembangunan KNMP Larantuka Flores Timur",
+        "provinsi":"Nusa Tenggara Timur",
+        "nilai":   Decimal("9_700_000_000"),
+        "total_weeks": 18, "current_week": 13,
+        "status":  ContractStatus.ADDENDUM,
+        "profil":  "warning",
+        "lokasi":  LOCATIONS_K14,
+        "fac_profiles": ["lengkap","sedang","sedang","minimal","minimal"],
+        "kontraktor": "PT Samudera Biru Konstruksi",
+        "konsultan":  "PT Konsultan Kelautan Indonesia",
+        "ppk":        "Yohanes P. Lewotobi, S.T.",
+        "generate_vo": ["approved", "draft"],
+    },
+    # K15 — Donggala, Sulteng — COMPLETED
+    {
+        "nomor":   "KKP-DEMO-2024-015",
+        "nama":    "Pembangunan KNMP Donggala Sulteng Paket I",
+        "provinsi":"Sulawesi Tengah",
+        "nilai":   Decimal("10_800_000_000"),
+        "total_weeks": 24, "current_week": 24,
+        "status":  ContractStatus.COMPLETED,
+        "profil":  "normal",
+        "lokasi":  LOCATIONS_K15,
+        "fac_profiles": ["lengkap","sedang","sedang","minimal","minimal"],
+        "kontraktor": "PT Tirta Samudera Konstruksi",
+        "konsultan":  "CV Mitra Konsultan Teknik",
+        "ppk":        "Hendrik Kambey, S.T., M.T.",
     },
 ]
 
@@ -346,12 +537,20 @@ def run():
                     is_active=True, must_change_password=False, auto_provisioned=False,
                 ))
 
-        _user("konsultan.demo@knmp.id",  "konsultan.demo",  "Arif Wibowo, ST",           "konsultan")
-        _user("ppk.demo@knmp.id",        "ppk.demo",        "Drs. Ahmad Fauzi, M.Si",    "ppk")
-        _user("kontraktor.demo@knmp.id", "kontraktor.demo", "Budi Santoso, ST",           "kontraktor")
-        _user("manager.demo@knmp.id",    "manager.demo",    "Rachmat Hidayat, SE",        "manager")
+        _user("konsultan.demo@marlin.id",  "konsultan.demo",  "Arif Wibowo, ST",           "konsultan")
+        _user("ppk.demo@marlin.id",        "ppk.demo",        "Drs. Ahmad Fauzi, M.Si",    "ppk")
+        _user("kontraktor.demo@marlin.id", "kontraktor.demo", "Budi Santoso, ST",           "kontraktor")
+        _user("manager.demo@marlin.id",    "manager.demo",    "Rachmat Hidayat, SE",        "manager")
+        _user("kpa.demo@marlin.id",        "kpa.demo",        "Ir. Sutrisno, M.Eng",       "kpa")
+        _user("itjen.demo@marlin.id",      "itjen.demo",      "Endah Kusumawati, S.H.",    "itjen")
         db.flush()
-        print("  ✓ 4 demo users (password: Demo@123!)\n")
+        print("  ✓ 6 demo users (password: Demo@123!) — konsultan/ppk/kontraktor/manager/kpa/itjen\n")
+
+        # Handles user untuk dipakai generator VO/MC-0/Payment
+        u_ppk        = db.query(User).filter(User.email == "ppk.demo@marlin.id").first()
+        u_konsultan  = db.query(User).filter(User.email == "konsultan.demo@marlin.id").first()
+        u_kontraktor = db.query(User).filter(User.email == "kontraktor.demo@marlin.id").first()
+        u_kpa        = db.query(User).filter(User.email == "kpa.demo@marlin.id").first()
 
         # ── Perusahaan & PPK ──────────────────────────────────────────────────
         print("▸ Perusahaan & PPK...")
@@ -398,18 +597,33 @@ def run():
                 "Jl. Barito No. 21, Banjarmasin",
                 "Banjarmasin", "Kalimantan Selatan",
                 "Suharto, ST, MT", "0511-556677", "suharto@bkb.co.id"),
+            # K10, K14 — kontraktor Sulawesi Tenggara / NTT
+            "PT Samudera Biru Konstruksi": _company(
+                "PT Samudera Biru Konstruksi", "contractor",
+                "07.890.123.4-567.000",
+                "Jl. Diponegoro No. 17, Baubau",
+                "Baubau", "Sulawesi Tenggara",
+                "Rahmat Saleh, ST", "0402-221133", "rahmat@sbk.co.id"),
             "PT Konsultan Kelautan Indonesia": _company(
                 "PT Konsultan Kelautan Indonesia", "consultant",
                 "05.678.901.2-345.000",
                 "Jl. Gatot Subroto Kav. 56, Jakarta Selatan",
                 "Jakarta", "DKI Jakarta",
                 "Dr. Siti Rahayu, ST, MT", "021-52907788", "siti@kki.co.id"),
-            "CV Mitra Teknik Bahari": _company(
-                "CV Mitra Teknik Bahari", "consultant",
+            # Dipakai oleh K3, K8, K9, K11, K13, K15
+            "CV Mitra Konsultan Teknik": _company(
+                "CV Mitra Konsultan Teknik", "consultant",
                 "06.789.012.3-456.000",
                 "Jl. Pantai Losari No. 3, Makassar",
                 "Makassar", "Sulawesi Selatan",
-                "Yusuf Darmawan, ST", "0411-224433", "yusuf@mtb.co.id"),
+                "Yusuf Darmawan, ST", "0411-224433", "yusuf@mkt.co.id"),
+            # Kontraktor tambahan untuk K10, K14
+            "PT Samudera Biru Konstruksi": _company(
+                "PT Samudera Biru Konstruksi", "contractor",
+                "07.890.123.4-567.000",
+                "Jl. Pasar Ikan Raya No. 17, Baubau",
+                "Baubau", "Sulawesi Tenggara",
+                "Ir. Rafi Nasution, MT", "0402-445566", "rafi@sbk.co.id"),
         }
 
         ppks = {
@@ -421,6 +635,26 @@ def run():
                 "Ir. Dewi Permatasari, M.Sc", "198003102005012003",
                 "PPK Satker SKIPM NTB", "SKIPM Mataram — KKP",
                 "081298765432", "6281298765432", "dewi.permata@kkp.go.id"),
+            # K10 — PPK Sultra
+            "Muh. Ridwan, S.T., M.T.": _ppk(
+                "Muh. Ridwan, S.T., M.T.", "198112202006041002",
+                "PPK Satker BPSPL Makassar", "BPSPL Makassar — KKP",
+                "081355667788", "6281355667788", "m.ridwan@kkp.go.id"),
+            # K12 — PPK Sulbar
+            "Ir. Hartono Wijaya, M.Si": _ppk(
+                "Ir. Hartono Wijaya, M.Si", "197603152002121003",
+                "PPK Satker Ditjen PDSPKP", "Ditjen PDSPKP — KKP",
+                "081244556677", "6281244556677", "hartono.wijaya@kkp.go.id"),
+            # K14 — PPK NTT
+            "Yohanes P. Lewotobi, S.T.": _ppk(
+                "Yohanes P. Lewotobi, S.T.", "198507122010011005",
+                "PPK Satker BPBL Kupang", "BPBL Kupang — KKP",
+                "081237889900", "6281237889900", "y.lewotobi@kkp.go.id"),
+            # K15 — PPK Sulteng
+            "Hendrik Kambey, S.T., M.T.": _ppk(
+                "Hendrik Kambey, S.T., M.T.", "197811042005011004",
+                "PPK Satker SKIPM Palu", "SKIPM Palu — KKP",
+                "081298001122", "6281298001122", "h.kambey@kkp.go.id"),
         }
         print(f"  ✓ {len(companies)} perusahaan, {len(ppks)} PPK\n")
 
@@ -448,8 +682,11 @@ def run():
                 ppk_id=ppks[cfg["ppk"]].id,
                 konsultan_id=companies[cfg["konsultan"]].id,
                 fiscal_year=2025,
+                # nilai kontrak POST-PPN: BOQ + 11% PPN. cfg["nilai"] sudah
+                # disesuaikan supaya konsisten dengan total BOQ × 1.11.
                 original_value=cfg["nilai"],
                 current_value=cfg["nilai"],
+                ppn_pct=Decimal("11.00"),
                 start_date=start_date,
                 original_end_date=end_date,
                 end_date=end_date,
@@ -472,8 +709,8 @@ def run():
             created_contract_ids.append(contract.id)
             rev = BOQRevision(
                 contract_id=contract.id,
-                cco_number=0, revision_code="CCO-0",
-                name="BOQ Kontrak Awal",
+                cco_number=0, revision_code="V0",
+                name="BOQ V0 (Kontrak Baseline)",
                 status=RevisionStatus.APPROVED if is_active else RevisionStatus.DRAFT,
                 is_active=is_active,
                 approved_at=(
@@ -520,13 +757,28 @@ def run():
                     contract_all_facs.append(fac)
 
                     items_def = BOQ_TEMPLATE.get(fac_name, BOQ_TEMPLATE["Saluran & Jalan"])
+                    # Stack-based parent_id resolver — parent = item terakhir
+                    # dengan level lebih kecil. Konsisten dengan logika import
+                    # Excel di boq.py supaya hirarki terbentuk benar.
+                    parent_stack = []  # list of (item, level)
                     for order_i, (desc, unit, vol, up, level, is_leaf, mwc) in enumerate(items_def):
+                        # Pop stack hingga top punya level < current
+                        while parent_stack and parent_stack[-1][1] >= level:
+                            parent_stack.pop()
+                        parent_item = parent_stack[-1][0] if parent_stack else None
+                        local_code = mwc if mwc else f"{fac_code}.{order_i+1}"
+                        full_code = (
+                            f"{parent_item.full_code}.{local_code}"
+                            if parent_item and parent_item.full_code
+                            else local_code
+                        )
                         item = BOQItem(
                             boq_revision_id=rev.id,
                             facility_id=fac.id,
+                            parent_id=parent_item.id if parent_item else None,
                             master_work_code=mwc,
-                            original_code=mwc if mwc else f"{fac_code}.{order_i+1}",
-                            full_code=mwc if mwc else f"{fac_code}.{order_i+1}",
+                            original_code=local_code,
+                            full_code=full_code,
                             level=level,
                             display_order=len(contract_all_items) + order_i,
                             description=desc.strip(),
@@ -537,7 +789,15 @@ def run():
                             is_leaf=is_leaf, is_active=True,
                         )
                         db.add(item); db.flush()
+                        parent_stack.append((item, level))
                         contract_all_items.append(item)
+
+            # ── Auto-derive is_leaf dari parent_id graph ──────────────────────
+            # Item yang di-refer sebagai parent oleh item lain → is_leaf=False.
+            # Konsisten dengan _recompute_is_leaf() di boq.py.
+            parent_ids_set = {it.parent_id for it in contract_all_items if it.parent_id is not None}
+            for it in contract_all_items:
+                it.is_leaf = it.id not in parent_ids_set
 
             # ── Hitung bobot leaf items CONTRACT-WIDE ─────────────────────────
             leaf_items  = [it for it in contract_all_items if it.is_leaf]
@@ -561,6 +821,14 @@ def run():
             rev.total_value = leaf_total
             rev.item_count  = len(contract_all_items)
             total_boq += len(contract_all_items)
+
+            # Konvensi: Nilai Kontrak = POST-PPN = BOQ + (BOQ × ppn%)
+            # = BOQ × (1 + ppn/100). Dipertahankan konsisten supaya
+            # approve revisi langsung sinkron.
+            ppn_factor = Decimal("1") + (contract.ppn_pct or Decimal("0")) / Decimal("100")
+            value_with_ppn = (leaf_total * ppn_factor).quantize(Decimal("0.01"))
+            contract.original_value = value_with_ppn
+            contract.current_value = value_with_ppn
 
             db.flush()
 
@@ -671,8 +939,265 @@ def run():
                 total_daily += 6
 
             db.flush()
+
+            # ── MC-0 Field Observation (semua kontrak non-DRAFT) ────────────
+            from app.models.models import (
+                FieldObservation, FieldObservationType,
+                VariationOrder, VariationOrderItem, VOStatus, VOItemAction,
+                PaymentTerm, PaymentTermStatus,
+            )
+            if cfg["status"] != ContractStatus.DRAFT:
+                mc0_date = contract.start_date + timedelta(days=3) if contract.start_date else TODAY
+                db.add(FieldObservation(
+                    contract_id=contract.id,
+                    type=FieldObservationType.MC_0,
+                    observation_date=mc0_date,
+                    title=f"MC-0 {cfg['nama']}",
+                    findings=(
+                        "Pengukuran bersama di awal pelaksanaan untuk validasi "
+                        f"volume BOQ kontrak vs kondisi lapangan aktual di "
+                        f"{len(cfg['lokasi'])} lokasi. Ditemukan selisih minor "
+                        "pada elevasi beberapa titik tambatan dan kondisi subsoil "
+                        "yang membutuhkan penyesuaian volume pondasi."
+                    ),
+                    attendees=(
+                        f"PPK: {cfg['ppk']}, "
+                        f"Konsultan Pengawas: {cfg['konsultan']}, "
+                        f"Kontraktor: {cfg['kontraktor']}"
+                    ),
+                    submitted_by_user_id=u_ppk.id if u_ppk else None,
+                ))
+
+            # ── Variation Orders (opsional, sesuai config generate_vo) ─────
+            vo_profiles = cfg.get("generate_vo", [])
+            vo_seq = 0
+            for vo_status_target in vo_profiles:
+                vo_seq += 1
+                vo_num = f"VO-{vo_seq:03d}"
+                # Titles realistis sesuai jenis perubahan
+                titles = {
+                    "draft": "Penambahan Volume Revetmen akibat Erosi Pantai",
+                    "under_review": "Penyesuaian Dimensi Tambatan Perahu",
+                    "approved": "Penambahan Bollard dan Fender Tambatan",
+                    "rejected": "Usulan Penggantian Material Gudang Beku",
+                    "bundled": "CCO Penambahan Revetmen Seg. Barat (sudah bundled)",
+                }
+                vo = VariationOrder(
+                    contract_id=contract.id,
+                    vo_number=vo_num,
+                    status=VOStatus(vo_status_target),
+                    title=titles.get(vo_status_target, f"Variation Order {vo_num}"),
+                    technical_justification=(
+                        "Berdasarkan hasil MC-0 dan observasi lapangan lanjutan, "
+                        "diperlukan penyesuaian volume pekerjaan sesuai kondisi "
+                        "aktual lapangan. Perubahan ini didasarkan pada gambar "
+                        "as-built hasil pengukuran bersama Konsultan Pengawas "
+                        "dan Kontraktor pada tanggal pelaksanaan MC-0."
+                    ),
+                    quantity_calculation=(
+                        "Lihat lampiran perhitungan teknis. Volume delta "
+                        "dihitung berdasar selisih antara volume BOQ kontrak "
+                        "awal dengan volume hasil pengukuran ulang lapangan."
+                    ),
+                    cost_impact=Decimal("0"),  # akan dihitung dari items
+                    submitted_by_user_id=u_kontraktor.id if u_kontraktor else None,
+                    submitted_at=TODAY - timedelta(days=random.randint(3, 30)),
+                )
+                if vo_status_target in ("under_review", "approved", "bundled"):
+                    vo.reviewed_by_user_id = u_konsultan.id if u_konsultan else None
+                    vo.reviewed_at = TODAY - timedelta(days=random.randint(2, 10))
+                if vo_status_target in ("approved", "bundled"):
+                    vo.approved_by_user_id = u_ppk.id if u_ppk else None
+                    vo.approved_at = TODAY - timedelta(days=random.randint(1, 5))
+                if vo_status_target == "rejected":
+                    vo.rejected_by_user_id = u_ppk.id if u_ppk else None
+                    vo.rejected_at = TODAY - timedelta(days=random.randint(1, 15))
+                    vo.rejection_reason = (
+                        "Usulan tidak disetujui: perubahan material di luar "
+                        "spesifikasi teknis yang disepakati di kontrak. "
+                        "Kontraktor diminta mengikuti spek asli atau mengajukan "
+                        "ulang dengan justifikasi teknis yang lebih kuat."
+                    )
+                db.add(vo)
+                db.flush()
+
+                # Generate items perubahan — variasi action sesuai vo_seq
+                # supaya demo cover semua jenis: INCREASE, ADD-with-parent,
+                # DECREASE, REMOVE_FACILITY.
+                fac_sample = random.choice(contract_all_facs) if contract_all_facs else None
+                total_impact = Decimal("0")
+                if fac_sample:
+                    fac_items = [b for b in contract_all_items if b.facility_id == fac_sample.id and b.is_leaf]
+                    fac_parents = [b for b in contract_all_items if b.facility_id == fac_sample.id and not b.is_leaf]
+
+                    # Variasi action berdasarkan vo_seq + status target
+                    if vo_status_target == "draft" and len(fac_items) >= 1:
+                        # DRAFT: kombinasi INCREASE + ADD baru (with parent)
+                        boq1 = fac_items[0]
+                        d1 = Decimal("25")
+                        p1 = Decimal(boq1.unit_price or 0)
+                        db.add(VariationOrderItem(
+                            variation_order_id=vo.id,
+                            action=VOItemAction.INCREASE,
+                            boq_item_id=boq1.id,
+                            facility_id=fac_sample.id,
+                            master_work_code=boq1.master_work_code,
+                            description=boq1.description,
+                            unit=boq1.unit,
+                            volume_delta=d1, unit_price=p1,
+                            cost_impact=d1 * p1,
+                            notes="Penambahan akibat kondisi lapangan",
+                        ))
+                        total_impact += d1 * p1
+                        # ADD item baru di bawah parent existing kalau ada
+                        if fac_parents:
+                            parent = fac_parents[0]
+                            d2 = Decimal("3")
+                            p2 = Decimal("8500000")
+                            db.add(VariationOrderItem(
+                                variation_order_id=vo.id,
+                                action=VOItemAction.ADD,
+                                boq_item_id=None,
+                                facility_id=fac_sample.id,
+                                parent_boq_item_id=parent.id,
+                                description="Item tambahan: pengaman tambahan kondisi pasut tinggi",
+                                unit="unit",
+                                volume_delta=d2, unit_price=p2,
+                                cost_impact=d2 * p2,
+                                notes="Penambahan baru di bawah parent existing",
+                            ))
+                            total_impact += d2 * p2
+
+                    elif vo_status_target == "under_review" and len(fac_items) >= 2:
+                        # UNDER_REVIEW: DECREASE + INCREASE
+                        b1, b2 = fac_items[0], fac_items[1]
+                        d1 = -Decimal("10"); p1 = Decimal(b1.unit_price or 0)
+                        db.add(VariationOrderItem(
+                            variation_order_id=vo.id,
+                            action=VOItemAction.DECREASE,
+                            boq_item_id=b1.id, facility_id=fac_sample.id,
+                            master_work_code=b1.master_work_code,
+                            description=b1.description, unit=b1.unit,
+                            volume_delta=d1, unit_price=p1,
+                            cost_impact=d1 * p1,
+                            notes="Pengurangan setelah review desain",
+                        ))
+                        total_impact += d1 * p1
+                        d2 = Decimal("15"); p2 = Decimal(b2.unit_price or 0)
+                        db.add(VariationOrderItem(
+                            variation_order_id=vo.id,
+                            action=VOItemAction.INCREASE,
+                            boq_item_id=b2.id, facility_id=fac_sample.id,
+                            master_work_code=b2.master_work_code,
+                            description=b2.description, unit=b2.unit,
+                            volume_delta=d2, unit_price=p2,
+                            cost_impact=d2 * p2,
+                            notes="Penambahan akibat penyesuaian dimensi",
+                        ))
+                        total_impact += d2 * p2
+
+                    elif vo_status_target in ("approved", "bundled") and len(contract_all_facs) >= 2:
+                        # APPROVED/BUNDLED: REMOVE_FACILITY satu fasilitas kecil
+                        # untuk demonstrate enum baru
+                        target_fac = min(contract_all_facs, key=lambda f: float(f.total_value or 0))
+                        if float(target_fac.total_value or 0) > 0:
+                            cost = -Decimal(str(target_fac.total_value))
+                            db.add(VariationOrderItem(
+                                variation_order_id=vo.id,
+                                action=VOItemAction.REMOVE_FACILITY,
+                                boq_item_id=None,
+                                facility_id=target_fac.id,
+                                description=f"Hilangkan fasilitas {target_fac.facility_code} {target_fac.facility_name}",
+                                unit="",
+                                volume_delta=Decimal("0"), unit_price=Decimal("0"),
+                                cost_impact=cost,
+                                notes="Re-design: fasilitas tidak diperlukan",
+                            ))
+                            total_impact += cost
+                        # Plus 1 INCREASE supaya nett positif
+                        b1 = fac_items[0] if fac_items else None
+                        if b1:
+                            d1 = Decimal("30"); p1 = Decimal(b1.unit_price or 0)
+                            db.add(VariationOrderItem(
+                                variation_order_id=vo.id,
+                                action=VOItemAction.INCREASE,
+                                boq_item_id=b1.id, facility_id=fac_sample.id,
+                                master_work_code=b1.master_work_code,
+                                description=b1.description, unit=b1.unit,
+                                volume_delta=d1, unit_price=p1,
+                                cost_impact=d1 * p1,
+                                notes="Pekerjaan tambah",
+                            ))
+                            total_impact += d1 * p1
+
+                    elif fac_items:
+                        # Default fallback: 1 INCREASE
+                        b1 = fac_items[0]
+                        d1 = Decimal("25"); p1 = Decimal(b1.unit_price or 0)
+                        db.add(VariationOrderItem(
+                            variation_order_id=vo.id,
+                            action=VOItemAction.INCREASE,
+                            boq_item_id=b1.id, facility_id=fac_sample.id,
+                            master_work_code=b1.master_work_code,
+                            description=b1.description, unit=b1.unit,
+                            volume_delta=d1, unit_price=p1,
+                            cost_impact=d1 * p1,
+                            notes="Penambahan akibat kondisi lapangan",
+                        ))
+                        total_impact += d1 * p1
+
+                vo.cost_impact = total_impact
+                db.flush()
+
+            # ── Payment Terms (hanya untuk kontrak aktif/completed/addendum) ─
+            if cfg["status"] != ContractStatus.DRAFT:
+                total_val = Decimal(cfg["nilai"])
+                # Skema termin standar Perpres: 20% UM, 40% termin-1, 40% termin-2,
+                # dengan retensi 5% per termin
+                terms_def = [
+                    (1, "Uang Muka 20%",             Decimal("0.00"), Decimal("0.20"), Decimal("0.00")),
+                    (2, "Termin I (Progres 50%)",    Decimal("0.50"), Decimal("0.40"), Decimal("0.05")),
+                    (3, "Termin II (Progres 100%)",  Decimal("1.00"), Decimal("0.40"), Decimal("0.05")),
+                ]
+                current_progress = actual_pct(cfg["current_week"], cfg["total_weeks"], cfg["profil"])
+                active_rev_for_payment = db.query(BOQRevision).filter(
+                    BOQRevision.contract_id == contract.id,
+                    BOQRevision.is_active == True,
+                ).first()
+                for tnum, tname, req_pct, pay_pct, ret_pct in terms_def:
+                    amount = total_val * pay_pct
+                    status = PaymentTermStatus.PLANNED
+                    paid_date = None
+                    boq_rev_id = None
+                    if current_progress >= float(req_pct):
+                        status = PaymentTermStatus.PAID if cfg["status"] == ContractStatus.COMPLETED else (
+                            PaymentTermStatus.PAID if tnum <= 2 else PaymentTermStatus.VERIFIED
+                        )
+                        # Anchor ke revisi aktif
+                        if active_rev_for_payment:
+                            boq_rev_id = active_rev_for_payment.id
+                        if status == PaymentTermStatus.PAID:
+                            paid_date = TODAY - timedelta(days=random.randint(7, 60))
+                    planned_offset = int(tnum * cfg["total_weeks"] / 4) * 7
+                    db.add(PaymentTerm(
+                        contract_id=contract.id,
+                        term_number=tnum,
+                        name=tname,
+                        required_progress_pct=req_pct,
+                        payment_pct=pay_pct,
+                        amount=amount,
+                        retention_pct=ret_pct,
+                        planned_date=contract.start_date + timedelta(days=planned_offset) if contract.start_date else None,
+                        paid_date=paid_date,
+                        status=status,
+                        boq_revision_id=boq_rev_id,
+                        created_by=u_ppk.id if u_ppk else None,
+                    ))
+            db.flush()
+
             n_lok = len(cfg["lokasi"])
-            print(f"  ✓ {n_lok} lokasi, {len(cfg['lokasi']) * 3:.0f}±  fasilitas")
+            print(f"  ✓ {n_lok} lokasi, {len(cfg['lokasi']) * 3:.0f}±  fasilitas"
+                  f"{' + ' + str(len(vo_profiles)) + ' VO' if vo_profiles else ''}")
 
         # ── Auto-assign demo users ke semua kontrak demo ─────────────────────
         # Konsekuensi STRICT contract access: konsultan/ppk/kontraktor yang
@@ -681,10 +1206,12 @@ def run():
         # bisa login dengan 4 demo user dan langsung melihat data.
         print("\n▸ Auto-assign demo users ke kontrak demo...")
         demo_emails = [
-            "konsultan.demo@knmp.id",
-            "ppk.demo@knmp.id",
-            "kontraktor.demo@knmp.id",
-            "manager.demo@knmp.id",
+            "konsultan.demo@marlin.id",
+            "ppk.demo@marlin.id",
+            "kontraktor.demo@marlin.id",
+            "manager.demo@marlin.id",
+            "kpa.demo@marlin.id",
+            "itjen.demo@marlin.id",
         ]
         assigned_count = 0
         for email in demo_emails:
@@ -707,11 +1234,11 @@ def run():
         print(f"  Daily reports : {total_daily}")
         print()
         print("  Demo users:")
-        print("    admin@knmp.id            / Admin@123!")
-        print("    konsultan.demo@knmp.id   / Demo@123!")
-        print("    ppk.demo@knmp.id         / Demo@123!")
-        print("    kontraktor.demo@knmp.id  / Demo@123!")
-        print("    manager.demo@knmp.id     / Demo@123!")
+        print("    admin@marlin.id            / Admin@123!")
+        print("    konsultan.demo@marlin.id   / Demo@123!")
+        print("    ppk.demo@marlin.id         / Demo@123!")
+        print("    kontraktor.demo@marlin.id  / Demo@123!")
+        print("    manager.demo@marlin.id     / Demo@123!")
         print("═" * 60)
 
     except Exception as e:

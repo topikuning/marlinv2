@@ -13,7 +13,50 @@ from app.api import (
     auth, users, rbac, master, contracts, locations, facilities, boq,
     weekly_reports, daily_reports, payments, reviews, notifications,
     analytics, templates, audit,
+    variation_orders, field_observations,
 )
+
+
+def _ensure_enum_values():
+    """
+    Tambahan nilai enum Postgres yang muncul setelah DB pertama kali dibuat.
+    ALTER TYPE ... ADD VALUE IF NOT EXISTS idempotent dan aman dijalankan
+    berulang kali pada startup.
+    """
+    from sqlalchemy import text
+    pending = [
+        ("voitemaction", "REMOVE_FACILITY"),
+    ]
+    with engine.begin() as conn:
+        for enum_name, value in pending:
+            try:
+                conn.execute(text(
+                    f"ALTER TYPE {enum_name} ADD VALUE IF NOT EXISTS '{value}'"
+                ))
+            except Exception:
+                pass
+
+
+def _ensure_columns():
+    """Auto-migration untuk kolom baru tanpa Alembic. Idempotent."""
+    from sqlalchemy import text
+    pending = [
+        # (table, column, ddl_after_ADD_COLUMN)
+        ("variation_order_items", "parent_boq_item_id", "UUID REFERENCES boq_items(id)"),
+        # PPN per-contract — default 11% (UU HPP 2021)
+        ("contracts", "ppn_pct", "NUMERIC(5,2) NOT NULL DEFAULT 11.00"),
+    ]
+    with engine.begin() as conn:
+        for table, col, ddl in pending:
+            try:
+                exists = conn.execute(text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name=:t AND column_name=:c"
+                ), {"t": table, "c": col}).first()
+                if not exists:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}"))
+            except Exception:
+                pass
 
 
 @asynccontextmanager
@@ -21,6 +64,8 @@ async def lifespan(app: FastAPI):
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     for sub in ("daily", "weekly", "review", "payments", "documents"):
         os.makedirs(os.path.join(settings.UPLOAD_DIR, sub), exist_ok=True)
+    _ensure_enum_values()
+    _ensure_columns()
     if settings.SCHEDULER_ENABLED:
         start_scheduler()
     yield
@@ -56,6 +101,7 @@ ROUTERS = [
     payments.router, reviews.router,
     notifications.router, analytics.router, templates.router,
     audit.router,
+    variation_orders.router, field_observations.router,
 ]
 for r in ROUTERS:
     app.include_router(r, prefix="/api")

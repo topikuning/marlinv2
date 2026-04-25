@@ -187,6 +187,7 @@ function CreateContractModal({ open, onClose, onSuccess }) {
       const payload = {
         ...form,
         original_value: parseFloat(form.original_value || 0),
+        ppn_pct: parseFloat(form.ppn_pct) || 11,
         fiscal_year: parseInt(form.fiscal_year),
         weekly_report_due_day: parseInt(form.weekly_report_due_day),
         konsultan_id: form.konsultan_id || null,
@@ -306,9 +307,9 @@ function CreateContractModal({ open, onClose, onSuccess }) {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label className="label">Nilai Kontrak (Rp) *</label>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="md:col-span-2">
+            <label className="label">Nilai Kontrak (Rp) — sudah termasuk PPN *</label>
             <input
               type="number"
               className="input"
@@ -316,6 +317,34 @@ function CreateContractModal({ open, onClose, onSuccess }) {
               onChange={(e) => set("original_value", e.target.value)}
               required
             />
+            {form.original_value && form.ppn_pct && (() => {
+              const total = parseFloat(form.original_value) || 0;
+              const ppn = parseFloat(form.ppn_pct) || 0;
+              const factor = 1 + ppn / 100;
+              const boqMax = factor > 0 ? total / factor : total;
+              const ppnAmount = total - boqMax;
+              const fmt = (n) => n.toLocaleString("id-ID", { maximumFractionDigits: 0 });
+              return (
+                <p className="text-[11px] text-ink-500 mt-1">
+                  Berarti BOQ {fmt(boqMax)} + PPN {ppn}% ({fmt(ppnAmount)}) = {fmt(total)}.
+                  {" "}Total BOQ harus {fmt(boqMax)}.
+                </p>
+              );
+            })()}
+          </div>
+          <div>
+            <label className="label">PPN (%)</label>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              max="100"
+              className="input"
+              value={form.ppn_pct}
+              onChange={(e) => set("ppn_pct", e.target.value)}
+              placeholder="11"
+            />
+            <p className="text-[10px] text-ink-500 mt-0.5">UU HPP 2021 = 11%</p>
           </div>
           <div>
             <label className="label">Tanggal Mulai *</label>
@@ -435,6 +464,33 @@ function CreateContractModal({ open, onClose, onSuccess }) {
                       onChange={(e) => setLoc(i, "province", e.target.value)}
                     />
                   </div>
+                  <div>
+                    <label className="label">Latitude</label>
+                    <input
+                      className="input"
+                      type="number"
+                      step="any"
+                      placeholder="-6.2088"
+                      value={l.latitude}
+                      onChange={(e) => setLoc(i, "latitude", e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Longitude</label>
+                    <input
+                      className="input"
+                      type="number"
+                      step="any"
+                      placeholder="106.8456"
+                      value={l.longitude}
+                      onChange={(e) => setLoc(i, "longitude", e.target.value)}
+                    />
+                  </div>
+                  <p className="md:col-span-4 text-[11px] text-ink-500 -mt-1">
+                    💡 Koordinat opsional tapi disarankan — diperlukan agar lokasi muncul di peta dashboard.
+                    Cara cepat: buka Google Maps, klik kanan titik lokasi, salin koordinat. Bisa diisi nanti
+                    via tombol Edit di kartu lokasi.
+                  </p>
                 </div>
               </div>
             ))}
@@ -462,6 +518,7 @@ function initForm() {
     ppk_id: "",
     fiscal_year: new Date().getFullYear(),
     original_value: "",
+    ppn_pct: "11",  // default 11% UU HPP 2021
     start_date: "",
     end_date: "",
     description: "",

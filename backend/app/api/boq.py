@@ -11,7 +11,7 @@ import io
 
 from app.core.database import get_db
 from app.models.models import (
-    BOQItem, BOQItemVersion, Facility, Location, Contract, User,
+    BOQItem, BOQItemVersion, BOQRevision, Facility, Location, Contract, User,
 )
 from app.schemas.schemas import (
     BOQItemCreate, BOQItemUpdate, BOQItemOut, ExcelImportResult,
@@ -356,6 +356,7 @@ def bulk_create(
 
     from app.services import boq_revision_service
     for rev in set(touched_revisions.values()):
+        _recompute_is_leaf(db, rev.id)
         boq_revision_service.recalc_revision_totals(db, rev)
 
     for cid in touched_contracts:
@@ -423,12 +424,29 @@ def update_boq_item(
         db.add(version)
         item.version += 1
 
-    for field, val in data.model_dump(exclude_none=True).items():
+    # Pakai exclude_unset=True (bukan exclude_none) supaya user yang explicit
+    # kirim parent_id=null (mau clear parent jadi root) ter-apply. Sebelumnya
+    # exclude_none drop None → parent_id lama tetap → is_leaf tidak ter-update
+    # karena hubungan parent-child masih utuh di DB.
+    dump = data.model_dump(exclude_unset=True)
+    parent_changed = "parent_id" in dump
+    for field, val in dump.items():
         if field not in ("addendum_id", "change_reason") and hasattr(item, field):
             setattr(item, field, val)
 
     db.flush()
+    if parent_changed and item.boq_revision_id:
+        # Re-derive is_leaf untuk seluruh revisi karena perpindahan parent_id
+        # bisa membuat parent lama jadi leaf atau parent baru jadi non-leaf.
+        _recompute_is_leaf(db, item.boq_revision_id)
     recalculate_facility_weights(db, str(item.facility_id))
+    # Refresh cache total revisi — tanpa ini, BOQRevision.total_value stale
+    # dan tampilan 'Total BOQ' di header revision tidak ikut update.
+    if item.boq_revision_id:
+        from app.services import boq_revision_service
+        rev = db.query(BOQRevision).filter(BOQRevision.id == item.boq_revision_id).first()
+        if rev:
+            boq_revision_service.recalc_revision_totals(db, rev)
     fac = db.query(Facility).filter(Facility.id == item.facility_id).first()
     if fac:
         loc = db.query(Location).filter(Location.id == fac.location_id).first()
@@ -469,12 +487,73 @@ def delete_boq_item(
                     },
                 )
 
-    item.is_active = False  # soft delete
+    # Soft delete item utama + cascade non-aktif ke seluruh children supaya
+    # parent-child hierarchy level 0-3 tetap valid (tidak ada orphan aktif).
+    item.is_active = False
+    children_count = _cascade_disable_children(db, item.boq_revision_id, item.id)
     db.flush()
     recalculate_facility_weights(db, str(item.facility_id))
+    # Refresh total revisi setelah cascade delete
+    if item.boq_revision_id:
+        from app.services import boq_revision_service
+        rev2 = db.query(BOQRevision).filter(BOQRevision.id == item.boq_revision_id).first()
+        if rev2:
+            boq_revision_service.recalc_revision_totals(db, rev2)
     db.commit()
-    log_audit(db, current_user, "delete", "boq_item", str(item.id), request=request, commit=True)
-    return {"success": True}
+    log_audit(
+        db, current_user, "delete", "boq_item", str(item.id),
+        changes={"cascaded_children": children_count},
+        request=request, commit=True,
+    )
+    return {"success": True, "cascaded_children": children_count}
+
+
+def _recompute_is_leaf(db: Session, revision_id) -> None:
+    """
+    Sweep semua item di revisi: item yang punya minimal 1 child AKTIF
+    (is_active=True) di-set is_leaf=False, item tanpa child aktif di-set
+    is_leaf=True. Idempotent.
+
+    Filter is_active=True saat collect parent_ids penting: kalau child
+    sudah di-soft-delete (is_active=False), parent_id-nya masih ter-set
+    di DB tapi tidak boleh kontribusi ke parent set. Tanpa filter ini,
+    parent yang childnya sudah dihapus tetap ditandai parent → totalnya
+    tidak dihitung padahal seharusnya jadi leaf lagi.
+    """
+    items = db.query(BOQItem).filter(
+        BOQItem.boq_revision_id == revision_id,
+        BOQItem.is_active == True,  # noqa: E712
+    ).all()
+    parent_ids = {it.parent_id for it in items if it.parent_id is not None}
+    for it in items:
+        should_be_leaf = it.id not in parent_ids
+        if it.is_leaf != should_be_leaf:
+            it.is_leaf = should_be_leaf
+    db.flush()
+
+
+def _cascade_disable_children(db: Session, revision_id, parent_id) -> int:
+    """BFS traversal: non-aktif semua descendant. Return jumlah children yang diproses."""
+    if not parent_id:
+        return 0
+    total = 0
+    to_visit = [parent_id]
+    visited = set()
+    while to_visit:
+        pid = to_visit.pop()
+        if pid in visited:
+            continue
+        visited.add(pid)
+        children = db.query(BOQItem).filter(
+            BOQItem.boq_revision_id == revision_id,
+            BOQItem.parent_id == pid,
+            BOQItem.is_active == True,  # noqa: E712
+        ).all()
+        for ch in children:
+            ch.is_active = False
+            total += 1
+            to_visit.append(ch.id)
+    return total
 
 
 # ═══════════════════════════════════════════ TEMPLATE ════════════════════════
@@ -617,15 +696,22 @@ async def import_excel(
             )
 
             # Insert items; build hierarchy by level
-            parent_stack: List[BOQItem] = []  # indexed by level
+            # Map original_code → BOQItem. Dipakai untuk resolve parent_code.
+            code_index: dict = {}
+            # Pass 1: assign auto-code untuk row yang code-nya kosong, supaya
+            # row lain bisa refer balik via parent_code (kalau perlu).
+            auto_idx = 0
+            for it in fac_data["items"]:
+                if not (it.get("original_code") or "").strip():
+                    auto_idx += 1
+                    it["original_code"] = f"R{auto_idx}"
+
+            # Pass 2: dua-fase resolve parent. Fase A buat semua item dengan
+            # parent=None placeholder, fase B set parent_id berdasarkan
+            # parent_code lookup. Memungkinkan urutan baris bebas (parent
+            # boleh muncul setelah child di Excel).
+            created_items: list = []
             for order_idx, it in enumerate(fac_data["items"]):
-                lvl = int(it.get("level") or 0)
-                # find parent: last pushed item with level < lvl
-                parent = None
-                while parent_stack and parent_stack[-1].level >= lvl:
-                    parent_stack.pop()
-                if parent_stack:
-                    parent = parent_stack[-1]
 
                 total_price = it.get("total_price") or 0
                 volume = it.get("volume") or 0
@@ -633,17 +719,13 @@ async def import_excel(
                 if not total_price and volume and unit_price:
                     total_price = volume * unit_price
 
-                full_code = it.get("original_code", "")
-                if parent and parent.full_code:
-                    full_code = f"{parent.full_code}.{it.get('original_code','')}"
-
                 new_item = BOQItem(
                     boq_revision_id=target_revision.id,
                     facility_id=target_facility.id,
-                    parent_id=parent.id if parent else None,
+                    parent_id=None,  # diisi di pass berikutnya
                     original_code=it.get("original_code"),
-                    full_code=full_code,
-                    level=lvl,
+                    full_code=it.get("original_code") or "",  # di-update setelah parent ter-resolve
+                    level=0,  # di-derive dari parent chain
                     display_order=order_idx,
                     description=it["description"],
                     unit=it.get("unit"),
@@ -652,12 +734,46 @@ async def import_excel(
                     total_price=Decimal(str(total_price)),
                     planned_start_week=it.get("planned_start_week"),
                     planned_duration_weeks=it.get("planned_duration_weeks"),
-                    is_leaf=bool(it.get("is_leaf", True)),
+                    is_leaf=True,  # auto-flip via _recompute_is_leaf di akhir
                 )
                 db.add(new_item)
                 db.flush()
-                parent_stack.append(new_item)
+                code = (it.get("original_code") or "").strip()
+                code_index[code] = new_item
+                created_items.append((it, new_item))
                 result.items_imported += 1
+
+            # Pass 3: resolve parent_id via parent_code lookup, derive level
+            # & full_code dari rantai parent. Loop sampai stable (handle
+            # forward-references — child di-create sebelum parent).
+            for it, new_item in created_items:
+                pc = (it.get("parent_code") or "").strip()
+                if pc and pc in code_index:
+                    new_item.parent_id = code_index[pc].id
+            db.flush()
+            # Compute level + full_code dengan BFS dari roots.
+            for _, ni in created_items:
+                lvl = 0
+                chain = []
+                cur = ni
+                visited = set()
+                while cur.parent_id and cur.parent_id not in visited:
+                    visited.add(cur.parent_id)
+                    parent = next((p for _, p in created_items if p.id == cur.parent_id), None)
+                    if not parent:
+                        break
+                    chain.append(parent.original_code or "")
+                    lvl += 1
+                    cur = parent
+                ni.level = lvl
+                if chain:
+                    ni.full_code = ".".join(reversed(chain)) + "." + (ni.original_code or "")
+                else:
+                    ni.full_code = ni.original_code or ""
+            db.flush()
+
+            # Post-import sweep: item yang punya children → is_leaf=False.
+            _recompute_is_leaf(db, target_revision.id)
 
             recalculate_facility_weights(db, str(target_facility.id))
             touched_contracts.add(str(target_loc.contract_id))
@@ -668,6 +784,29 @@ async def import_excel(
 
         for cid in touched_contracts:
             recalculate_contract_weights(db, cid)
+            # Auto-sync nilai kontrak DRAFT: HANYA kalau original_value masih
+            # kosong (== 0). Kalau user sudah input nilai kontrak, JANGAN
+            # diubah otomatis karena user akan bingung dan kehilangan input.
+            # Plus: pakai PPN factor — Nilai Kontrak konvensi POST-PPN
+            # (= BOQ + (BOQ × ppn%)).
+            from app.models.models import BOQRevision, RevisionStatus, ContractStatus
+            from decimal import Decimal as _Dec
+            c = db.query(Contract).filter(Contract.id == cid).first()
+            if c and c.status == ContractStatus.DRAFT and float(c.original_value or 0) < 0.01:
+                working_rev = (
+                    db.query(BOQRevision)
+                    .filter(
+                        BOQRevision.contract_id == cid,
+                        BOQRevision.status == RevisionStatus.DRAFT,
+                    )
+                    .order_by(BOQRevision.cco_number.desc())
+                    .first()
+                )
+                if working_rev and working_rev.total_value:
+                    ppn_factor = _Dec("1") + (c.ppn_pct or _Dec("0")) / _Dec("100")
+                    value_with_ppn = working_rev.total_value * ppn_factor
+                    c.original_value = value_with_ppn
+                    c.current_value = value_with_ppn
 
         db.commit()
         result.success = True
@@ -763,22 +902,33 @@ def approve_revision(
     if not contract:
         raise HTTPException(404, "Kontrak tidak ditemukan")
 
-    expected = float(contract.current_value or 0)
-    actual = float(rev.total_value or 0)
-    diff = round(actual - expected, 2)
-    if abs(diff) >= 0.01:
+    # Konvensi:
+    #   - BOQItem disimpan PRE-PPN (raw harga satuan)
+    #   - Contract.current_value sudah TERMASUK PPN
+    #   - Aturan validasi: BOQ + (BOQ × PPN%) ≤ Nilai Kontrak
+    ppn_pct = float(contract.ppn_pct or 0)
+    contract_value = float(contract.current_value or 0)
+    boq_pre = float(rev.total_value or 0)
+    ppn_amount = boq_pre * (ppn_pct / 100.0)
+    boq_with_ppn = boq_pre + ppn_amount
+    diff = round(boq_with_ppn - contract_value, 2)
+    # Tolerance 1 Rp — absorb floating-point error PPN. Selisih sub-Rupiah
+    # tidak relevan untuk validasi legal.
+    if diff >= 1:
         raise HTTPException(
             409,
             {
                 "message": (
-                    f"Total BOQ revisi {rev.revision_code} ({actual:,.2f}) tidak "
-                    f"sama dengan nilai kontrak ({expected:,.2f}). Selisih "
-                    f"{diff:,.2f}. Koreksi BOQ atau ubah nilai kontrak pada "
-                    f"Addendum sebelum approve."
+                    f"BOQ {boq_pre:,.2f} + PPN {ppn_pct:.0f}% ({ppn_amount:,.2f}) "
+                    f"= {boq_with_ppn:,.2f} MELEBIHI Nilai Kontrak ({contract_value:,.2f}). "
+                    f"Selisih +{diff:,.2f}. Kurangi item BOQ atau naikkan nilai kontrak."
                 ),
-                "code": "revision_value_mismatch",
-                "contract_value": expected,
-                "boq_total": actual,
+                "code": "revision_value_exceeds_contract",
+                "contract_value": contract_value,
+                "boq_pre_ppn": boq_pre,
+                "ppn_amount": ppn_amount,
+                "boq_with_ppn": boq_with_ppn,
+                "ppn_pct": ppn_pct,
                 "diff": diff,
                 "revision_code": rev.revision_code,
             },
@@ -790,7 +940,7 @@ def approve_revision(
     db.commit()
     log_audit(
         db, current_user, "approve", "boq_revision", str(rev.id),
-        changes={"revision_code": rev.revision_code, "total_value": actual},
+        changes={"revision_code": rev.revision_code, "total_value": boq_pre},
         request=request, commit=True,
     )
     return {
