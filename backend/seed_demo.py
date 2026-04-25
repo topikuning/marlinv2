@@ -754,13 +754,28 @@ def run():
                     contract_all_facs.append(fac)
 
                     items_def = BOQ_TEMPLATE.get(fac_name, BOQ_TEMPLATE["Saluran & Jalan"])
+                    # Stack-based parent_id resolver — parent = item terakhir
+                    # dengan level lebih kecil. Konsisten dengan logika import
+                    # Excel di boq.py supaya hirarki terbentuk benar.
+                    parent_stack = []  # list of (item, level)
                     for order_i, (desc, unit, vol, up, level, is_leaf, mwc) in enumerate(items_def):
+                        # Pop stack hingga top punya level < current
+                        while parent_stack and parent_stack[-1][1] >= level:
+                            parent_stack.pop()
+                        parent_item = parent_stack[-1][0] if parent_stack else None
+                        local_code = mwc if mwc else f"{fac_code}.{order_i+1}"
+                        full_code = (
+                            f"{parent_item.full_code}.{local_code}"
+                            if parent_item and parent_item.full_code
+                            else local_code
+                        )
                         item = BOQItem(
                             boq_revision_id=rev.id,
                             facility_id=fac.id,
+                            parent_id=parent_item.id if parent_item else None,
                             master_work_code=mwc,
-                            original_code=mwc if mwc else f"{fac_code}.{order_i+1}",
-                            full_code=mwc if mwc else f"{fac_code}.{order_i+1}",
+                            original_code=local_code,
+                            full_code=full_code,
                             level=level,
                             display_order=len(contract_all_items) + order_i,
                             description=desc.strip(),
@@ -771,7 +786,15 @@ def run():
                             is_leaf=is_leaf, is_active=True,
                         )
                         db.add(item); db.flush()
+                        parent_stack.append((item, level))
                         contract_all_items.append(item)
+
+            # ── Auto-derive is_leaf dari parent_id graph ──────────────────────
+            # Item yang di-refer sebagai parent oleh item lain → is_leaf=False.
+            # Konsisten dengan _recompute_is_leaf() di boq.py.
+            parent_ids_set = {it.parent_id for it in contract_all_items if it.parent_id is not None}
+            for it in contract_all_items:
+                it.is_leaf = it.id not in parent_ids_set
 
             # ── Hitung bobot leaf items CONTRACT-WIDE ─────────────────────────
             leaf_items  = [it for it in contract_all_items if it.is_leaf]
@@ -987,34 +1010,132 @@ def run():
                 db.add(vo)
                 db.flush()
 
-                # Generate 1-2 items perubahan
+                # Generate items perubahan — variasi action sesuai vo_seq
+                # supaya demo cover semua jenis: INCREASE, ADD-with-parent,
+                # DECREASE, REMOVE_FACILITY.
                 fac_sample = random.choice(contract_all_facs) if contract_all_facs else None
+                total_impact = Decimal("0")
                 if fac_sample:
-                    impact_1 = Decimal("0")
-                    # Item 1: increase volume
-                    boq_sample = next(
-                        (b for b in contract_all_items if b.facility_id == fac_sample.id and b.is_leaf),
-                        None
-                    )
-                    if boq_sample:
-                        delta = Decimal("25")
-                        price = Decimal(boq_sample.unit_price or 0)
-                        vi = VariationOrderItem(
+                    fac_items = [b for b in contract_all_items if b.facility_id == fac_sample.id and b.is_leaf]
+                    fac_parents = [b for b in contract_all_items if b.facility_id == fac_sample.id and not b.is_leaf]
+
+                    # Variasi action berdasarkan vo_seq + status target
+                    if vo_status_target == "draft" and len(fac_items) >= 1:
+                        # DRAFT: kombinasi INCREASE + ADD baru (with parent)
+                        boq1 = fac_items[0]
+                        d1 = Decimal("25")
+                        p1 = Decimal(boq1.unit_price or 0)
+                        db.add(VariationOrderItem(
                             variation_order_id=vo.id,
                             action=VOItemAction.INCREASE,
-                            boq_item_id=boq_sample.id,
+                            boq_item_id=boq1.id,
                             facility_id=fac_sample.id,
-                            master_work_code=boq_sample.master_work_code,
-                            description=boq_sample.description,
-                            unit=boq_sample.unit,
-                            volume_delta=delta,
-                            unit_price=price,
-                            cost_impact=delta * price,
+                            master_work_code=boq1.master_work_code,
+                            description=boq1.description,
+                            unit=boq1.unit,
+                            volume_delta=d1, unit_price=p1,
+                            cost_impact=d1 * p1,
                             notes="Penambahan akibat kondisi lapangan",
-                        )
-                        db.add(vi)
-                        impact_1 = delta * price
-                    vo.cost_impact = impact_1
+                        ))
+                        total_impact += d1 * p1
+                        # ADD item baru di bawah parent existing kalau ada
+                        if fac_parents:
+                            parent = fac_parents[0]
+                            d2 = Decimal("3")
+                            p2 = Decimal("8500000")
+                            db.add(VariationOrderItem(
+                                variation_order_id=vo.id,
+                                action=VOItemAction.ADD,
+                                boq_item_id=None,
+                                facility_id=fac_sample.id,
+                                parent_boq_item_id=parent.id,
+                                description="Item tambahan: pengaman tambahan kondisi pasut tinggi",
+                                unit="unit",
+                                volume_delta=d2, unit_price=p2,
+                                cost_impact=d2 * p2,
+                                notes="Penambahan baru di bawah parent existing",
+                            ))
+                            total_impact += d2 * p2
+
+                    elif vo_status_target == "under_review" and len(fac_items) >= 2:
+                        # UNDER_REVIEW: DECREASE + INCREASE
+                        b1, b2 = fac_items[0], fac_items[1]
+                        d1 = -Decimal("10"); p1 = Decimal(b1.unit_price or 0)
+                        db.add(VariationOrderItem(
+                            variation_order_id=vo.id,
+                            action=VOItemAction.DECREASE,
+                            boq_item_id=b1.id, facility_id=fac_sample.id,
+                            master_work_code=b1.master_work_code,
+                            description=b1.description, unit=b1.unit,
+                            volume_delta=d1, unit_price=p1,
+                            cost_impact=d1 * p1,
+                            notes="Pengurangan setelah review desain",
+                        ))
+                        total_impact += d1 * p1
+                        d2 = Decimal("15"); p2 = Decimal(b2.unit_price or 0)
+                        db.add(VariationOrderItem(
+                            variation_order_id=vo.id,
+                            action=VOItemAction.INCREASE,
+                            boq_item_id=b2.id, facility_id=fac_sample.id,
+                            master_work_code=b2.master_work_code,
+                            description=b2.description, unit=b2.unit,
+                            volume_delta=d2, unit_price=p2,
+                            cost_impact=d2 * p2,
+                            notes="Penambahan akibat penyesuaian dimensi",
+                        ))
+                        total_impact += d2 * p2
+
+                    elif vo_status_target in ("approved", "bundled") and len(contract_all_facs) >= 2:
+                        # APPROVED/BUNDLED: REMOVE_FACILITY satu fasilitas kecil
+                        # untuk demonstrate enum baru
+                        target_fac = min(contract_all_facs, key=lambda f: float(f.total_value or 0))
+                        if float(target_fac.total_value or 0) > 0:
+                            cost = -Decimal(str(target_fac.total_value))
+                            db.add(VariationOrderItem(
+                                variation_order_id=vo.id,
+                                action=VOItemAction.REMOVE_FACILITY,
+                                boq_item_id=None,
+                                facility_id=target_fac.id,
+                                description=f"Hilangkan fasilitas {target_fac.facility_code} {target_fac.facility_name}",
+                                unit="",
+                                volume_delta=Decimal("0"), unit_price=Decimal("0"),
+                                cost_impact=cost,
+                                notes="Re-design: fasilitas tidak diperlukan",
+                            ))
+                            total_impact += cost
+                        # Plus 1 INCREASE supaya nett positif
+                        b1 = fac_items[0] if fac_items else None
+                        if b1:
+                            d1 = Decimal("30"); p1 = Decimal(b1.unit_price or 0)
+                            db.add(VariationOrderItem(
+                                variation_order_id=vo.id,
+                                action=VOItemAction.INCREASE,
+                                boq_item_id=b1.id, facility_id=fac_sample.id,
+                                master_work_code=b1.master_work_code,
+                                description=b1.description, unit=b1.unit,
+                                volume_delta=d1, unit_price=p1,
+                                cost_impact=d1 * p1,
+                                notes="Pekerjaan tambah",
+                            ))
+                            total_impact += d1 * p1
+
+                    elif fac_items:
+                        # Default fallback: 1 INCREASE
+                        b1 = fac_items[0]
+                        d1 = Decimal("25"); p1 = Decimal(b1.unit_price or 0)
+                        db.add(VariationOrderItem(
+                            variation_order_id=vo.id,
+                            action=VOItemAction.INCREASE,
+                            boq_item_id=b1.id, facility_id=fac_sample.id,
+                            master_work_code=b1.master_work_code,
+                            description=b1.description, unit=b1.unit,
+                            volume_delta=d1, unit_price=p1,
+                            cost_impact=d1 * p1,
+                            notes="Penambahan akibat kondisi lapangan",
+                        ))
+                        total_impact += d1 * p1
+
+                vo.cost_impact = total_impact
                 db.flush()
 
             # ── Payment Terms (hanya untuk kontrak aktif/completed/addendum) ─
