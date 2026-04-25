@@ -424,8 +424,13 @@ def update_boq_item(
         db.add(version)
         item.version += 1
 
-    parent_changed = "parent_id" in data.model_dump(exclude_unset=True)
-    for field, val in data.model_dump(exclude_none=True).items():
+    # Pakai exclude_unset=True (bukan exclude_none) supaya user yang explicit
+    # kirim parent_id=null (mau clear parent jadi root) ter-apply. Sebelumnya
+    # exclude_none drop None → parent_id lama tetap → is_leaf tidak ter-update
+    # karena hubungan parent-child masih utuh di DB.
+    dump = data.model_dump(exclude_unset=True)
+    parent_changed = "parent_id" in dump
+    for field, val in dump.items():
         if field not in ("addendum_id", "change_reason") and hasattr(item, field):
             setattr(item, field, val)
 
@@ -505,16 +510,19 @@ def delete_boq_item(
 
 def _recompute_is_leaf(db: Session, revision_id) -> None:
     """
-    Sweep semua item di revisi: item yang punya minimal 1 child (is_active=True)
-    di-set is_leaf=False, item tanpa child di-set is_leaf=True. Idempotent.
+    Sweep semua item di revisi: item yang punya minimal 1 child AKTIF
+    (is_active=True) di-set is_leaf=False, item tanpa child aktif di-set
+    is_leaf=True. Idempotent.
 
-    Penting karena import Excel & operasi struktural sering tidak menjaga
-    flag is_leaf dengan benar. Hirarki BOQ (level 0-3) hanya bekerja kalau
-    flag ini akurat — UI parent picker, cost rollup, dan VO grid semua
-    bergantung padanya.
+    Filter is_active=True saat collect parent_ids penting: kalau child
+    sudah di-soft-delete (is_active=False), parent_id-nya masih ter-set
+    di DB tapi tidak boleh kontribusi ke parent set. Tanpa filter ini,
+    parent yang childnya sudah dihapus tetap ditandai parent → totalnya
+    tidak dihitung padahal seharusnya jadi leaf lagi.
     """
     items = db.query(BOQItem).filter(
-        BOQItem.boq_revision_id == revision_id
+        BOQItem.boq_revision_id == revision_id,
+        BOQItem.is_active == True,  # noqa: E712
     ).all()
     parent_ids = {it.parent_id for it in items if it.parent_id is not None}
     for it in items:
