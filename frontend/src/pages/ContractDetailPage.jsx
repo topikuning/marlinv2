@@ -1992,7 +1992,7 @@ function RevisionDiffModal({ revision, onClose }) {
 
 const CHAIN_EVENT_META = {
   contract_signed: { icon: "📝", color: "slate", tab: null },
-  boq_revision:    { icon: "📋", color: "blue",  tab: "boq" },
+  boq_revision:    { icon: "📋", color: "blue",  tab: "revisions" },
   mc:              { icon: "🔍", color: "brand", tab: "field_observations" },
   vo:              { icon: "📑", color: "amber", tab: "variation_orders" },
   addendum:        { icon: "📎", color: "indigo", tab: "addenda" },
@@ -2005,6 +2005,13 @@ const CHAIN_STATUS_COLOR = {
   under_review: "bg-blue-100 text-blue-700 border-blue-300",
   rejected:     "bg-red-100 text-red-700 border-red-300",
   bundled:      "bg-indigo-100 text-indigo-700 border-indigo-300",
+};
+
+const ACTION_TAB_LABEL = {
+  approve_revision: "BOQ Versions",
+  create_addendum:  "Addendum",
+  approve_vo:       "Variation Orders",
+  create_mc0:       "Observasi Lapangan",
 };
 
 function ContractChainTimeline({ contract, onGoTab }) {
@@ -2104,7 +2111,7 @@ function ContractChainStatusPanel({ contract, onGoTab }) {
   if (!data?.summary) return null;
   const s = data.summary;
   const actionTab = {
-    approve_revision: "boq",
+    approve_revision: "revisions",
     create_addendum: "addenda",
     approve_vo: "variation_orders",
     create_mc0: "field_observations",
@@ -2140,7 +2147,7 @@ function ContractChainStatusPanel({ contract, onGoTab }) {
               value={s.revisions_count}
               sub={s.pending_revisions > 0 ? `${s.pending_revisions} DRAFT menunggu` : "semua ter-approve"}
               warn={s.pending_revisions > 0}
-              onClick={() => onGoTab?.("boq")}
+              onClick={() => onGoTab?.("revisions")}
             />
           </div>
         </div>
@@ -2155,7 +2162,7 @@ function ContractChainStatusPanel({ contract, onGoTab }) {
                 className="btn-primary btn-xs mt-2"
                 onClick={() => onGoTab?.(actionTab)}
               >
-                Buka tab →
+                Buka {ACTION_TAB_LABEL[s.next_action] || "tab"} →
               </button>
             )}
           </div>
