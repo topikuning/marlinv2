@@ -216,15 +216,17 @@ export default function ContractDetailPage() {
             const ppnAmount = boqTotal * (ppnPct / 100);
             const boqWithPpn = boqTotal + ppnAmount;
             const diff = boqWithPpn - contractValue;
+            // money: tuple [full, short] — full untuk lebar besar, short untuk mobile
+            const money = (n) => [fmtCurrency(n, false), fmtCurrency(n, true)];
             const boqHint = boqTotal > 0 && Math.abs(diff) >= 0.01
               ? `+ PPN ${fmtCurrency(ppnAmount)} = ${fmtCurrency(boqWithPpn)} (Δ ${fmtCurrency(diff)})`
               : boqTotal > 0
                 ? `+ PPN ${fmtCurrency(ppnAmount)} = ${fmtCurrency(boqWithPpn)} ✓`
                 : null;
             return [
-              ["Nilai Kontrak", fmtCurrency(contractValue), `Sudah termasuk PPN ${ppnPct}%`],
-              ["Total BOQ", fmtCurrency(boqTotal), boqHint],
-              ["PPN", `${ppnPct}% · ${fmtCurrency(ppnAmount)}`, "Pajak Pertambahan Nilai"],
+              ["Nilai Kontrak", money(contractValue), `Sudah termasuk PPN ${ppnPct}%`],
+              ["Total BOQ", money(boqTotal), boqHint],
+              ["PPN", [`${ppnPct}% · ${fmtCurrency(ppnAmount, false)}`, `${ppnPct}% · ${fmtCurrency(ppnAmount, true)}`], "Pajak Pertambahan Nilai"],
               ["Perusahaan", contract.company_name, null],
               ["PPK", contract.ppk_name, null],
               ["Konsultan", contract.konsultan_name || "—", null],
@@ -234,21 +236,32 @@ export default function ContractDetailPage() {
               ["Tahun Anggaran", contract.fiscal_year, null],
               ["Lokasi", `${contract.locations?.length || 0}`, null],
             ];
-          })().map(([label, val, hint]) => (
-            <div key={label}>
-              <p className="text-[10px] uppercase tracking-wider text-ink-400 font-medium">
-                {label}
-              </p>
-              <p className="text-sm font-medium text-ink-800 mt-0.5 truncate">
-                {val}
-              </p>
-              {hint && (
-                <p className="text-[10px] text-amber-700 mt-0.5 truncate" title={hint}>
-                  ⚠ {hint}
+          })().map(([label, val, hint]) => {
+            const isResponsive = Array.isArray(val);
+            return (
+              <div key={label}>
+                <p className="text-[10px] uppercase tracking-wider text-ink-400 font-medium">
+                  {label}
                 </p>
-              )}
-            </div>
-          ))}
+                <p
+                  className="text-sm font-medium text-ink-800 mt-0.5 truncate"
+                  title={isResponsive ? val[0] : undefined}
+                >
+                  {isResponsive ? (
+                    <>
+                      <span className="hidden lg:inline">{val[0]}</span>
+                      <span className="lg:hidden">{val[1]}</span>
+                    </>
+                  ) : val}
+                </p>
+                {hint && (
+                  <p className="text-[10px] text-amber-700 mt-0.5 truncate" title={hint}>
+                    ⚠ {hint}
+                  </p>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
 
