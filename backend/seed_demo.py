@@ -822,12 +822,10 @@ def run():
             rev.item_count  = len(contract_all_items)
             total_boq += len(contract_all_items)
 
-            # Sync nilai kontrak ke BOQ + PPN supaya seed konsisten.
-            # original_value/current_value selalu POST-PPN (= BOQ × 1.11).
-            ppn_factor = Decimal("1") + (contract.ppn_pct or Decimal("0")) / Decimal("100")
-            contract_value_with_ppn = (leaf_total * ppn_factor).quantize(Decimal("0.01"))
-            contract.original_value = contract_value_with_ppn
-            contract.current_value = contract_value_with_ppn
+            # Konvensi: contract.current_value = pre-PPN (= total BOQ).
+            # PPN cuma info display, tidak masuk ke nilai kontrak.
+            contract.original_value = leaf_total.quantize(Decimal("0.01"))
+            contract.current_value = leaf_total.quantize(Decimal("0.01"))
 
             db.flush()
 

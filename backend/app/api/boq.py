@@ -891,36 +891,28 @@ def approve_revision(
     if not contract:
         raise HTTPException(404, "Kontrak tidak ditemukan")
 
-    # PPN-aware comparison.
-    # BOQ items disimpan PRE-PPN. Nilai kontrak (current_value) POST-PPN.
-    # Untuk approve, BOQ × (1 + ppn) harus ≤ nilai kontrak.
-    # Setara: BOQ ≤ nilai_kontrak / (1 + ppn) — jadi 'expected' = limit BOQ pre-PPN.
-    ppn_pct = float(contract.ppn_pct or 0)
-    ppn_factor = 1.0 + (ppn_pct / 100.0)
-    contract_value = float(contract.current_value or 0)
-    boq_max_pre_ppn = contract_value / ppn_factor if ppn_factor > 0 else contract_value
-    actual = float(rev.total_value or 0)  # pre-PPN
-    boq_with_ppn = actual * ppn_factor
-    diff = round(actual - boq_max_pre_ppn, 2)
+    # Konvensi: BOQItem disimpan PRE-PPN. Contract.current_value juga PRE-PPN
+    # (= total BOQ tanpa PPN). PPN (contract.ppn_pct) cuma INFORMASI tambahan
+    # untuk display & laporan, bukan mempengaruhi perhitungan validasi.
+    # Ini natural dengan mental model user lapangan: nilai kontrak = total BOQ.
+    expected = float(contract.current_value or 0)
+    actual = float(rev.total_value or 0)
+    diff = round(actual - expected, 2)
     # Aturan:
-    #   - BOQ × (1+ppn) > nilai kontrak: BLOCK
-    #   - BOQ × (1+ppn) <= nilai kontrak: ALLOW (kontrak boleh punya buffer)
+    #   - BOQ > nilai kontrak: BLOCK (BOQ melampaui kewajiban kontrak)
+    #   - BOQ <= nilai kontrak: ALLOW (kontrak boleh punya buffer/contingency)
     if diff > 0.01:
         raise HTTPException(
             409,
             {
                 "message": (
-                    f"Total BOQ + PPN {ppn_pct:.0f}% ({boq_with_ppn:,.2f}) MELEBIHI "
-                    f"nilai kontrak ({contract_value:,.2f}). BOQ pre-PPN: {actual:,.2f}, "
-                    f"batas BOQ pre-PPN: {boq_max_pre_ppn:,.2f} (selisih +{diff:,.2f}). "
+                    f"Total BOQ revisi {rev.revision_code} ({actual:,.2f}) MELEBIHI "
+                    f"nilai kontrak ({expected:,.2f}). Selisih +{diff:,.2f}. "
                     f"Kurangi item BOQ atau naikkan nilai kontrak pada Addendum."
                 ),
                 "code": "revision_value_exceeds_contract",
-                "contract_value": contract_value,
-                "boq_total_pre_ppn": actual,
-                "boq_total_with_ppn": boq_with_ppn,
-                "boq_max_pre_ppn": boq_max_pre_ppn,
-                "ppn_pct": ppn_pct,
+                "contract_value": expected,
+                "boq_total": actual,
                 "diff": diff,
                 "revision_code": rev.revision_code,
             },

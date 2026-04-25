@@ -760,7 +760,12 @@ export default function BOQGrid({
     e.api.refreshCells({ rowNodes: [e.node], force: true });
   };
 
-  const total = rows.reduce((a, r) => a + computeTotal(r), 0);
+  // Sum leaf-only — non-leaf rows itu group/parent dengan total_price
+  // mungkin placeholder atau aggregate, jangan dijumlah supaya tidak
+  // double-count. Konsisten dengan facility.total_value & rev.total_value.
+  const total = rows
+    .filter((r) => r.is_leaf !== false)
+    .reduce((a, r) => a + computeTotal(r), 0);
   const masterCount = rows.filter((r) => r.master_work_code).length;
   const customCount = rows.filter((r) => !r.master_work_code && r.description).length;
 
