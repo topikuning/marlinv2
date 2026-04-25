@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { Search, Tag, Pencil, ChevronRight, X } from "lucide-react";
-import { masterAPI } from "@/api";
+import { masterAPI, boqAPI } from "@/api";
 import { Modal, Spinner } from "@/components/ui";
 
 /**
@@ -11,11 +11,35 @@ import { Modal, Spinner } from "@/components/ui";
  *      harga & volume tetap input manual.
  *   2. Input manual — ketik bebas semua field, tidak diarahkan ke master.
  *
+ * Hierarchy: user pilih PARENT (opsional). Level auto-derived dari parent
+ * chain. Konsisten dengan konvensi import Excel & VO grid.
+ *
  * Setelah user konfirmasi, memanggil onAdd({ ...itemData }) dan menutup
  * diri sendiri. Caller (BOQGrid) yang bertanggung jawab menyimpan ke API.
  */
 export default function BOQItemPickerModal({ open, facilityId, onAdd, onClose }) {
   const [mode, setMode] = useState(null); // null | "master" | "manual"
+  const [parentOptions, setParentOptions] = useState([]);
+
+  // Load existing BOQ items dalam facility ini sebagai kandidat parent.
+  // Dipakai oleh dua jalur (master & manual).
+  useEffect(() => {
+    if (!open || !facilityId) return;
+    boqAPI.listByFacility(facilityId)
+      .then(({ data }) => {
+        const opts = (data || [])
+          .map((b) => ({
+            id: b.id,
+            level: b.level || 0,
+            full_code: b.full_code || b.original_code || "",
+            description: b.description || "",
+            label: `${"··".repeat(b.level || 0)} ${b.full_code || b.original_code || "?"} — ${(b.description || "").slice(0, 50)}`,
+          }))
+          .sort((a, b) => (a.full_code || "").localeCompare(b.full_code || ""));
+        setParentOptions(opts);
+      })
+      .catch(() => setParentOptions([]));
+  }, [open, facilityId]);
 
   const handleAdd = (item) => {
     onAdd(item);
@@ -43,10 +67,20 @@ export default function BOQItemPickerModal({ open, facilityId, onAdd, onClose })
     >
       {!mode && <ModeSelector onSelect={setMode} />}
       {mode === "master" && (
-        <MasterPicker facilityId={facilityId} onAdd={handleAdd} onBack={() => setMode(null)} />
+        <MasterPicker
+          facilityId={facilityId}
+          parentOptions={parentOptions}
+          onAdd={handleAdd}
+          onBack={() => setMode(null)}
+        />
       )}
       {mode === "manual" && (
-        <ManualForm facilityId={facilityId} onAdd={handleAdd} onBack={() => setMode(null)} />
+        <ManualForm
+          facilityId={facilityId}
+          parentOptions={parentOptions}
+          onAdd={handleAdd}
+          onBack={() => setMode(null)}
+        />
       )}
     </Modal>
   );
@@ -115,7 +149,7 @@ const CATEGORIES = [
   { value: "khusus",      label: "Khusus Perikanan" },
 ];
 
-function MasterPicker({ facilityId, onAdd, onBack }) {
+function MasterPicker({ facilityId, parentOptions, onAdd, onBack }) {
   const [q, setQ]             = useState("");
   const [category, setCat]    = useState("");
   const [results, setResults] = useState([]);
@@ -123,8 +157,16 @@ function MasterPicker({ facilityId, onAdd, onBack }) {
   const [selected, setSelected] = useState(null);
   const [volume, setVolume]   = useState("");
   const [unitPrice, setUP]    = useState("");
-  const [level, setLevel]     = useState(2);
+  const [parentId, setParentId] = useState("");  // "" = root
   const inputRef = useRef();
+
+  // Level auto-derive dari parent chain. Kalau pilih parent dengan level=2,
+  // child = level 3. Konsisten dengan import Excel & VO grid.
+  const derivedLevel = useMemo(() => {
+    if (!parentId) return 0;
+    const p = parentOptions.find((o) => o.id === parentId);
+    return p ? (p.level || 0) + 1 : 0;
+  }, [parentId, parentOptions]);
 
   // Load semua kode saat pertama buka
   useEffect(() => {
@@ -162,18 +204,24 @@ function MasterPicker({ facilityId, onAdd, onBack }) {
     if (!selected) return;
     const vol = parseFloat(volume) || 0;
     const up  = parseFloat(unitPrice) || 0;
+    const parent = parentOptions.find((o) => o.id === parentId);
+    const fullCode = parent
+      ? `${parent.full_code}.${selected.code}`
+      : selected.code;
     onAdd({
       facility_id:       facilityId,
+      parent_id:         parentId || null,
       master_work_code:  selected.code,
       original_code:     selected.code,
+      full_code:         fullCode,
       description:       selected.description,
       unit:              selected.default_unit || "",
       volume:            vol,
       unit_price:        up,
       total_price:       vol * up,
-      level:             level,
+      level:             derivedLevel,
       display_order:     0,
-      is_leaf:           true,
+      is_leaf:           true,  // backend _recompute_is_leaf akan flip kalau ada child
       _new:              true,
       id:                `new-${Date.now()}`,
     });
@@ -284,17 +332,20 @@ function MasterPicker({ facilityId, onAdd, onBack }) {
               </div>
 
               <div>
-                <label className="label text-xs">Level Hierarki</label>
+                <label className="label text-xs">Parent (Hierarki)</label>
                 <select
                   className="select text-sm"
-                  value={level}
-                  onChange={(e) => setLevel(parseInt(e.target.value))}
+                  value={parentId}
+                  onChange={(e) => setParentId(e.target.value)}
                 >
-                  <option value={0}>0 — Judul Utama</option>
-                  <option value={1}>1 — Sub Judul</option>
-                  <option value={2}>2 — Item Pekerjaan</option>
-                  <option value={3}>3 — Sub Item</option>
+                  <option value="">— Root (level 0) —</option>
+                  {parentOptions.map((p) => (
+                    <option key={p.id} value={p.id}>{p.label}</option>
+                  ))}
                 </select>
+                <p className="text-[10px] text-ink-500 mt-0.5">
+                  Level auto: <b>{derivedLevel}</b> {parentId ? "(anak dari parent)" : "(top-level)"}
+                </p>
               </div>
 
               <div>
@@ -349,13 +400,13 @@ function MasterPicker({ facilityId, onAdd, onBack }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Manual form — input bebas
 // ─────────────────────────────────────────────────────────────────────────────
-function ManualForm({ facilityId, onAdd, onBack }) {
+function ManualForm({ facilityId, parentOptions, onAdd, onBack }) {
   const [form, setForm] = useState({
     description: "",
     unit: "",
     volume: "",
     unit_price: "",
-    level: 2,
+    parent_id: "",
     original_code: "",
   });
 
@@ -363,18 +414,32 @@ function ManualForm({ facilityId, onAdd, onBack }) {
   const vol = parseFloat(form.volume) || 0;
   const up  = parseFloat(form.unit_price) || 0;
 
+  // Level auto-derive dari parent
+  const derivedLevel = useMemo(() => {
+    if (!form.parent_id) return 0;
+    const p = parentOptions.find((o) => o.id === form.parent_id);
+    return p ? (p.level || 0) + 1 : 0;
+  }, [form.parent_id, parentOptions]);
+
   const confirm = () => {
     if (!form.description.trim()) return;
+    const code = form.original_code.trim() || null;
+    const parent = parentOptions.find((o) => o.id === form.parent_id);
+    const fullCode = parent && code
+      ? `${parent.full_code}.${code}`
+      : code || "";
     onAdd({
       facility_id:      facilityId,
+      parent_id:        form.parent_id || null,
       master_work_code: null,  // custom item — tidak punya kode master
-      original_code:    form.original_code.trim() || null,
+      original_code:    code,
+      full_code:        fullCode,
       description:      form.description.trim(),
       unit:             form.unit.trim(),
       volume:           vol,
       unit_price:       up,
       total_price:      vol * up,
-      level:            form.level,
+      level:            derivedLevel,
       display_order:    0,
       is_leaf:          true,
       _new:             true,
@@ -410,23 +475,25 @@ function ManualForm({ facilityId, onAdd, onBack }) {
           <label className="label">Kode (opsional)</label>
           <input
             className="input font-mono"
-            placeholder="misal: A.1.c"
+            placeholder="misal: A, 1, a"
             value={form.original_code}
             onChange={(e) => set("original_code", e.target.value)}
           />
+          <p className="text-[10px] text-ink-500 mt-0.5">Kosong = auto-generate R{`{n}`}</p>
         </div>
         <div>
-          <label className="label">Level Hierarki</label>
+          <label className="label">Parent (Hierarki)</label>
           <select
             className="select"
-            value={form.level}
-            onChange={(e) => set("level", parseInt(e.target.value))}
+            value={form.parent_id}
+            onChange={(e) => set("parent_id", e.target.value)}
           >
-            <option value={0}>0 — Judul Utama</option>
-            <option value={1}>1 — Sub Judul</option>
-            <option value={2}>2 — Item Pekerjaan</option>
-            <option value={3}>3 — Sub Item</option>
+            <option value="">— Root (level 0) —</option>
+            {parentOptions.map((p) => (
+              <option key={p.id} value={p.id}>{p.label}</option>
+            ))}
           </select>
+          <p className="text-[10px] text-ink-500 mt-0.5">Level auto: <b>{derivedLevel}</b></p>
         </div>
       </div>
 

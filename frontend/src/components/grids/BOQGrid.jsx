@@ -252,13 +252,8 @@ function ParentPickerPopover({ open, anchorRect, rowNode, rows, onClose }) {
   const [query, setQuery] = useState("");
   const [activeIdx, setActiveIdx] = useState(0);
   const inputRef = useRef(null);
-
-  useEffect(() => {
-    if (!open) return;
-    setQuery("");
-    setActiveIdx(0);
-    setTimeout(() => inputRef.current?.focus(), 10);
-  }, [open]);
+  const listRef = useRef(null);
+  const itemRefs = useRef({});
 
   // Daftar parent kandidat: SEMUA item lain di facility (kecuali baris ini),
   // sort by full_code untuk hirarki visual.
@@ -268,6 +263,28 @@ function ParentPickerPopover({ open, anchorRect, rowNode, rows, onClose }) {
       .filter((r) => r.id !== own && (r.description || r.original_code))
       .sort((a, b) => (a.full_code || "").localeCompare(b.full_code || ""));
   }, [rows, rowNode]);
+
+  // Saat open: focus input, dan set activeIdx + scroll ke parent yang
+  // sudah dipilih (kalau ada). Kalau belum ada, default ke index 0 (root).
+  useEffect(() => {
+    if (!open) return;
+    setQuery("");
+    const currentParentId = rowNode?.data?.parent_id;
+    let targetIdx = 0;  // 0 = "(root)"
+    if (currentParentId) {
+      const idx = candidates.findIndex((c) => c.id === currentParentId);
+      if (idx >= 0) targetIdx = idx + 1; // +1 karena root di index 0
+    }
+    setActiveIdx(targetIdx);
+    setTimeout(() => {
+      inputRef.current?.focus();
+      // Scroll ke item aktif setelah popover render
+      const el = itemRefs.current[targetIdx];
+      if (el && el.scrollIntoView) {
+        el.scrollIntoView({ block: "center", behavior: "auto" });
+      }
+    }, 30);
+  }, [open, candidates, rowNode]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const filtered = useMemo(() => {
     const q = (query || "").trim().toLowerCase();
@@ -281,6 +298,15 @@ function ParentPickerPopover({ open, anchorRect, rowNode, rows, onClose }) {
 
   const total = filtered.length + 1; // +1 for "(root)" option
   const isRootActive = activeIdx === 0;
+
+  // Scroll active item ke view setiap kali activeIdx berubah (keyboard nav)
+  useEffect(() => {
+    if (!open) return;
+    const el = itemRefs.current[activeIdx];
+    if (el && el.scrollIntoView) {
+      el.scrollIntoView({ block: "nearest", behavior: "auto" });
+    }
+  }, [activeIdx, open]);
 
   const select = (parentId) => {
     if (rowNode) {
@@ -336,9 +362,10 @@ function ParentPickerPopover({ open, anchorRect, rowNode, rows, onClose }) {
           }}
         />
       </div>
-      <div style={{ maxHeight: 280, overflowY: "auto" }}>
+      <div ref={listRef} style={{ maxHeight: 280, overflowY: "auto" }}>
         <button
           type="button"
+          ref={(el) => { itemRefs.current[0] = el; }}
           onClick={() => select(null)}
           onKeyDown={onKeyDown}
           style={{
@@ -346,9 +373,11 @@ function ParentPickerPopover({ open, anchorRect, rowNode, rows, onClose }) {
             padding: "6px 10px", fontSize: 11, fontStyle: "italic",
             background: isRootActive ? "#dbeafe" : "transparent",
             color: "#475569", border: "none", cursor: "pointer",
+            fontWeight: !rowNode?.data?.parent_id ? 600 : 400,
           }}
         >
-          — (root) tanpa parent —
+          — (root) tanpa parent —{" "}
+          {!rowNode?.data?.parent_id && <span style={{ color: "#1e3a8a" }}>← saat ini</span>}
         </button>
         {filtered.length === 0 ? (
           <p style={{ padding: 12, fontSize: 11, color: "#94a3b8", fontStyle: "italic" }}>
@@ -356,21 +385,25 @@ function ParentPickerPopover({ open, anchorRect, rowNode, rows, onClose }) {
           </p>
         ) : filtered.slice(0, 200).map((c, i) => {
           const active = activeIdx === i + 1;
+          const isCurrent = rowNode?.data?.parent_id === c.id;
           return (
             <button
               key={c.id}
               type="button"
+              ref={(el) => { itemRefs.current[i + 1] = el; }}
               onClick={() => select(c.id)}
               style={{
                 display: "block", width: "100%", textAlign: "left",
                 padding: "6px 10px", fontSize: 11, fontFamily: "monospace",
-                background: active ? "#dbeafe" : "transparent",
+                background: active ? "#dbeafe" : isCurrent ? "#fef3c7" : "transparent",
+                fontWeight: isCurrent ? 600 : 400,
                 border: "none", cursor: "pointer", whiteSpace: "nowrap",
                 overflow: "hidden", textOverflow: "ellipsis",
               }}
             >
               <span style={{ paddingLeft: (c.level || 0) * 12 }}>
                 {c.full_code || c.original_code || "?"} — {(c.description || "").slice(0, 50)}
+                {isCurrent && <span style={{ color: "#92400e" }}>  ← saat ini</span>}
               </span>
             </button>
           );
