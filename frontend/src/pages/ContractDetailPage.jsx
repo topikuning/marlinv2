@@ -216,35 +216,59 @@ export default function ContractDetailPage() {
             const ppnAmount = boqTotal * (ppnPct / 100);
             const boqWithPpn = boqTotal + ppnAmount;
             const diff = boqWithPpn - contractValue;
-            // money: tuple [full, short] — full untuk lebar besar, short untuk mobile
+            const inSync = boqTotal > 0 && Math.abs(diff) < 0.01;
+            const exceeds = boqTotal > 0 && diff > 0.01; // BOQ+PPN > kontrak
             const money = (n) => [fmtCurrency(n, false), fmtCurrency(n, true)];
-            const boqHint = boqTotal > 0 && Math.abs(diff) >= 0.01
-              ? `+ PPN ${fmtCurrency(ppnAmount)} = ${fmtCurrency(boqWithPpn)} (Δ ${fmtCurrency(diff)})`
-              : boqTotal > 0
-                ? `+ PPN ${fmtCurrency(ppnAmount)} = ${fmtCurrency(boqWithPpn)} ✓`
-                : null;
+            // Hint Total BOQ
+            const boqHint = boqTotal > 0
+              ? exceeds
+                ? `+ PPN ${fmtCurrency(ppnAmount)} = ${fmtCurrency(boqWithPpn)} MELEBIHI Nilai Kontrak (Δ +${fmtCurrency(diff)})`
+                : inSync
+                  ? `+ PPN ${fmtCurrency(ppnAmount)} = ${fmtCurrency(boqWithPpn)} ✓ sinkron`
+                  : `+ PPN ${fmtCurrency(ppnAmount)} = ${fmtCurrency(boqWithPpn)} (buffer ${fmtCurrency(-diff)})`
+              : null;
+            // Hint Nilai Kontrak — tampilkan status sinkron juga
+            const contractHint = boqTotal > 0
+              ? exceeds
+                ? `≠ BOQ+PPN — BOQ ${fmtCurrency(boqTotal)} + PPN ${ppnPct}% melebihi`
+                : inSync
+                  ? `Sudah termasuk PPN ${ppnPct}% ✓ sinkron dgn BOQ`
+                  : `Sudah termasuk PPN ${ppnPct}%`
+              : `Sudah termasuk PPN ${ppnPct}%`;
             return [
-              ["Nilai Kontrak", money(contractValue), `Sudah termasuk PPN ${ppnPct}%`],
-              ["Total BOQ", money(boqTotal), boqHint],
-              ["PPN", [`${ppnPct}% · ${fmtCurrency(ppnAmount, false)}`, `${ppnPct}% · ${fmtCurrency(ppnAmount, true)}`], "Pajak Pertambahan Nilai"],
-              ["Perusahaan", contract.company_name, null],
-              ["PPK", contract.ppk_name, null],
-              ["Konsultan", contract.konsultan_name || "—", null],
-              ["Durasi", `${contract.duration_days} hari`, null],
-              ["Mulai", fmtDate(contract.start_date), null],
-              ["Selesai", fmtDate(contract.end_date), null],
-              ["Tahun Anggaran", contract.fiscal_year, null],
-              ["Lokasi", `${contract.locations?.length || 0}`, null],
+              ["Nilai Kontrak", money(contractValue), contractHint, exceeds ? "exceed" : inSync ? "ok" : "neutral"],
+              ["Total BOQ", money(boqTotal), boqHint, exceeds ? "exceed" : inSync ? "ok" : "neutral"],
+              ["PPN", [`${ppnPct}% · ${fmtCurrency(ppnAmount, false)}`, `${ppnPct}% · ${fmtCurrency(ppnAmount, true)}`], "Pajak Pertambahan Nilai", "neutral"],
+              ["Perusahaan", contract.company_name, null, null],
+              ["PPK", contract.ppk_name, null, null],
+              ["Konsultan", contract.konsultan_name || "—", null, null],
+              ["Durasi", `${contract.duration_days} hari`, null, null],
+              ["Mulai", fmtDate(contract.start_date), null, null],
+              ["Selesai", fmtDate(contract.end_date), null, null],
+              ["Tahun Anggaran", contract.fiscal_year, null, null],
+              ["Lokasi", `${contract.locations?.length || 0}`, null, null],
             ];
-          })().map(([label, val, hint]) => {
+          })().map(([label, val, hint, state]) => {
             const isResponsive = Array.isArray(val);
+            const valColor =
+              state === "exceed" ? "text-red-700"
+              : state === "ok" ? "text-emerald-700"
+              : "text-ink-800";
+            const hintColor =
+              state === "exceed" ? "text-red-700 font-medium"
+              : state === "ok" ? "text-emerald-700"
+              : "text-amber-700";
+            const hintIcon =
+              state === "exceed" ? "⚠"
+              : state === "ok" ? "✓"
+              : "⚠";
             return (
               <div key={label}>
                 <p className="text-[10px] uppercase tracking-wider text-ink-400 font-medium">
                   {label}
                 </p>
                 <p
-                  className="text-sm font-medium text-ink-800 mt-0.5 truncate"
+                  className={`text-sm font-medium ${valColor} mt-0.5 truncate`}
                   title={isResponsive ? val[0] : undefined}
                 >
                   {isResponsive ? (
@@ -255,8 +279,8 @@ export default function ContractDetailPage() {
                   ) : val}
                 </p>
                 {hint && (
-                  <p className="text-[10px] text-amber-700 mt-0.5 truncate" title={hint}>
-                    ⚠ {hint}
+                  <p className={`text-[10px] ${hintColor} mt-0.5 truncate`} title={hint}>
+                    {hintIcon} {hint}
                   </p>
                 )}
               </div>

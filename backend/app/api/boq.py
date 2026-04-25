@@ -776,14 +776,15 @@ async def import_excel(
 
         for cid in touched_contracts:
             recalculate_contract_weights(db, cid)
-            # Auto-sync nilai kontrak DRAFT: saat BOQ baru di-import ke
-            # V0 DRAFT, current_value kontrak ikut updated supaya Total BOQ
-            # di header kontrak sinkron. Untuk kontrak aktif (V0 sudah
-            # APPROVED), nilai kontrak tidak otomatis berubah — perubahan
-            # harus lewat Addendum resmi.
+            # Auto-sync nilai kontrak DRAFT: HANYA kalau original_value masih
+            # kosong (== 0). Kalau user sudah input nilai kontrak, JANGAN
+            # diubah otomatis karena user akan bingung dan kehilangan input.
+            # Plus: pakai PPN factor — Nilai Kontrak konvensi POST-PPN
+            # (= BOQ + (BOQ × ppn%)).
             from app.models.models import BOQRevision, RevisionStatus, ContractStatus
+            from decimal import Decimal as _Dec
             c = db.query(Contract).filter(Contract.id == cid).first()
-            if c and c.status == ContractStatus.DRAFT:
+            if c and c.status == ContractStatus.DRAFT and float(c.original_value or 0) < 0.01:
                 working_rev = (
                     db.query(BOQRevision)
                     .filter(
@@ -794,8 +795,10 @@ async def import_excel(
                     .first()
                 )
                 if working_rev and working_rev.total_value:
-                    c.original_value = working_rev.total_value
-                    c.current_value = working_rev.total_value
+                    ppn_factor = _Dec("1") + (c.ppn_pct or _Dec("0")) / _Dec("100")
+                    value_with_ppn = working_rev.total_value * ppn_factor
+                    c.original_value = value_with_ppn
+                    c.current_value = value_with_ppn
 
         db.commit()
         result.success = True
