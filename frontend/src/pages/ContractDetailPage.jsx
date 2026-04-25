@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { useParams, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
@@ -2517,36 +2518,81 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
 function ParentPicker({ options, value, onChange }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const ref = useRef(null);
+  const [pos, setPos] = useState(null); // {top, left, width}
+  const btnRef = useRef(null);
+  const popRef = useRef(null);
   const selected = options.find((o) => o.id === value);
 
+  // Posisi popover dihitung dari button rect (viewport-aware) supaya tidak
+  // pernah keluar batas viewport.
+  const computePos = () => {
+    const r = btnRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const PANEL_W = 380;
+    const PANEL_H = 320;
+    let left = r.left;
+    if (left + PANEL_W > window.innerWidth - 8) {
+      left = Math.max(8, window.innerWidth - PANEL_W - 8);
+    }
+    let top = r.bottom + 4;
+    if (top + PANEL_H > window.innerHeight - 8) {
+      top = Math.max(8, r.top - PANEL_H - 4);
+    }
+    setPos({ top, left, width: PANEL_W });
+  };
+
   useEffect(() => {
+    if (!open) return;
+    computePos();
+    const onScroll = () => computePos();
     const onDocClick = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+      if (
+        btnRef.current && !btnRef.current.contains(e.target) &&
+        popRef.current && !popRef.current.contains(e.target)
+      ) setOpen(false);
     };
     document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, []);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, [open]);
 
   const filtered = !search.trim() ? options : options.filter((o) =>
     (o.label || "").toLowerCase().includes(search.toLowerCase())
   );
 
   return (
-    <div ref={ref} className="relative mt-1 w-full">
+    <>
       <button
+        ref={btnRef}
         type="button"
-        className="input py-0.5 text-[10px] text-left w-full flex items-center justify-between gap-1"
+        className="input py-0.5 text-[10px] text-left w-full mt-1 flex items-center justify-between gap-1"
         onClick={() => setOpen((v) => !v)}
-        title="Pilih parent — kosong = root"
       >
         <span className="truncate flex-1">
           {selected ? selected.label : <span className="text-ink-400">— Root (tanpa parent) —</span>}
         </span>
         <span className="text-ink-400">▾</span>
       </button>
-      {open && (
-        <div className="absolute z-30 mt-1 w-[420px] max-w-[80vw] right-0 bg-white border border-ink-300 rounded shadow-lg">
+      {open && pos && createPortal(
+        <div
+          ref={popRef}
+          style={{
+            position: "fixed",
+            top: pos.top,
+            left: pos.left,
+            width: pos.width,
+            zIndex: 1000,
+            background: "white",
+            border: "1px solid #cbd5e1",
+            borderRadius: 8,
+            boxShadow: "0 10px 30px rgba(15,23,42,0.18)",
+          }}
+        >
           <div className="p-1.5 border-b border-ink-100">
             <input
               type="text"
@@ -2557,7 +2603,7 @@ function ParentPicker({ options, value, onChange }) {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <div className="max-h-60 overflow-y-auto">
+          <div className="max-h-72 overflow-y-auto">
             <button
               type="button"
               className={`w-full text-left px-2 py-1 text-[11px] italic hover:bg-brand-50 ${!value ? "bg-brand-100 font-semibold" : "text-ink-500"}`}
@@ -2585,9 +2631,10 @@ function ParentPicker({ options, value, onChange }) {
               </p>
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
-    </div>
+    </>
   );
 }
 
