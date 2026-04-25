@@ -28,6 +28,7 @@ from app.models.models import (
 
 
 HEADERS = [
+    "boq_item_id",  # PRIMARY MATCHING KEY — jangan diubah/dihapus
     "facility_code", "facility_name",
     "code", "parent_code",
     "description", "unit",
@@ -87,6 +88,26 @@ def _pending_for_item(
         sign = "+" if d >= 0 else ""
         notes.append(f"{vo.vo_number}: {sign}{d} {vi.unit or ''}")
     return total_vol, total_cost, notes
+
+
+def _pending_remove_facility(
+    db: Session, facility_id, exclude_vo_id=None
+) -> List[VariationOrder]:
+    """List VO APPROVED-unbundled yg menandai REMOVE_FACILITY untuk facility ini."""
+    q = (
+        db.query(VariationOrder)
+        .join(VariationOrderItem, VariationOrder.id == VariationOrderItem.variation_order_id)
+        .filter(
+            VariationOrderItem.facility_id == facility_id,
+            VariationOrderItem.action == VOItemAction.REMOVE_FACILITY,
+            VariationOrder.status == VOStatus.APPROVED,
+            VariationOrder.bundled_addendum_id.is_(None),
+        )
+        .distinct()
+    )
+    if exclude_vo_id:
+        q = q.filter(VariationOrder.id != exclude_vo_id)
+    return q.all()
 
 
 def export_snapshot(
@@ -159,22 +180,46 @@ def export_snapshot(
         # Map id → original_code untuk parent_code lookup
         code_by_id: Dict[str, str] = {str(it.id): (it.original_code or "") for it in items}
 
+        # Cek apakah ada VO APPROVED-pending yang HILANGKAN seluruh fasilitas ini.
+        # Kalau ya, semua item di fasilitas akan jadi 0 saat bundle → vol_pending
+        # per item = -vol_awal, nilai_pending = -total_price, plus catatan tegas.
+        fac_remove_vos = _pending_remove_facility(db, fac.id, exclude_vo_id=exclude_vo_id)
+        fac_remove_note = (
+            "; ".join([f"{vo.vo_number}: HILANGKAN FASILITAS" for vo in fac_remove_vos])
+            if fac_remove_vos else ""
+        )
+
         for it in items:
+            parent_code_str = code_by_id.get(str(it.parent_id), "") if it.parent_id else ""
             if not it.is_leaf:
                 # Group rows: tampilkan untuk konteks tapi vol_baru kosong
                 ws.append([
+                    str(it.id),
                     fac.facility_code, fac.facility_name,
-                    it.original_code or "", code_by_id.get(str(it.parent_id), "") if it.parent_id else "",
+                    it.original_code or "", parent_code_str,
                     it.description, it.unit or "",
                     "", "", "", "", "",
-                    "", "(group/parent — vol_baru kosong)",
+                    "", fac_remove_note or "(group/parent — vol_baru kosong)",
                 ])
                 continue
 
             vol_awal = Decimal(it.volume or 0)
             unit_price = Decimal(it.unit_price or 0)
-            sum_vol, sum_cost, notes = _pending_for_item(db, it.id, exclude_vo_id=exclude_vo_id)
-            vol_efektif = vol_awal + sum_vol
+            total_price = Decimal(it.total_price or 0)
+            sum_vol, sum_cost, notes_item = _pending_for_item(db, it.id, exclude_vo_id=exclude_vo_id)
+
+            # Kalau ada REMOVE_FACILITY pending, override perhitungan pending:
+            # item akan habis → vol_pending = -vol_awal, nilai = -total_price.
+            if fac_remove_vos:
+                pending_vol = -vol_awal
+                pending_cost = -total_price
+                combined_notes = "; ".join([fac_remove_note] + notes_item)
+            else:
+                pending_vol = sum_vol
+                pending_cost = sum_cost
+                combined_notes = "; ".join(notes_item) if notes_item else ""
+
+            vol_efektif = vol_awal + pending_vol
 
             # Pre-fill vol_baru: kalau VO yang sedang di-edit punya item ini,
             # hitung vol_baru = vol_efektif + delta_VO_ini. Kalau tidak, default
@@ -187,21 +232,27 @@ def export_snapshot(
                 vol_baru = vol_efektif
 
             ws.append([
+                str(it.id),
                 fac.facility_code, fac.facility_name,
                 it.original_code or "",
-                code_by_id.get(str(it.parent_id), "") if it.parent_id else "",
+                parent_code_str,
                 it.description, it.unit or "",
                 float(vol_awal),
-                float(sum_vol),
-                float(sum_cost),
+                float(pending_vol),
+                float(pending_cost),
                 float(vol_efektif),
                 float(vol_baru),
                 float(unit_price),
-                "; ".join(notes) if notes else "",
+                combined_notes,
             ])
 
-    # Auto width
+    # Auto width — hide kolom A (boq_item_id) supaya user tidak ubah
+    ws.column_dimensions["A"].hidden = True
+    ws.column_dimensions["A"].width = 0
     for col in ws.columns:
+        col_letter = col[0].column_letter
+        if col_letter == "A":
+            continue
         max_len = 8
         for cell in col:
             if cell.value is None:
@@ -209,7 +260,7 @@ def export_snapshot(
             v = str(cell.value)
             if len(v) > max_len:
                 max_len = min(len(v), 60)
-        ws.column_dimensions[col[0].column_letter].width = max_len + 2
+        ws.column_dimensions[col_letter].width = max_len + 2
 
     # Petunjuk sheet
     ws2 = wb.create_sheet("Petunjuk")
@@ -222,6 +273,9 @@ def export_snapshot(
         "otomatis saat upload kembali.",
         "",
         "KOLOM:",
+        "- boq_item_id (HIDDEN, kolom A): kunci matching ke item BOQ existing.",
+        "  JANGAN diubah/dihapus/edit. Kalau hilang, sistem tidak bisa match",
+        "  dan akan menganggap row sebagai item baru (ADD).",
         "- facility_code, facility_name, code, parent_code, description, unit: identifier (read-only)",
         "- vol_awal: volume di revisi aktif kontrak (read-only)",
         "- vol_pending_vo_lain: total Δ volume dari VO APPROVED lain yang menyentuh item ini",
@@ -281,13 +335,24 @@ def parse_snapshot(
 
     df = pd.read_excel(io.BytesIO(file_bytes), sheet_name=0, header=0, dtype=object)
     cols = [str(c).strip().lower() for c in df.columns]
-    required = ["facility_code", "code", "vol_baru"]
+    required = ["facility_code", "vol_baru"]
     missing = [c for c in required if c not in cols]
     if missing:
         return {"items": [], "warnings": [], "errors": [f"Kolom wajib hilang: {', '.join(missing)}"]}
+    has_uuid_col = "boq_item_id" in cols
+    if not has_uuid_col:
+        return {
+            "items": [], "warnings": [],
+            "errors": [
+                "Kolom 'boq_item_id' tidak ada. File ini bukan dari Export Excel "
+                "yang baru — sistem tidak bisa match ke item BOQ existing. "
+                "Download Snapshot baru dan edit ulang."
+            ],
+        }
 
-    # Index BOQItem per (facility_code, code)
+    # Index BOQItem per UUID dan per (facility_code, code) sebagai fallback.
     fac_index: Dict[str, Facility] = {}
+    fac_by_id: Dict[str, Facility] = {}
     for fac, loc in (
         db.query(Facility, Location)
         .join(Location, Facility.location_id == Location.id)
@@ -295,8 +360,10 @@ def parse_snapshot(
         .all()
     ):
         fac_index[fac.facility_code] = fac
+        fac_by_id[str(fac.id)] = fac
 
-    boq_index: Dict[Tuple[str, str], BOQItem] = {}
+    boq_by_uuid: Dict[str, BOQItem] = {}
+    boq_by_code: Dict[Tuple[str, str], BOQItem] = {}
     for it in (
         db.query(BOQItem)
         .filter(
@@ -305,9 +372,10 @@ def parse_snapshot(
         )
         .all()
     ):
-        fac = next((f for f in fac_index.values() if str(f.id) == str(it.facility_id)), None)
+        boq_by_uuid[str(it.id)] = it
+        fac = fac_by_id.get(str(it.facility_id))
         if fac and it.original_code:
-            boq_index[(fac.facility_code, str(it.original_code).strip())] = it
+            boq_by_code[(fac.facility_code, str(it.original_code).strip())] = it
 
     items_out: List[Dict] = []
     warnings: List[str] = []
@@ -318,6 +386,7 @@ def parse_snapshot(
         rec = {cols[i]: row.iloc[i] for i in range(len(cols))}
         fac_code = _safe_str(rec.get("facility_code"))
         code = _safe_str(rec.get("code"))
+        uuid_str = _safe_str(rec.get("boq_item_id"))
         if not fac_code:
             continue
         facility_codes_in_file.add(fac_code)
@@ -345,8 +414,19 @@ def parse_snapshot(
         description = _safe_str(rec.get("description"))
         parent_code = _safe_str(rec.get("parent_code"))
 
-        if not code:
-            # ADD — item baru
+        # MATCHING STRATEGY:
+        #   1. boq_item_id (UUID) — primary, deterministic
+        #   2. Fallback: (facility_code, code) untuk row yang user tambahkan
+        #      manual atau row hasil ADD lama
+        #   3. Tidak ada match → ADD baru
+        boq_item = None
+        if uuid_str:
+            boq_item = boq_by_uuid.get(uuid_str)
+        if not boq_item and code:
+            boq_item = boq_by_code.get((fac_code, code))
+
+        if not boq_item:
+            # ADD — item baru (UUID kosong DAN code tidak match item existing)
             if vol_baru <= 0:
                 continue  # skip empty add row
             if not description:
@@ -358,7 +438,7 @@ def parse_snapshot(
             # Parent lookup (kalau parent_code diisi)
             parent_boq_id = None
             if parent_code:
-                parent_item = boq_index.get((fac_code, parent_code))
+                parent_item = boq_by_code.get((fac_code, parent_code))
                 if parent_item:
                     parent_boq_id = str(parent_item.id)
                 else:
@@ -376,12 +456,6 @@ def parse_snapshot(
                 "volume_delta": vol_baru,
                 "unit_price": unit_price,
             })
-            continue
-
-        # Existing item — INCREASE/DECREASE/REMOVE
-        boq_item = boq_index.get((fac_code, code))
-        if not boq_item:
-            errors.append(f"Baris {idx+2}: code '{code}' tidak ditemukan di facility {fac_code}.")
             continue
 
         # Snapshot vol_efektif from Excel column (preferred) — fallback recompute
