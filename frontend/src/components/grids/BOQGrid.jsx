@@ -546,15 +546,6 @@ export default function BOQGrid({
       cellRenderer: MasterCodeRenderer,
     },
     {
-      headerName: "Lvl",
-      field: "level",
-      width: 62,
-      editable: canEdit,
-      cellEditor: "agSelectCellEditor",
-      cellEditorParams: { values: [0, 1, 2, 3] },
-      cellStyle: { fontFamily: "monospace", color: "#64748b", fontSize: 12 },
-    },
-    {
       headerName: "Parent",
       field: "parent_id",
       width: 180,
@@ -655,9 +646,22 @@ export default function BOQGrid({
       type: "numericColumn",
       valueGetter: (p) => computeTotal(p.data),
       valueFormatter: (p) => fmtNum(p.value, 0),
-      cellStyle: {
-        fontWeight: 600, backgroundColor: "#f8fafc", color: "#0f172a",
+      // Parent row (is_leaf=false): total parent TIDAK dihitung ke
+      // Total BOQ — strikethrough + warna abu supaya user sadar.
+      // Tooltip menjelaskan kenapa.
+      cellStyle: (p) => {
+        const isParent = p.data?.is_leaf === false;
+        return {
+          fontWeight: 600,
+          backgroundColor: isParent ? "#f1f5f9" : "#f8fafc",
+          color: isParent ? "#94a3b8" : "#0f172a",
+          textDecoration: isParent ? "line-through" : "none",
+        };
       },
+      tooltipValueGetter: (p) =>
+        p.data?.is_leaf === false
+          ? "Parent row — tidak dihitung ke Total BOQ. Total dihitung dari sum sub-items (children)."
+          : null,
     },
     {
       headerName: "Bobot %",
@@ -796,9 +800,12 @@ export default function BOQGrid({
   // Sum leaf-only — non-leaf rows itu group/parent dengan total_price
   // mungkin placeholder atau aggregate, jangan dijumlah supaya tidak
   // double-count. Konsisten dengan facility.total_value & rev.total_value.
-  const total = rows
-    .filter((r) => r.is_leaf !== false)
-    .reduce((a, r) => a + computeTotal(r), 0);
+  const leafRows = rows.filter((r) => r.is_leaf !== false);
+  const parentRows = rows.filter((r) => r.is_leaf === false);
+  const total = leafRows.reduce((a, r) => a + computeTotal(r), 0);
+  // Parent rows yg punya total > 0 → flag potensial salah hirarki
+  const parentWithValue = parentRows.filter((r) => computeTotal(r) > 0);
+  const parentValueOrphan = parentWithValue.reduce((a, r) => a + computeTotal(r), 0);
   const masterCount = rows.filter((r) => r.master_work_code).length;
   const customCount = rows.filter((r) => !r.master_work_code && r.description).length;
 
@@ -823,7 +830,13 @@ export default function BOQGrid({
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="text-xs text-ink-500 flex items-center gap-3 flex-wrap">
           <span>
-            {rows.length} item ·{" "}
+            {rows.length} item ({leafRows.length} leaf
+            {parentRows.length > 0 && (
+              <span title="Parent rows tidak dihitung ke Total — hanya container untuk children">
+                {" + "}{parentRows.length} parent
+              </span>
+            )}
+            ) ·{" "}
             {selectedCount > 0 && (
               <span className="text-brand-600 font-medium">
                 {selectedCount} dipilih ·{" "}
@@ -831,6 +844,14 @@ export default function BOQGrid({
             )}
             Total <span className="font-semibold text-ink-800">{fmtNum(total)}</span>
           </span>
+          {parentValueOrphan > 0 && (
+            <span
+              className="text-[10px] px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200"
+              title={`${parentWithValue.length} parent row(s) punya total ${fmtNum(parentValueOrphan)} tapi tidak dihitung. Cek hirarki kalau ada item yang seharusnya leaf tapi salah ditandai parent.`}
+            >
+              ⚠ {fmtNum(parentValueOrphan)} dari {parentWithValue.length} parent tidak dihitung
+            </span>
+          )}
           <span className="flex items-center gap-1.5">
             {masterCount > 0 && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
