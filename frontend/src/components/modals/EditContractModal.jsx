@@ -278,7 +278,7 @@ export default function EditContractModal({ open, contract, onClose, onSuccess }
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
         <div className="md:col-span-2">
-          <label className="label">Nilai Kontrak (Rp) — pre-PPN *</label>
+          <label className="label">Nilai Kontrak (Rp) — sudah termasuk PPN *</label>
           <input
             type="number"
             className="input"

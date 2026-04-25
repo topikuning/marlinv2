@@ -891,28 +891,31 @@ def approve_revision(
     if not contract:
         raise HTTPException(404, "Kontrak tidak ditemukan")
 
-    # Konvensi: BOQItem disimpan PRE-PPN. Contract.current_value juga PRE-PPN
-    # (= total BOQ tanpa PPN). PPN (contract.ppn_pct) cuma INFORMASI tambahan
-    # untuk display & laporan, bukan mempengaruhi perhitungan validasi.
-    # Ini natural dengan mental model user lapangan: nilai kontrak = total BOQ.
-    expected = float(contract.current_value or 0)
-    actual = float(rev.total_value or 0)
-    diff = round(actual - expected, 2)
-    # Aturan:
-    #   - BOQ > nilai kontrak: BLOCK (BOQ melampaui kewajiban kontrak)
-    #   - BOQ <= nilai kontrak: ALLOW (kontrak boleh punya buffer/contingency)
+    # Konvensi:
+    #   - BOQItem disimpan PRE-PPN (raw harga satuan)
+    #   - Contract.current_value POST-PPN (= BOQ × (1 + ppn_pct/100))
+    #   - Aturan validasi: BOQ × (1+PPN) ≤ Nilai Kontrak
+    #     Equivalen: BOQ + (BOQ × PPN%) ≤ Nilai Kontrak
+    ppn_pct = float(contract.ppn_pct or 0)
+    ppn_factor = 1.0 + (ppn_pct / 100.0)
+    contract_value = float(contract.current_value or 0)
+    boq_pre = float(rev.total_value or 0)
+    boq_with_ppn = boq_pre * ppn_factor
+    diff = round(boq_with_ppn - contract_value, 2)
     if diff > 0.01:
         raise HTTPException(
             409,
             {
                 "message": (
-                    f"Total BOQ revisi {rev.revision_code} ({actual:,.2f}) MELEBIHI "
-                    f"nilai kontrak ({expected:,.2f}). Selisih +{diff:,.2f}. "
+                    f"BOQ + PPN {ppn_pct:.0f}% ({boq_with_ppn:,.2f}) MELEBIHI "
+                    f"Nilai Kontrak ({contract_value:,.2f}). Selisih +{diff:,.2f}. "
                     f"Kurangi item BOQ atau naikkan nilai kontrak pada Addendum."
                 ),
                 "code": "revision_value_exceeds_contract",
-                "contract_value": expected,
-                "boq_total": actual,
+                "contract_value": contract_value,
+                "boq_pre_ppn": boq_pre,
+                "boq_with_ppn": boq_with_ppn,
+                "ppn_pct": ppn_pct,
                 "diff": diff,
                 "revision_code": rev.revision_code,
             },

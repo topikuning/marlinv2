@@ -309,7 +309,7 @@ function CreateContractModal({ open, onClose, onSuccess }) {
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="md:col-span-2">
-            <label className="label">Nilai Kontrak (Rp) — pre-PPN *</label>
+            <label className="label">Nilai Kontrak (Rp) — sudah termasuk PPN *</label>
             <input
               type="number"
               className="input"
@@ -318,14 +318,15 @@ function CreateContractModal({ open, onClose, onSuccess }) {
               required
             />
             {form.original_value && form.ppn_pct && (() => {
-              const value = parseFloat(form.original_value) || 0;
+              const total = parseFloat(form.original_value) || 0;
               const ppn = parseFloat(form.ppn_pct) || 0;
-              const ppnAmount = value * (ppn / 100);
-              const totalWithPpn = value + ppnAmount;
+              const factor = 1 + ppn / 100;
+              const boqMax = factor > 0 ? total / factor : total;
+              const ppnAmount = total - boqMax;
               return (
                 <p className="text-[11px] text-ink-500 mt-1">
-                  Termasuk PPN {ppn}%: {totalWithPpn.toLocaleString("id-ID", { maximumFractionDigits: 0 })}
-                  {" "}(PPN: {ppnAmount.toLocaleString("id-ID", { maximumFractionDigits: 0 })})
+                  Breakdown: BOQ pre-PPN = {boqMax.toLocaleString("id-ID", { maximumFractionDigits: 0 })} +
+                  PPN {ppn}% ({ppnAmount.toLocaleString("id-ID", { maximumFractionDigits: 0 })})
                 </p>
               );
             })()}

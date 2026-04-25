@@ -822,10 +822,13 @@ def run():
             rev.item_count  = len(contract_all_items)
             total_boq += len(contract_all_items)
 
-            # Konvensi: contract.current_value = pre-PPN (= total BOQ).
-            # PPN cuma info display, tidak masuk ke nilai kontrak.
-            contract.original_value = leaf_total.quantize(Decimal("0.01"))
-            contract.current_value = leaf_total.quantize(Decimal("0.01"))
+            # Konvensi: Nilai Kontrak = POST-PPN = BOQ + (BOQ × ppn%)
+            # = BOQ × (1 + ppn/100). Dipertahankan konsisten supaya
+            # approve revisi langsung sinkron.
+            ppn_factor = Decimal("1") + (contract.ppn_pct or Decimal("0")) / Decimal("100")
+            value_with_ppn = (leaf_total * ppn_factor).quantize(Decimal("0.01"))
+            contract.original_value = value_with_ppn
+            contract.current_value = value_with_ppn
 
             db.flush()
 
