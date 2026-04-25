@@ -369,6 +369,32 @@ export default function BOQGrid({
       cellStyle: { fontFamily: "monospace", color: "#64748b", fontSize: 12 },
     },
     {
+      headerName: "Parent",
+      field: "parent_id",
+      width: 180,
+      editable: canEdit,
+      // cellEditor agSelectCellEditor membutuhkan list values setiap render.
+      // Daftar parent: SEMUA item lain di facility (kecuali baris ini).
+      cellEditor: "agSelectCellEditor",
+      cellEditorParams: (p) => {
+        const choices = (rows || []).filter((r) => r.id !== p.data?.id);
+        return {
+          values: ["", ...choices.map((r) => r.id)],
+          valueListMaxHeight: 320,
+        };
+      },
+      // Tampilkan label Parent (kode + uraian truncated) bukan UUID
+      valueFormatter: (p) => {
+        if (!p.value) return "(root)";
+        const parent = (rows || []).find((r) => r.id === p.value);
+        if (!parent) return "(invalid)";
+        const code = parent.full_code || parent.original_code || "";
+        const desc = (parent.description || "").slice(0, 30);
+        return `${code} — ${desc}`;
+      },
+      cellStyle: { fontSize: 11, color: "#475569", fontFamily: "monospace" },
+    },
+    {
       headerName: "Kode Item",
       field: "original_code",
       width: 92,
@@ -385,16 +411,24 @@ export default function BOQGrid({
       editable: false,
       cellStyle: (p) => {
         const empty = canEdit && !p.data?.description;
+        const lvl = p.data?.level ?? 0;
+        const isParent = p.data?.is_leaf === false;
         return {
-          fontWeight: (p.data?.level ?? 0) <= 1 ? 600 : 400,
-          paddingLeft: `${8 + (p.data?.level ?? 0) * 10}px`,
+          fontWeight: lvl <= 1 || isParent ? 700 : 400,
+          // Indent lebih tegas (20px per level) supaya hirarki kelihatan
+          paddingLeft: `${8 + lvl * 20}px`,
           cursor: canEdit ? "pointer" : "default",
-          color: empty ? "#94a3b8" : undefined,
+          color: empty ? "#94a3b8" : isParent ? "#1e3a8a" : undefined,
           fontStyle: empty ? "italic" : undefined,
+          backgroundColor: isParent ? "#eff6ff" : undefined,
         };
       },
+      // Prefix 📁 untuk parent rows supaya hirarki visible sekilas.
       // Placeholder visible bila description masih kosong.
-      valueFormatter: (p) => p.value || (canEdit ? "Klik untuk pilih…" : ""),
+      valueFormatter: (p) => {
+        if (!p.value) return canEdit ? "Klik untuk pilih…" : "";
+        return p.data?.is_leaf === false ? `📁 ${p.value}` : p.value;
+      },
     },
     {
       headerName: "Satuan",
@@ -507,7 +541,7 @@ export default function BOQGrid({
         await boqAPI.bulk(newRowsToCreate.map((r) => ({
           facility_id: facilityId,
           master_work_code: r.master_work_code || null,
-          parent_id: null,
+          parent_id: r.parent_id || null,
           original_code: r.original_code || null,
           level: parseInt(r.level) || 0,
           display_order: 0,
@@ -529,6 +563,8 @@ export default function BOQGrid({
           unit_price: parseFloat(r.unit_price) || 0,
           total_price: computeTotal(r),
           master_work_code: r.master_work_code || null,
+          parent_id: r.parent_id || null,
+          level: parseInt(r.level) || 0,
         });
         r._dirty = false;
       }

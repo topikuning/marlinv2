@@ -308,6 +308,8 @@ class BOQItemUpdate(BaseModel):
     total_price: Optional[Decimal] = None
     weight_pct: Optional[Decimal] = None
     master_work_code: Optional[str] = None
+    parent_id: Optional[UUID] = None
+    level: Optional[int] = None
     planned_start_week: Optional[int] = None
     planned_duration_weeks: Optional[int] = None
     is_active: Optional[bool] = None

@@ -2715,14 +2715,17 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false }) {
     });
   }, [sortedBoq, items, searchTerm]);
 
-  // Daftar non-leaf untuk dropdown Parent saat ADD
+  // Daftar untuk dropdown Parent saat ADD: SEMUA item di facility (bukan
+  // hanya non-leaf). Backend secara otomatis flip parent.is_leaf=False
+  // saat addendum di-bundle, jadi user bisa konversi item leaf jadi
+  // parent dengan menambah child di bawahnya.
   const parentOptions = useMemo(() =>
-    sortedBoq
-      .filter((b) => b.is_leaf === false)
-      .map((b) => ({
-        id: b.id,
-        label: `${"  ".repeat(b.level || 0)}${b.full_code || b.original_code || ""} — ${b.description}`,
-      })),
+    sortedBoq.map((b) => ({
+      id: b.id,
+      level: b.level || 0,
+      is_leaf: b.is_leaf !== false,
+      label: `${"··".repeat(b.level || 0)} ${b.full_code || b.original_code || ""} — ${b.description}`,
+    })),
     [sortedBoq]
   );
 

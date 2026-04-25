@@ -356,6 +356,7 @@ def bulk_create(
 
     from app.services import boq_revision_service
     for rev in set(touched_revisions.values()):
+        _recompute_is_leaf(db, rev.id)
         boq_revision_service.recalc_revision_totals(db, rev)
 
     for cid in touched_contracts:
@@ -423,11 +424,16 @@ def update_boq_item(
         db.add(version)
         item.version += 1
 
+    parent_changed = "parent_id" in data.model_dump(exclude_unset=True)
     for field, val in data.model_dump(exclude_none=True).items():
         if field not in ("addendum_id", "change_reason") and hasattr(item, field):
             setattr(item, field, val)
 
     db.flush()
+    if parent_changed and item.boq_revision_id:
+        # Re-derive is_leaf untuk seluruh revisi karena perpindahan parent_id
+        # bisa membuat parent lama jadi leaf atau parent baru jadi non-leaf.
+        _recompute_is_leaf(db, item.boq_revision_id)
     recalculate_facility_weights(db, str(item.facility_id))
     fac = db.query(Facility).filter(Facility.id == item.facility_id).first()
     if fac:
@@ -482,6 +488,27 @@ def delete_boq_item(
         request=request, commit=True,
     )
     return {"success": True, "cascaded_children": children_count}
+
+
+def _recompute_is_leaf(db: Session, revision_id) -> None:
+    """
+    Sweep semua item di revisi: item yang punya minimal 1 child (is_active=True)
+    di-set is_leaf=False, item tanpa child di-set is_leaf=True. Idempotent.
+
+    Penting karena import Excel & operasi struktural sering tidak menjaga
+    flag is_leaf dengan benar. Hirarki BOQ (level 0-3) hanya bekerja kalau
+    flag ini akurat — UI parent picker, cost rollup, dan VO grid semua
+    bergantung padanya.
+    """
+    items = db.query(BOQItem).filter(
+        BOQItem.boq_revision_id == revision_id
+    ).all()
+    parent_ids = {it.parent_id for it in items if it.parent_id is not None}
+    for it in items:
+        should_be_leaf = it.id not in parent_ids
+        if it.is_leaf != should_be_leaf:
+            it.is_leaf = should_be_leaf
+    db.flush()
 
 
 def _cascade_disable_children(db: Session, revision_id, parent_id) -> int:
@@ -689,6 +716,11 @@ async def import_excel(
                 db.flush()
                 parent_stack.append(new_item)
                 result.items_imported += 1
+
+            # Post-import sweep: item yang punya children → is_leaf=False.
+            # Penting karena import Excel tidak selalu memberi flag is_leaf
+            # eksplisit — kita simpulkan dari struktur parent_id.
+            _recompute_is_leaf(db, target_revision.id)
 
             recalculate_facility_weights(db, str(target_facility.id))
             touched_contracts.add(str(target_loc.contract_id))
