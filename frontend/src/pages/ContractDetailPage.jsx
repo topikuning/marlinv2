@@ -2382,6 +2382,7 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
             action: it.action,
             boq_item_id: it.boq_item_id || null,
             facility_id: it.facility_id || null,
+            parent_boq_item_id: it.parent_boq_item_id || null,
             master_work_code: it.master_work_code || null,
             description: it.description || "",
             unit: it.unit || "",
