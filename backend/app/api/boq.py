@@ -675,15 +675,24 @@ async def import_excel(
             )
 
             # Insert items; build hierarchy by level
+            # Map original_code → BOQItem yang baru di-create di facility ini.
+            # Dipakai untuk resolve parent_code eksplisit (kalau diisi user).
+            code_index: dict = {}
             parent_stack: List[BOQItem] = []  # indexed by level
             for order_idx, it in enumerate(fac_data["items"]):
                 lvl = int(it.get("level") or 0)
-                # find parent: last pushed item with level < lvl
+                parent_code_explicit = (it.get("parent_code") or "").strip()
+
+                # Resolve parent: prioritas ke parent_code eksplisit; fallback
+                # ke level-stack (parent = item terakhir dengan level < lvl).
                 parent = None
-                while parent_stack and parent_stack[-1].level >= lvl:
-                    parent_stack.pop()
-                if parent_stack:
-                    parent = parent_stack[-1]
+                if parent_code_explicit and parent_code_explicit in code_index:
+                    parent = code_index[parent_code_explicit]
+                else:
+                    while parent_stack and parent_stack[-1].level >= lvl:
+                        parent_stack.pop()
+                    if parent_stack:
+                        parent = parent_stack[-1]
 
                 total_price = it.get("total_price") or 0
                 volume = it.get("volume") or 0
@@ -715,6 +724,9 @@ async def import_excel(
                 db.add(new_item)
                 db.flush()
                 parent_stack.append(new_item)
+                # Index by original_code untuk parent_code lookup baris berikut
+                if it.get("original_code"):
+                    code_index[str(it.get("original_code")).strip()] = new_item
                 result.items_imported += 1
 
             # Post-import sweep: item yang punya children → is_leaf=False.
