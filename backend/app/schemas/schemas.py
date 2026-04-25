@@ -349,7 +349,8 @@ class ContractCreate(BaseModel):
     ppk_id: UUID
     konsultan_id: Optional[UUID] = None
     fiscal_year: int
-    original_value: Decimal
+    original_value: Decimal           # POST-PPN (= BOQ × (1 + ppn_pct/100))
+    ppn_pct: Decimal = Decimal("11.00")  # PPN percentage, default 11%
     start_date: date
     end_date: date
     description: Optional[str] = None
@@ -365,6 +366,7 @@ class ContractUpdate(BaseModel):
     description: Optional[str] = None
     weekly_report_due_day: Optional[int] = None
     daily_report_required: Optional[bool] = None
+    ppn_pct: Optional[Decimal] = None
     # Field DRAFT-only — backend menolak pemakaiannya saat status != draft
     # dan kontrak belum Unlock Mode. Tanpa mendeklarasikannya di schema,
     # Pydantic akan men-drop-nya dari payload sehingga guard + edit DRAFT

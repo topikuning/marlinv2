@@ -682,8 +682,11 @@ def run():
                 ppk_id=ppks[cfg["ppk"]].id,
                 konsultan_id=companies[cfg["konsultan"]].id,
                 fiscal_year=2025,
+                # nilai kontrak POST-PPN: BOQ + 11% PPN. cfg["nilai"] sudah
+                # disesuaikan supaya konsisten dengan total BOQ × 1.11.
                 original_value=cfg["nilai"],
                 current_value=cfg["nilai"],
+                ppn_pct=Decimal("11.00"),
                 start_date=start_date,
                 original_end_date=end_date,
                 end_date=end_date,
@@ -818,6 +821,13 @@ def run():
             rev.total_value = leaf_total
             rev.item_count  = len(contract_all_items)
             total_boq += len(contract_all_items)
+
+            # Sync nilai kontrak ke BOQ + PPN supaya seed konsisten.
+            # original_value/current_value selalu POST-PPN (= BOQ × 1.11).
+            ppn_factor = Decimal("1") + (contract.ppn_pct or Decimal("0")) / Decimal("100")
+            contract_value_with_ppn = (leaf_total * ppn_factor).quantize(Decimal("0.01"))
+            contract.original_value = contract_value_with_ppn
+            contract.current_value = contract_value_with_ppn
 
             db.flush()
 

@@ -43,6 +43,8 @@ def _ensure_columns():
     pending = [
         # (table, column, ddl_after_ADD_COLUMN)
         ("variation_order_items", "parent_boq_item_id", "UUID REFERENCES boq_items(id)"),
+        # PPN per-contract — default 11% (UU HPP 2021)
+        ("contracts", "ppn_pct", "NUMERIC(5,2) NOT NULL DEFAULT 11.00"),
     ]
     with engine.begin() as conn:
         for table, col, ddl in pending:

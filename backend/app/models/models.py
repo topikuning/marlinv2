@@ -15,6 +15,7 @@ Coverage:
 import uuid
 import enum
 from datetime import datetime, date
+from decimal import Decimal
 from sqlalchemy import (
     Column, String, Text, Integer, Numeric, Boolean,
     DateTime, Date, ForeignKey, Enum, Index, UniqueConstraint,
@@ -403,6 +404,11 @@ class Contract(Base):
     fiscal_year = Column(Integer, nullable=False)
     original_value = Column(Numeric(18, 2), nullable=False)
     current_value = Column(Numeric(18, 2), nullable=False)
+    # PPN (Pajak Pertambahan Nilai) percentage. BOQ items disimpan PRE-PPN.
+    # Nilai kontrak (original_value/current_value) adalah POST-PPN (= BOQ × (1 + ppn/100)).
+    # Default 11% sesuai UU HPP 2021. Bisa diubah per kontrak (mis. 0% kalau
+    # kontrak non-BKP/JKP, atau 12% kalau aturan berubah).
+    ppn_pct = Column(Numeric(5, 2), nullable=False, default=Decimal("11.00"))
     start_date = Column(Date, nullable=False)
     original_end_date = Column(Date, nullable=False)
     end_date = Column(Date, nullable=False)  # after addendum

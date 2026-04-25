@@ -207,25 +207,33 @@ export default function ContractDetailPage() {
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6 pt-5 border-t border-ink-100">
-          {[
-            ["Nilai Kontrak", fmtCurrency(contract.current_value), null],
-            [
-              "Total BOQ",
-              fmtCurrency(contract.boq_total || 0),
-              contract.boq_total != null &&
-              Math.abs((contract.boq_total || 0) - (contract.current_value || 0)) >= 0.01
-                ? `Selisih ${fmtCurrency((contract.boq_total || 0) - (contract.current_value || 0))} dari Nilai Kontrak`
-                : null,
-            ],
-            ["Perusahaan", contract.company_name, null],
-            ["PPK", contract.ppk_name, null],
-            ["Konsultan", contract.konsultan_name || "—", null],
-            ["Durasi", `${contract.duration_days} hari`, null],
-            ["Mulai", fmtDate(contract.start_date), null],
-            ["Selesai", fmtDate(contract.end_date), null],
-            ["Tahun Anggaran", contract.fiscal_year, null],
-            ["Lokasi", `${contract.locations?.length || 0}`, null],
-          ].map(([label, val, hint]) => (
+          {(() => {
+            const ppnPct = parseFloat(contract.ppn_pct || 0);
+            const ppnFactor = 1 + ppnPct / 100;
+            const contractValue = parseFloat(contract.current_value || 0);
+            const boqTotal = parseFloat(contract.boq_total || 0);
+            const boqWithPpn = boqTotal * ppnFactor;
+            const ppnAmount = boqWithPpn - boqTotal;
+            const diff = boqWithPpn - contractValue;
+            const boqHint = boqTotal > 0 && Math.abs(diff) >= 0.01
+              ? `+ PPN ${ppnPct}% = ${fmtCurrency(boqWithPpn)} (Δ ${fmtCurrency(diff)} dari Nilai Kontrak)`
+              : boqTotal > 0
+                ? `+ PPN ${ppnPct}% = ${fmtCurrency(boqWithPpn)} ✓ sinkron`
+                : null;
+            return [
+              ["Nilai Kontrak", fmtCurrency(contractValue), `Termasuk PPN ${ppnPct}%`],
+              ["Total BOQ (pre-PPN)", fmtCurrency(boqTotal), boqHint],
+              ["PPN", `${ppnPct}% · ${fmtCurrency(ppnAmount)}`, "Pajak Pertambahan Nilai"],
+              ["Perusahaan", contract.company_name, null],
+              ["PPK", contract.ppk_name, null],
+              ["Konsultan", contract.konsultan_name || "—", null],
+              ["Durasi", `${contract.duration_days} hari`, null],
+              ["Mulai", fmtDate(contract.start_date), null],
+              ["Selesai", fmtDate(contract.end_date), null],
+              ["Tahun Anggaran", contract.fiscal_year, null],
+              ["Lokasi", `${contract.locations?.length || 0}`, null],
+            ];
+          })().map(([label, val, hint]) => (
             <div key={label}>
               <p className="text-[10px] uppercase tracking-wider text-ink-400 font-medium">
                 {label}
@@ -1495,34 +1503,48 @@ function AddAddendumModal({ open, onClose, contract, initial, onSuccess }) {
               onChange={(e) => setForm({ ...form, new_contract_value: e.target.value })}
             />
             {selectedVoIds.length > 0 && (() => {
+              // Konvensi: VO cost_impact = pre-PPN. Nilai kontrak = post-PPN.
+              // Suggested = current_value + (totalCostImpact × (1 + ppn/100))
+              const ppnPct = parseFloat(contract.ppn_pct || 0);
+              const ppnFactor = 1 + ppnPct / 100;
               const baseValue = parseFloat(contract.current_value || 0);
-              const suggested = baseValue + totalCostImpact;
+              const deltaWithPpn = totalCostImpact * ppnFactor;
+              const suggested = baseValue + deltaWithPpn;
               const currentInput = parseFloat(form.new_contract_value) || 0;
               const matchesSuggestion = Math.abs(currentInput - suggested) < 1;
               return (
-                <div className="mt-1 text-[11px] flex items-center gap-2 flex-wrap">
-                  <span className="text-ink-500">
-                    💡 Saran:{" "}
-                    <span className="font-mono">{fmtCurrency(baseValue)}</span>
-                    <span className={totalCostImpact >= 0 ? "text-emerald-700" : "text-red-700"}>
-                      {" "}{totalCostImpact >= 0 ? "+" : ""}{fmtCurrency(totalCostImpact)}
+                <div className="mt-1 text-[11px] flex flex-col gap-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-ink-500">
+                      💡 Saran:{" "}
+                      <span className="font-mono">{fmtCurrency(baseValue)}</span>
+                      <span className={totalCostImpact >= 0 ? "text-emerald-700" : "text-red-700"}>
+                        {" "}{totalCostImpact >= 0 ? "+" : ""}{fmtCurrency(totalCostImpact)} pre-PPN
+                      </span>
+                      {ppnPct > 0 && (
+                        <span className="text-ink-400">
+                          {" "}× (1+{ppnPct}%) = {totalCostImpact >= 0 ? "+" : ""}{fmtCurrency(deltaWithPpn)} post-PPN
+                        </span>
+                      )}
+                      {" = "}
+                      <span className="font-semibold font-mono text-ink-800">{fmtCurrency(suggested)}</span>
                     </span>
-                    {" = "}
-                    <span className="font-semibold font-mono text-ink-800">{fmtCurrency(suggested)}</span>
-                    <span className="text-ink-400 ml-1">(berdasarkan {selectedVoIds.length} VO terpilih)</span>
+                    {!matchesSuggestion && (
+                      <button
+                        type="button"
+                        className="text-brand-600 hover:underline font-medium"
+                        onClick={() => setForm({ ...form, new_contract_value: String(suggested) })}
+                      >
+                        Pakai saran →
+                      </button>
+                    )}
+                    {matchesSuggestion && (
+                      <span className="text-emerald-700 font-medium">✓ sesuai saran</span>
+                    )}
+                  </div>
+                  <span className="text-ink-400">
+                    {selectedVoIds.length} VO terpilih · Total Δ pre-PPN {fmtCurrency(totalCostImpact)}
                   </span>
-                  {!matchesSuggestion && (
-                    <button
-                      type="button"
-                      className="text-brand-600 hover:underline font-medium"
-                      onClick={() => setForm({ ...form, new_contract_value: String(suggested) })}
-                    >
-                      Pakai saran →
-                    </button>
-                  )}
-                  {matchesSuggestion && (
-                    <span className="text-emerald-700 font-medium">✓ sesuai saran</span>
-                  )}
                 </div>
               );
             })()}
@@ -1928,18 +1950,20 @@ function RevisionsPanel({ contract, onChange }) {
                   {r.approved_at && ` · Approved ${fmtDate(r.approved_at)}`}
                 </p>
                 {r.status === "draft" && (() => {
-                  // Live sync-check: DRAFT hanya bisa di-approve kalau total
-                  // BOQ == nilai kontrak saat ini. Kalau beda, tampilkan
-                  // peringatan dan disable tombol Approve di bawah.
+                  // PPN-aware sync-check.
+                  // BOQ pre-PPN; nilai kontrak post-PPN. Bandingkan BOQ × (1+ppn) vs kontrak.
+                  const ppnPct = Number(contract.ppn_pct || 0);
+                  const ppnFactor = 1 + ppnPct / 100;
                   const contractValue = Number(contract.current_value || 0);
-                  const boqTotal = Number(r.total_value || 0);
-                  const diff = Math.round((boqTotal - contractValue) * 100) / 100;
+                  const boqPreP = Number(r.total_value || 0);
+                  const boqWithPpn = boqPreP * ppnFactor;
+                  const diff = Math.round((boqWithPpn - contractValue) * 100) / 100;
                   const inSync = Math.abs(diff) < 0.01;
-                  const exceeds = diff > 0.01; // BOQ > kontrak — block
+                  const exceeds = diff > 0.01;
                   if (inSync) {
                     return (
                       <p className="text-[11px] text-green-700 mt-1 font-medium">
-                        ✓ Sinkron dengan nilai kontrak ({fmtCurrency(contractValue)})
+                        ✓ Sinkron: BOQ {fmtCurrency(boqPreP)} + PPN {ppnPct}% = {fmtCurrency(boqWithPpn)} = Nilai Kontrak
                       </p>
                     );
                   }
@@ -1947,25 +1971,25 @@ function RevisionsPanel({ contract, onChange }) {
                     return (
                       <div className="mt-2 p-2 rounded-md bg-red-50 border border-red-200 text-[11px] text-red-900">
                         <p className="font-semibold">
-                          ⚠ Total BOQ MELEBIHI Nilai Kontrak ({fmtCurrency(contractValue)})
+                          ⚠ BOQ + PPN {ppnPct}% MELEBIHI Nilai Kontrak
                         </p>
                         <p className="mt-0.5">
-                          Selisih: +{fmtCurrency(diff)}. <b>Approve akan ditolak</b>.
-                          Kurangi item BOQ atau naikkan nilai kontrak pada Addendum.
+                          BOQ pre-PPN {fmtCurrency(boqPreP)} × (1+{ppnPct}%) = <b>{fmtCurrency(boqWithPpn)}</b>,
+                          {" "}Nilai Kontrak {fmtCurrency(contractValue)}. Selisih +{fmtCurrency(diff)}.
+                          {" "}<b>Approve akan ditolak</b>. Kurangi item BOQ atau naikkan nilai kontrak.
                         </p>
                       </div>
                     );
                   }
-                  // diff < 0: BOQ lebih kecil dari kontrak — wajar (buffer/rounding)
+                  // BOQ + PPN < kontrak: wajar (buffer)
                   return (
                     <div className="mt-2 p-2 rounded-md bg-amber-50 border border-amber-200 text-[11px] text-amber-900">
                       <p className="font-semibold">
-                        ℹ Nilai Kontrak lebih besar {fmtCurrency(-diff)} dari Total BOQ
+                        ℹ Nilai Kontrak lebih besar {fmtCurrency(-diff)} dari BOQ + PPN
                       </p>
                       <p className="mt-0.5">
-                        Wajar bila ada buffer/contingency/rounding. Approve tetap
-                        diizinkan. Kalau ingin sinkron, koreksi nilai kontrak pada
-                        Addendum atau tambah item BOQ.
+                        BOQ {fmtCurrency(boqPreP)} + PPN {ppnPct}% = {fmtCurrency(boqWithPpn)}.
+                        {" "}Wajar bila ada buffer/contingency. Approve tetap diizinkan.
                       </p>
                     </div>
                   );
@@ -1982,19 +2006,22 @@ function RevisionsPanel({ contract, onChange }) {
                   </button>
                 )}
                 {r.status === "draft" && (() => {
+                  // PPN-aware: bandingkan BOQ × (1+ppn) vs nilai kontrak.
+                  // Block kalau BOQ+PPN > kontrak (exceeds). Allow kalau ≤
+                  // (sinkron atau buffer).
+                  const ppnFactor = 1 + Number(contract.ppn_pct || 0) / 100;
                   const contractValue = Number(contract.current_value || 0);
-                  const boqTotal = Number(r.total_value || 0);
-                  const inSync =
-                    Math.abs(boqTotal - contractValue) < 0.01;
+                  const boqWithPpn = Number(r.total_value || 0) * ppnFactor;
+                  const exceeds = boqWithPpn - contractValue > 0.01;
                   return (
                     <button
                       className="btn-primary btn-xs disabled:opacity-50"
                       onClick={() => approve(r)}
-                      disabled={approving === r.id || !inSync}
+                      disabled={approving === r.id || exceeds}
                       title={
-                        inSync
-                          ? "Approve revisi"
-                          : "BOQ belum sinkron dengan nilai kontrak"
+                        exceeds
+                          ? "BOQ + PPN melebihi nilai kontrak"
+                          : "Approve revisi"
                       }
                     >
                       {approving === r.id ? <Spinner size={11} /> : null} Approve
