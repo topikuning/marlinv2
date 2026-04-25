@@ -198,6 +198,20 @@ def delete_location(
     if not loc:
         raise HTTPException(404, "Lokasi tidak ditemukan")
     assert_scope_editable_by_location(db, location_id, entity="location")
+
+    # SQLAlchemy CircularDependencyError trigger oleh self-FK BOQItem.parent_id
+    # saat cascade delete Location → Facility → BOQItem. Pemecahnya: clear
+    # semua parent_id di BOQItem milik facility-nya dulu, sehingga ORM bebas
+    # delete dalam urutan apa pun.
+    from app.models.models import BOQItem, Facility
+    fac_ids = [f.id for f in db.query(Facility).filter(Facility.location_id == loc.id).all()]
+    if fac_ids:
+        db.query(BOQItem).filter(BOQItem.facility_id.in_(fac_ids)).update(
+            {"parent_id": None, "source_item_id": None},
+            synchronize_session=False,
+        )
+        db.flush()
+
     db.delete(loc)
     db.commit()
     log_audit(db, current_user, "delete", "location", location_id, request=request, commit=True)

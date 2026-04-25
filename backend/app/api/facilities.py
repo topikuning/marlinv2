@@ -252,6 +252,16 @@ def delete_facility(
     if not f:
         raise HTTPException(404, "Fasilitas tidak ditemukan")
     assert_scope_editable_by_location(db, f.location_id)
+
+    # Clear self-FK BOQItem dulu untuk hindari SQLAlchemy CircularDependencyError
+    # pada cascade Facility → BOQItem.
+    from app.models.models import BOQItem
+    db.query(BOQItem).filter(BOQItem.facility_id == f.id).update(
+        {"parent_id": None, "source_item_id": None},
+        synchronize_session=False,
+    )
+    db.flush()
+
     db.delete(f)
     db.commit()
     log_audit(db, current_user, "delete", "facility", facility_id, request=request, commit=True)
