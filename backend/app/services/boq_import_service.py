@@ -77,7 +77,7 @@ def detect_format(filepath: str) -> str:
 
 SIMPLE_TEMPLATE_COLUMNS = [
     "facility_code", "facility_name",
-    "level", "code", "parent_code",
+    "code", "parent_code",
     "description", "unit",
     "volume", "unit_price", "total_price",
     "planned_start_week", "planned_duration_weeks",
@@ -118,7 +118,7 @@ def parse_simple_template(filepath: str) -> Dict[str, Any]:
                 "items": [],
             }
         by_fac[fac_code]["items"].append({
-            "level": int(_safe_num(rec.get("level")) or 0),
+            # level di-derive di import endpoint dari parent chain — tidak diisi user
             "original_code": _safe_str(rec.get("code")),
             "parent_code": _safe_str(rec.get("parent_code")),
             "description": desc,

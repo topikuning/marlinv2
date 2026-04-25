@@ -244,6 +244,157 @@ const kbdStyle = {
 };
 
 /**
+ * ParentPickerPopover — searchable picker untuk kolom Parent.
+ * Sama pola dengan WorkCodePickerPopover: trigger via onCellClicked,
+ * render via portal, set value via rowNode.setDataValue("parent_id").
+ */
+function ParentPickerPopover({ open, anchorRect, rowNode, rows, onClose }) {
+  const [query, setQuery] = useState("");
+  const [activeIdx, setActiveIdx] = useState(0);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setQuery("");
+    setActiveIdx(0);
+    setTimeout(() => inputRef.current?.focus(), 10);
+  }, [open]);
+
+  // Daftar parent kandidat: SEMUA item lain di facility (kecuali baris ini),
+  // sort by full_code untuk hirarki visual.
+  const candidates = useMemo(() => {
+    const own = rowNode?.data?.id;
+    return (rows || [])
+      .filter((r) => r.id !== own && (r.description || r.original_code))
+      .sort((a, b) => (a.full_code || "").localeCompare(b.full_code || ""));
+  }, [rows, rowNode]);
+
+  const filtered = useMemo(() => {
+    const q = (query || "").trim().toLowerCase();
+    if (!q) return candidates;
+    return candidates.filter((c) =>
+      (c.description || "").toLowerCase().includes(q) ||
+      (c.full_code || "").toLowerCase().includes(q) ||
+      (c.original_code || "").toLowerCase().includes(q)
+    );
+  }, [candidates, query]);
+
+  const total = filtered.length + 1; // +1 for "(root)" option
+  const isRootActive = activeIdx === 0;
+
+  const select = (parentId) => {
+    if (rowNode) {
+      queueMicrotask(() => {
+        rowNode.setDataValue("parent_id", parentId || null);
+        // Re-derive level di FE supaya display indent ikut: parent.level + 1
+        if (parentId) {
+          const parent = (rows || []).find((r) => r.id === parentId);
+          if (parent) rowNode.setDataValue("level", (parent.level || 0) + 1);
+        } else {
+          rowNode.setDataValue("level", 0);
+        }
+      });
+    }
+    onClose?.();
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); onClose?.(); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); setActiveIdx((i) => Math.min(i + 1, total - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActiveIdx((i) => Math.max(i - 1, 0)); }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      if (isRootActive) select(null);
+      else select(filtered[activeIdx - 1]?.id);
+    }
+  };
+
+  if (!open || !anchorRect) return null;
+  const top = (anchorRect.bottom || 0) + 2;
+  const left = Math.min((anchorRect.left || 0), window.innerWidth - 460);
+
+  return createPortal(
+    <div
+      style={{
+        position: "fixed", top, left, width: 440, zIndex: 1000,
+        background: "white", border: "1px solid #cbd5e1", borderRadius: 8,
+        boxShadow: "0 10px 30px rgba(15,23,42,0.18)",
+      }}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <div style={{ padding: 8, borderBottom: "1px solid #e2e8f0" }}>
+        <input
+          ref={inputRef}
+          type="text"
+          placeholder={`Cari parent (${candidates.length} item)...`}
+          value={query}
+          onChange={(e) => { setQuery(e.target.value); setActiveIdx(0); }}
+          onKeyDown={onKeyDown}
+          style={{
+            width: "100%", padding: "6px 8px", fontSize: 12,
+            border: "1px solid #cbd5e1", borderRadius: 4, outline: "none",
+          }}
+        />
+      </div>
+      <div style={{ maxHeight: 280, overflowY: "auto" }}>
+        <button
+          type="button"
+          onClick={() => select(null)}
+          onKeyDown={onKeyDown}
+          style={{
+            display: "block", width: "100%", textAlign: "left",
+            padding: "6px 10px", fontSize: 11, fontStyle: "italic",
+            background: isRootActive ? "#dbeafe" : "transparent",
+            color: "#475569", border: "none", cursor: "pointer",
+          }}
+        >
+          — (root) tanpa parent —
+        </button>
+        {filtered.length === 0 ? (
+          <p style={{ padding: 12, fontSize: 11, color: "#94a3b8", fontStyle: "italic" }}>
+            Tidak ada match.
+          </p>
+        ) : filtered.slice(0, 200).map((c, i) => {
+          const active = activeIdx === i + 1;
+          return (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => select(c.id)}
+              style={{
+                display: "block", width: "100%", textAlign: "left",
+                padding: "6px 10px", fontSize: 11, fontFamily: "monospace",
+                background: active ? "#dbeafe" : "transparent",
+                border: "none", cursor: "pointer", whiteSpace: "nowrap",
+                overflow: "hidden", textOverflow: "ellipsis",
+              }}
+            >
+              <span style={{ paddingLeft: (c.level || 0) * 12 }}>
+                {c.full_code || c.original_code || "?"} — {(c.description || "").slice(0, 50)}
+              </span>
+            </button>
+          );
+        })}
+        {filtered.length > 200 && (
+          <p style={{ padding: 6, fontSize: 9, color: "#94a3b8", fontStyle: "italic", textAlign: "center" }}>
+            {filtered.length - 200} lainnya — perketat pencarian
+          </p>
+        )}
+      </div>
+      <div style={{
+        padding: "4px 10px", fontSize: 10, color: "#64748b",
+        background: "#f8fafc", borderTop: "1px solid #e2e8f0",
+        display: "flex", justifyContent: "space-between",
+      }}>
+        <span>↑/↓ nav · Enter pilih · Esc batal</span>
+        <span>{filtered.length} dari {candidates.length}</span>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+/**
  * BOQ editor grid.
  *
  * Mode:
@@ -282,6 +433,8 @@ export default function BOQGrid({
   const [workCodes, setWorkCodes] = useState([]);
   // Popover pencarian kode di kolom Uraian.
   const [codePicker, setCodePicker] = useState(null); // { node, rect, initial }
+  // Popover pencarian parent di kolom Parent.
+  const [parentPicker, setParentPicker] = useState(null); // { node, rect }
 
   const canEdit = !readonly && !revisionLocked;
 
@@ -372,27 +525,32 @@ export default function BOQGrid({
       headerName: "Parent",
       field: "parent_id",
       width: 180,
-      editable: canEdit,
-      // cellEditor agSelectCellEditor membutuhkan list values setiap render.
-      // Daftar parent: SEMUA item lain di facility (kecuali baris ini).
-      cellEditor: "agSelectCellEditor",
-      cellEditorParams: (p) => {
-        const choices = (rows || []).filter((r) => r.id !== p.data?.id);
-        return {
-          values: ["", ...choices.map((r) => r.id)],
-          valueListMaxHeight: 320,
-        };
+      // Non-editable di AG Grid — buka custom popover via onCellClicked.
+      editable: false,
+      onCellClicked: (p) => {
+        if (!canEdit) return;
+        const r = p.event?.target?.getBoundingClientRect?.() ||
+                  p.eventPath?.[0]?.getBoundingClientRect?.();
+        setParentPicker({
+          node: p.node,
+          rect: r || { left: 0, top: 0, bottom: 0, width: 240 },
+        });
       },
-      // Tampilkan label Parent (kode + uraian truncated) bukan UUID
       valueFormatter: (p) => {
-        if (!p.value) return "(root)";
+        if (!p.value) return canEdit ? "Klik untuk pilih…" : "(root)";
         const parent = (rows || []).find((r) => r.id === p.value);
         if (!parent) return "(invalid)";
         const code = parent.full_code || parent.original_code || "";
         const desc = (parent.description || "").slice(0, 30);
         return `${code} — ${desc}`;
       },
-      cellStyle: { fontSize: 11, color: "#475569", fontFamily: "monospace" },
+      cellStyle: (p) => ({
+        fontSize: 11,
+        color: !p.value ? "#94a3b8" : "#475569",
+        fontFamily: "monospace",
+        fontStyle: !p.value ? "italic" : undefined,
+        cursor: canEdit ? "pointer" : "default",
+      }),
     },
     {
       headerName: "Kode Item",
@@ -721,6 +879,13 @@ export default function BOQGrid({
         initialValue={codePicker?.initial}
         workCodes={workCodes}
         onClose={() => setCodePicker(null)}
+      />
+      <ParentPickerPopover
+        open={!!parentPicker}
+        anchorRect={parentPicker?.rect}
+        rowNode={parentPicker?.node}
+        rows={rows}
+        onClose={() => setParentPicker(null)}
       />
 
       {canEdit && workCodes.length > 0 && (

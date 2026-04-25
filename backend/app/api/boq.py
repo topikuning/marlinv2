@@ -675,24 +675,22 @@ async def import_excel(
             )
 
             # Insert items; build hierarchy by level
-            # Map original_code → BOQItem yang baru di-create di facility ini.
-            # Dipakai untuk resolve parent_code eksplisit (kalau diisi user).
+            # Map original_code → BOQItem. Dipakai untuk resolve parent_code.
             code_index: dict = {}
-            parent_stack: List[BOQItem] = []  # indexed by level
-            for order_idx, it in enumerate(fac_data["items"]):
-                lvl = int(it.get("level") or 0)
-                parent_code_explicit = (it.get("parent_code") or "").strip()
+            # Pass 1: assign auto-code untuk row yang code-nya kosong, supaya
+            # row lain bisa refer balik via parent_code (kalau perlu).
+            auto_idx = 0
+            for it in fac_data["items"]:
+                if not (it.get("original_code") or "").strip():
+                    auto_idx += 1
+                    it["original_code"] = f"R{auto_idx}"
 
-                # Resolve parent: prioritas ke parent_code eksplisit; fallback
-                # ke level-stack (parent = item terakhir dengan level < lvl).
-                parent = None
-                if parent_code_explicit and parent_code_explicit in code_index:
-                    parent = code_index[parent_code_explicit]
-                else:
-                    while parent_stack and parent_stack[-1].level >= lvl:
-                        parent_stack.pop()
-                    if parent_stack:
-                        parent = parent_stack[-1]
+            # Pass 2: dua-fase resolve parent. Fase A buat semua item dengan
+            # parent=None placeholder, fase B set parent_id berdasarkan
+            # parent_code lookup. Memungkinkan urutan baris bebas (parent
+            # boleh muncul setelah child di Excel).
+            created_items: list = []
+            for order_idx, it in enumerate(fac_data["items"]):
 
                 total_price = it.get("total_price") or 0
                 volume = it.get("volume") or 0
@@ -700,17 +698,13 @@ async def import_excel(
                 if not total_price and volume and unit_price:
                     total_price = volume * unit_price
 
-                full_code = it.get("original_code", "")
-                if parent and parent.full_code:
-                    full_code = f"{parent.full_code}.{it.get('original_code','')}"
-
                 new_item = BOQItem(
                     boq_revision_id=target_revision.id,
                     facility_id=target_facility.id,
-                    parent_id=parent.id if parent else None,
+                    parent_id=None,  # diisi di pass berikutnya
                     original_code=it.get("original_code"),
-                    full_code=full_code,
-                    level=lvl,
+                    full_code=it.get("original_code") or "",  # di-update setelah parent ter-resolve
+                    level=0,  # di-derive dari parent chain
                     display_order=order_idx,
                     description=it["description"],
                     unit=it.get("unit"),
@@ -719,19 +713,45 @@ async def import_excel(
                     total_price=Decimal(str(total_price)),
                     planned_start_week=it.get("planned_start_week"),
                     planned_duration_weeks=it.get("planned_duration_weeks"),
-                    is_leaf=bool(it.get("is_leaf", True)),
+                    is_leaf=True,  # auto-flip via _recompute_is_leaf di akhir
                 )
                 db.add(new_item)
                 db.flush()
-                parent_stack.append(new_item)
-                # Index by original_code untuk parent_code lookup baris berikut
-                if it.get("original_code"):
-                    code_index[str(it.get("original_code")).strip()] = new_item
+                code = (it.get("original_code") or "").strip()
+                code_index[code] = new_item
+                created_items.append((it, new_item))
                 result.items_imported += 1
 
+            # Pass 3: resolve parent_id via parent_code lookup, derive level
+            # & full_code dari rantai parent. Loop sampai stable (handle
+            # forward-references — child di-create sebelum parent).
+            for it, new_item in created_items:
+                pc = (it.get("parent_code") or "").strip()
+                if pc and pc in code_index:
+                    new_item.parent_id = code_index[pc].id
+            db.flush()
+            # Compute level + full_code dengan BFS dari roots.
+            for _, ni in created_items:
+                lvl = 0
+                chain = []
+                cur = ni
+                visited = set()
+                while cur.parent_id and cur.parent_id not in visited:
+                    visited.add(cur.parent_id)
+                    parent = next((p for _, p in created_items if p.id == cur.parent_id), None)
+                    if not parent:
+                        break
+                    chain.append(parent.original_code or "")
+                    lvl += 1
+                    cur = parent
+                ni.level = lvl
+                if chain:
+                    ni.full_code = ".".join(reversed(chain)) + "." + (ni.original_code or "")
+                else:
+                    ni.full_code = ni.original_code or ""
+            db.flush()
+
             # Post-import sweep: item yang punya children → is_leaf=False.
-            # Penting karena import Excel tidak selalu memberi flag is_leaf
-            # eksplisit — kita simpulkan dari struktur parent_id.
             _recompute_is_leaf(db, target_revision.id)
 
             recalculate_facility_weights(db, str(target_facility.id))

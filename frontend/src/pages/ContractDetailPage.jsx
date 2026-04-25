@@ -2511,6 +2511,88 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// ParentPicker — searchable dropdown untuk pilih parent BOQ item.
+// Daftar bisa ratusan item, native select tidak praktis.
+// ════════════════════════════════════════════════════════════════════════════
+function ParentPicker({ options, value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const ref = useRef(null);
+  const selected = options.find((o) => o.id === value);
+
+  useEffect(() => {
+    const onDocClick = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, []);
+
+  const filtered = !search.trim() ? options : options.filter((o) =>
+    (o.label || "").toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div ref={ref} className="relative mt-1 w-full">
+      <button
+        type="button"
+        className="input py-0.5 text-[10px] text-left w-full flex items-center justify-between gap-1"
+        onClick={() => setOpen((v) => !v)}
+        title="Pilih parent — kosong = root"
+      >
+        <span className="truncate flex-1">
+          {selected ? selected.label : <span className="text-ink-400">— Root (tanpa parent) —</span>}
+        </span>
+        <span className="text-ink-400">▾</span>
+      </button>
+      {open && (
+        <div className="absolute z-30 mt-1 w-[420px] max-w-[80vw] right-0 bg-white border border-ink-300 rounded shadow-lg">
+          <div className="p-1.5 border-b border-ink-100">
+            <input
+              type="text"
+              autoFocus
+              className="input py-1 text-xs w-full"
+              placeholder={`Cari (${options.length} item)...`}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <div className="max-h-60 overflow-y-auto">
+            <button
+              type="button"
+              className={`w-full text-left px-2 py-1 text-[11px] italic hover:bg-brand-50 ${!value ? "bg-brand-100 font-semibold" : "text-ink-500"}`}
+              onClick={() => { onChange(""); setOpen(false); setSearch(""); }}
+            >
+              — Root (tanpa parent) —
+            </button>
+            {filtered.length === 0 ? (
+              <p className="text-[10px] text-ink-400 italic p-2">Tidak ada match.</p>
+            ) : filtered.slice(0, 200).map((o) => (
+              <button
+                key={o.id}
+                type="button"
+                className={`w-full text-left px-2 py-1 text-[10px] hover:bg-brand-50 font-mono whitespace-nowrap overflow-hidden text-ellipsis ${
+                  o.id === value ? "bg-brand-100 text-brand-800 font-semibold" : ""
+                }`}
+                onClick={() => { onChange(o.id); setOpen(false); setSearch(""); }}
+              >
+                {o.label}
+              </button>
+            ))}
+            {filtered.length > 200 && (
+              <p className="text-[9px] text-ink-400 italic p-1.5 text-center">
+                {filtered.length - 200} lainnya — perketat pencarian
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
 // FacilityPicker — searchable dropdown fasilitas. Untuk kontrak banyak
 // fasilitas, native <select> jadi lambat & susah navigasi.
 // ════════════════════════════════════════════════════════════════════════════
@@ -3072,17 +3154,11 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false }) {
                         onChange={(e) => updateAddRow(r._idx, "description", e.target.value)}
                         placeholder="Uraian item baru"
                       />
-                      <select
-                        className="select py-0.5 text-[10px] mt-1 w-full"
+                      <ParentPicker
+                        options={parentOptions}
                         value={r.parent_boq_item_id || ""}
-                        onChange={(e) => updateAddRow(r._idx, "parent_boq_item_id", e.target.value || null)}
-                        title="Pilih parent dalam hirarki BOQ — kosong = root level"
-                      >
-                        <option value="">— Root (tanpa parent) —</option>
-                        {parentOptions.map((p) => (
-                          <option key={p.id} value={p.id}>{p.label}</option>
-                        ))}
-                      </select>
+                        onChange={(id) => updateAddRow(r._idx, "parent_boq_item_id", id || null)}
+                      />
                     </td>
                     <td className="table-td">
                       <input
