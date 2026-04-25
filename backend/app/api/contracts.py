@@ -822,9 +822,21 @@ def _apply_vo_items_to_revision(db: Session, new_rev, bundled_vos):
     for vo in bundled_vos:
         for vi in vo.items:
             if vi.action == VOItemAction.ADD:
+                # Resolve parent_id: kalau VO punya parent_boq_item_id, mapping
+                # ke item clone di revisi baru. Kalau tidak ada → root level.
+                parent_clone = None
+                parent_level = 0
+                if vi.parent_boq_item_id:
+                    parent_clone = cloned_items.get(str(vi.parent_boq_item_id))
+                    if parent_clone:
+                        parent_level = (parent_clone.level or 0) + 1
+                        # Parent yang dapat anak baru bukan leaf lagi
+                        parent_clone.is_leaf = False
                 new_item = BOQItem(
                     boq_revision_id=new_rev.id,
                     facility_id=vi.facility_id,
+                    parent_id=parent_clone.id if parent_clone else None,
+                    level=parent_level,
                     master_work_code=vi.master_work_code,
                     description=vi.description,
                     unit=vi.unit,

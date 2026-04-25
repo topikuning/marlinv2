@@ -2511,6 +2511,95 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// FacilityPicker — searchable dropdown fasilitas. Untuk kontrak banyak
+// fasilitas, native <select> jadi lambat & susah navigasi.
+// ════════════════════════════════════════════════════════════════════════════
+function FacilityPicker({ facilities, value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const ref = useRef(null);
+  const selected = facilities.find((f) => f.id === value);
+
+  useEffect(() => {
+    const onDocClick = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, []);
+
+  const filtered = !search.trim() ? facilities : facilities.filter((f) => {
+    const t = search.toLowerCase();
+    return (f.facility_code || "").toLowerCase().includes(t) ||
+           (f.facility_name || "").toLowerCase().includes(t) ||
+           (f.location_code || "").toLowerCase().includes(t) ||
+           (f.location_name || "").toLowerCase().includes(t);
+  });
+
+  return (
+    <div ref={ref} className="relative flex-1 min-w-[260px] max-w-md">
+      <button
+        type="button"
+        className="input py-1 text-xs text-left flex items-center justify-between gap-2 w-full"
+        onClick={() => setOpen((v) => !v)}
+      >
+        {selected ? (
+          <span className="truncate">
+            <span className="text-ink-500 font-mono mr-1">[{selected.location_code}] {selected.facility_code}</span>
+            {selected.facility_name}
+          </span>
+        ) : (
+          <span className="text-ink-400">— pilih fasilitas —</span>
+        )}
+        <span className="text-ink-400">▾</span>
+      </button>
+      {open && (
+        <div className="absolute z-30 mt-1 w-[420px] max-w-[80vw] bg-white border border-ink-300 rounded-lg shadow-lg">
+          <div className="p-2 border-b border-ink-100">
+            <input
+              type="text"
+              autoFocus
+              className="input py-1 text-xs w-full"
+              placeholder={`Cari (${facilities.length} fasilitas)...`}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <div className="max-h-72 overflow-y-auto">
+            {filtered.length === 0 ? (
+              <p className="text-xs text-ink-400 italic p-3">Tidak ada yang cocok.</p>
+            ) : filtered.slice(0, 200).map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                className={`w-full text-left px-3 py-1.5 text-xs hover:bg-brand-50 ${
+                  f.id === value ? "bg-brand-100 text-brand-800 font-semibold" : ""
+                }`}
+                onClick={() => { onChange(f.id); setOpen(false); setSearch(""); }}
+              >
+                <div className="font-mono text-[10px] text-ink-500">
+                  [{f.location_code}] {f.facility_code}
+                </div>
+                <div>
+                  {f.facility_name}
+                  {f.total_value ? <span className="text-[10px] text-ink-500 ml-1">— {fmtCurrency(f.total_value)}</span> : null}
+                </div>
+              </button>
+            ))}
+            {filtered.length > 200 && (
+              <p className="text-[10px] text-ink-400 italic p-2 text-center">
+                {filtered.length - 200} lainnya — perketat pencarian
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
 // VOItemsGrid — grid editor untuk item VO per fasilitas.
 // User edit Vol Baru langsung; action (INCREASE/DECREASE/REMOVE/ADD) di-infer
 // dari selisih ke Vol Awal. Harga Satuan read-only by default (kontrak →
@@ -2555,14 +2644,36 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false }) {
     (it) => it.action === "remove_facility" && it.facility_id === facilityId
   );
 
-  // Build rows untuk leaf BOQ items, merge dengan VO items existing
-  const leafItems = useMemo(() => boqItems.filter((b) => b.is_leaf !== false), [boqItems]);
+  // Filter & sort BOQ items: respect display_order untuk preserve hirarki visual
+  const sortedBoq = useMemo(() => {
+    return [...boqItems].sort((a, b) => {
+      // Sort by display_order kalau ada, fallback ke full_code lexicographic
+      const oa = a.display_order ?? 0;
+      const ob = b.display_order ?? 0;
+      if (oa !== ob) return oa - ob;
+      return (a.full_code || "").localeCompare(b.full_code || "");
+    });
+  }, [boqItems]);
+
+  // Search filter — filter rows by description / code
+  const [searchTerm, setSearchTerm] = useState("");
+  const matchesSearch = (b) => {
+    if (!searchTerm.trim()) return true;
+    const t = searchTerm.toLowerCase().trim();
+    return (b.description || "").toLowerCase().includes(t) ||
+           (b.original_code || "").toLowerCase().includes(t) ||
+           (b.full_code || "").toLowerCase().includes(t);
+  };
+
+  // Build rows untuk SEMUA item (leaf + non-leaf) supaya hirarki kelihatan.
+  // Non-leaf rows hanya display (Vol Awal sum dari children, tidak editable).
   const rows = useMemo(() => {
-    return leafItems.map((b) => {
-      const existing = items.find(
+    return sortedBoq.map((b) => {
+      const isLeaf = b.is_leaf !== false;
+      const existing = isLeaf ? items.find(
         (it) => it.boq_item_id === b.id &&
           ["increase", "decrease", "remove", "modify_spec"].includes(it.action)
-      );
+      ) : null;
       const origVol = parseFloat(b.volume || 0);
       const origPrice = parseFloat(b.unit_price || 0);
       let newVolume = origVol;
@@ -2576,15 +2687,21 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false }) {
       }
       const delta = newVolume - origVol;
       let action = null;
-      if (newVolume === 0 && origVol > 0) action = "remove";
-      else if (delta > 0) action = "increase";
-      else if (delta < 0) action = "decrease";
-      else if (unitPrice !== origPrice) action = "modify_spec";
+      if (isLeaf) {
+        if (newVolume === 0 && origVol > 0) action = "remove";
+        else if (delta > 0) action = "increase";
+        else if (delta < 0) action = "decrease";
+        else if (unitPrice !== origPrice) action = "modify_spec";
+      }
       return {
         boq_item_id: b.id,
         original_code: b.original_code || b.full_code || "",
+        full_code: b.full_code || "",
         description: b.description,
         unit: b.unit,
+        level: b.level || 0,
+        is_leaf: isLeaf,
+        parent_id: b.parent_id,
         original_volume: origVol,
         original_unit_price: origPrice,
         new_volume: newVolume,
@@ -2593,9 +2710,21 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false }) {
         action,
         delta_value: newVolume * unitPrice - origVol * origPrice,
         invalid: newVolume < 0,
+        visible: matchesSearch(b),
       };
     });
-  }, [leafItems, items]);
+  }, [sortedBoq, items, searchTerm]);
+
+  // Daftar non-leaf untuk dropdown Parent saat ADD
+  const parentOptions = useMemo(() =>
+    sortedBoq
+      .filter((b) => b.is_leaf === false)
+      .map((b) => ({
+        id: b.id,
+        label: `${"  ".repeat(b.level || 0)}${b.full_code || b.original_code || ""} — ${b.description}`,
+      })),
+    [sortedBoq]
+  );
 
   // ADD rows: items dengan action=add dan facility_id sama
   const addRows = useMemo(() =>
@@ -2740,18 +2869,11 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false }) {
       {/* Toolbar */}
       <div className="flex items-center gap-2 flex-wrap p-2 bg-ink-50 rounded border border-ink-200">
         <label className="text-xs font-medium text-ink-700">Fasilitas:</label>
-        <select
-          className="select py-1 text-xs flex-1 min-w-[260px] max-w-md"
+        <FacilityPicker
+          facilities={allFacilities}
           value={facilityId}
-          onChange={(e) => setFacilityId(e.target.value)}
-        >
-          {allFacilities.map((f) => (
-            <option key={f.id} value={f.id}>
-              [{f.location_code}] {f.facility_code} · {f.facility_name}
-              {f.total_value ? ` — ${fmtCurrency(f.total_value)}` : ""}
-            </option>
-          ))}
-        </select>
+          onChange={setFacilityId}
+        />
         {!facilityRemoved && (
           <>
             <button type="button" className="btn-ghost btn-xs" onClick={addNewItem}>
@@ -2799,16 +2921,36 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false }) {
         </div>
       ) : loadingBoq ? (
         <p className="text-xs text-ink-500 p-3">Memuat BOQ fasilitas...</p>
-      ) : leafItems.length === 0 && addRows.length === 0 ? (
+      ) : rows.length === 0 && addRows.length === 0 ? (
         <div className="p-3 rounded bg-ink-50 border border-ink-200 text-xs text-ink-600">
           Fasilitas ini belum punya item BOQ. Klik "+ Item Baru" untuk menambah, atau pilih fasilitas lain.
         </div>
       ) : (
-        <div className="overflow-x-auto border border-ink-200 rounded">
+        <>
+          {/* Search filter */}
+          <div className="flex items-center gap-2 px-1">
+            <Search size={13} className="text-ink-400" />
+            <input
+              type="text"
+              className="input py-1 text-xs flex-1"
+              placeholder="Cari item: kode atau uraian..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+            {searchTerm && (
+              <button type="button" className="text-xs text-ink-500 hover:text-ink-800" onClick={() => setSearchTerm("")}>
+                ✕
+              </button>
+            )}
+            <span className="text-[10px] text-ink-500">
+              {rows.filter((r) => r.visible).length} / {rows.length} item
+            </span>
+          </div>
+        <div className="overflow-x-auto border border-ink-200 rounded max-h-[55vh]">
           <table className="w-full text-xs">
-            <thead className="bg-ink-100">
+            <thead className="bg-ink-100 sticky top-0 z-10">
               <tr>
-                <th className="table-th text-left w-24">Kode</th>
+                <th className="table-th text-left w-32">Kode</th>
                 <th className="table-th text-left">Uraian</th>
                 <th className="table-th text-left w-16">Satuan</th>
                 <th className="table-th text-right w-24">Vol Awal</th>
@@ -2821,7 +2963,22 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-ink-100">
-              {rows.map((r) => {
+              {rows.filter((r) => r.visible).map((r) => {
+                const indent = r.level * 14;
+                if (!r.is_leaf) {
+                  // Parent / group row — RO, hanya display struktur
+                  return (
+                    <tr key={r.boq_item_id} className="bg-ink-50/60">
+                      <td className="table-td font-mono text-[10px] text-ink-600">
+                        <span style={{ paddingLeft: `${indent}px` }}>📁 {r.original_code}</span>
+                      </td>
+                      <td className="table-td font-semibold text-ink-700" colSpan={8}>
+                        {r.description}
+                      </td>
+                      <td className="table-td"></td>
+                    </tr>
+                  );
+                }
                 const rowBg =
                   r.invalid ? "bg-red-100"
                   : r.action === "add" || r.action === "increase" ? "bg-emerald-50/50"
@@ -2831,7 +2988,9 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false }) {
                   : "";
                 return (
                   <tr key={r.boq_item_id} className={rowBg}>
-                    <td className="table-td font-mono text-[10px] text-ink-500">{r.original_code}</td>
+                    <td className="table-td font-mono text-[10px] text-ink-500">
+                      <span style={{ paddingLeft: `${indent}px` }}>{r.original_code}</span>
+                    </td>
                     <td className="table-td">{r.description}</td>
                     <td className="table-td">{r.unit}</td>
                     <td className="table-td text-right font-mono text-ink-500">{fmtVolume(r.original_volume)}</td>
@@ -2894,10 +3053,14 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false }) {
                 const newVol = parseFloat(r.volume_delta) || 0;
                 const newPrice = parseFloat(r.unit_price) || 0;
                 const value = newVol * newPrice;
+                const parentRow = rows.find((rr) => rr.boq_item_id === r.parent_boq_item_id);
+                const parentIndent = parentRow ? (parentRow.level + 1) * 14 : 0;
                 return (
                   <tr key={`add-${r._idx}`} className="bg-emerald-100/40">
                     <td className="table-td">
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-semibold">BARU</span>
+                      <div style={{ paddingLeft: `${parentIndent}px` }}>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-semibold">BARU</span>
+                      </div>
                     </td>
                     <td className="table-td">
                       <input
@@ -2906,6 +3069,17 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false }) {
                         onChange={(e) => updateAddRow(r._idx, "description", e.target.value)}
                         placeholder="Uraian item baru"
                       />
+                      <select
+                        className="select py-0.5 text-[10px] mt-1 w-full"
+                        value={r.parent_boq_item_id || ""}
+                        onChange={(e) => updateAddRow(r._idx, "parent_boq_item_id", e.target.value || null)}
+                        title="Pilih parent dalam hirarki BOQ — kosong = root level"
+                      >
+                        <option value="">— Root (tanpa parent) —</option>
+                        {parentOptions.map((p) => (
+                          <option key={p.id} value={p.id}>{p.label}</option>
+                        ))}
+                      </select>
                     </td>
                     <td className="table-td">
                       <input
@@ -2962,6 +3136,7 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false }) {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       {/* Footer summary */}

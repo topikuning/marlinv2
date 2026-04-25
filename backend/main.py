@@ -37,12 +37,33 @@ def _ensure_enum_values():
                 pass
 
 
+def _ensure_columns():
+    """Auto-migration untuk kolom baru tanpa Alembic. Idempotent."""
+    from sqlalchemy import text
+    pending = [
+        # (table, column, ddl_after_ADD_COLUMN)
+        ("variation_order_items", "parent_boq_item_id", "UUID REFERENCES boq_items(id)"),
+    ]
+    with engine.begin() as conn:
+        for table, col, ddl in pending:
+            try:
+                exists = conn.execute(text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name=:t AND column_name=:c"
+                ), {"t": table, "c": col}).first()
+                if not exists:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}"))
+            except Exception:
+                pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     for sub in ("daily", "weekly", "review", "payments", "documents"):
         os.makedirs(os.path.join(settings.UPLOAD_DIR, sub), exist_ok=True)
     _ensure_enum_values()
+    _ensure_columns()
     if settings.SCHEDULER_ENABLED:
         start_scheduler()
     yield

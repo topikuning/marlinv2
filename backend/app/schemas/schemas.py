@@ -636,6 +636,7 @@ class VOItemInput(BaseModel):
     action: str                       # add/increase/decrease/modify_spec/remove
     boq_item_id: Optional[UUID] = None
     facility_id: Optional[UUID] = None
+    parent_boq_item_id: Optional[UUID] = None  # untuk ADD: parent dalam hirarki BOQ
     master_work_code: Optional[str] = None
     description: str
     unit: Optional[str] = None

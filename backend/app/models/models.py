@@ -616,6 +616,12 @@ class VariationOrderItem(Base):
     # Untuk ADD: tempatkan di facility tertentu
     facility_id = Column(UUID(as_uuid=True), ForeignKey("facilities.id"), nullable=True)
 
+    # Untuk ADD hierarchical: kalau item baru harus berada di bawah parent
+    # tertentu (sub-item dari parent existing), simpan ID parent di sini.
+    # Saat addendum dibuat & VO di-apply ke revisi baru, parent_id BOQItem
+    # baru di-set = clone dari parent ini.
+    parent_boq_item_id = Column(UUID(as_uuid=True), ForeignKey("boq_items.id"), nullable=True)
+
     # Detail item (snapshot saat VO dibuat)
     master_work_code = Column(String(30))
     description = Column(Text, nullable=False)
