@@ -1307,6 +1307,38 @@ function AddAddendumModal({ open, onClose, contract, onSuccess }) {
               value={form.new_contract_value}
               onChange={(e) => setForm({ ...form, new_contract_value: e.target.value })}
             />
+            {selectedVoIds.length > 0 && (() => {
+              const baseValue = parseFloat(contract.current_value || 0);
+              const suggested = baseValue + totalCostImpact;
+              const currentInput = parseFloat(form.new_contract_value) || 0;
+              const matchesSuggestion = Math.abs(currentInput - suggested) < 1;
+              return (
+                <div className="mt-1 text-[11px] flex items-center gap-2 flex-wrap">
+                  <span className="text-ink-500">
+                    💡 Saran:{" "}
+                    <span className="font-mono">{fmtCurrency(baseValue)}</span>
+                    <span className={totalCostImpact >= 0 ? "text-emerald-700" : "text-red-700"}>
+                      {" "}{totalCostImpact >= 0 ? "+" : ""}{fmtCurrency(totalCostImpact)}
+                    </span>
+                    {" = "}
+                    <span className="font-semibold font-mono text-ink-800">{fmtCurrency(suggested)}</span>
+                    <span className="text-ink-400 ml-1">(berdasarkan {selectedVoIds.length} VO terpilih)</span>
+                  </span>
+                  {!matchesSuggestion && (
+                    <button
+                      type="button"
+                      className="text-brand-600 hover:underline font-medium"
+                      onClick={() => setForm({ ...form, new_contract_value: String(suggested) })}
+                    >
+                      Pakai saran →
+                    </button>
+                  )}
+                  {matchesSuggestion && (
+                    <span className="text-emerald-700 font-medium">✓ sesuai saran</span>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         </div>
         <div>
