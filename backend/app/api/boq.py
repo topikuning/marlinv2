@@ -11,7 +11,7 @@ import io
 
 from app.core.database import get_db
 from app.models.models import (
-    BOQItem, BOQItemVersion, Facility, Location, Contract, User,
+    BOQItem, BOQItemVersion, BOQRevision, Facility, Location, Contract, User,
 )
 from app.schemas.schemas import (
     BOQItemCreate, BOQItemUpdate, BOQItemOut, ExcelImportResult,
@@ -435,6 +435,13 @@ def update_boq_item(
         # bisa membuat parent lama jadi leaf atau parent baru jadi non-leaf.
         _recompute_is_leaf(db, item.boq_revision_id)
     recalculate_facility_weights(db, str(item.facility_id))
+    # Refresh cache total revisi — tanpa ini, BOQRevision.total_value stale
+    # dan tampilan 'Total BOQ' di header revision tidak ikut update.
+    if item.boq_revision_id:
+        from app.services import boq_revision_service
+        rev = db.query(BOQRevision).filter(BOQRevision.id == item.boq_revision_id).first()
+        if rev:
+            boq_revision_service.recalc_revision_totals(db, rev)
     fac = db.query(Facility).filter(Facility.id == item.facility_id).first()
     if fac:
         loc = db.query(Location).filter(Location.id == fac.location_id).first()
@@ -481,6 +488,12 @@ def delete_boq_item(
     children_count = _cascade_disable_children(db, item.boq_revision_id, item.id)
     db.flush()
     recalculate_facility_weights(db, str(item.facility_id))
+    # Refresh total revisi setelah cascade delete
+    if item.boq_revision_id:
+        from app.services import boq_revision_service
+        rev2 = db.query(BOQRevision).filter(BOQRevision.id == item.boq_revision_id).first()
+        if rev2:
+            boq_revision_service.recalc_revision_totals(db, rev2)
     db.commit()
     log_audit(
         db, current_user, "delete", "boq_item", str(item.id),
@@ -881,17 +894,22 @@ def approve_revision(
     expected = float(contract.current_value or 0)
     actual = float(rev.total_value or 0)
     diff = round(actual - expected, 2)
-    if abs(diff) >= 0.01:
+    # Aturan baru:
+    #   - BOQ > nilai kontrak: BLOCK (tidak boleh — BOQ melampaui kewajiban
+    #     legal kontrak; harus dikurangi atau nilai kontrak ditambah).
+    #   - BOQ <= nilai kontrak: ALLOW (kontrak boleh punya buffer/contingency,
+    #     pembulatan, atau alokasi non-BOQ; ini lazim di praktek).
+    if diff > 0.01:
         raise HTTPException(
             409,
             {
                 "message": (
-                    f"Total BOQ revisi {rev.revision_code} ({actual:,.2f}) tidak "
-                    f"sama dengan nilai kontrak ({expected:,.2f}). Selisih "
-                    f"{diff:,.2f}. Koreksi BOQ atau ubah nilai kontrak pada "
-                    f"Addendum sebelum approve."
+                    f"Total BOQ revisi {rev.revision_code} ({actual:,.2f}) MELEBIHI "
+                    f"nilai kontrak ({expected:,.2f}). Selisih +{diff:,.2f}. "
+                    f"BOQ tidak boleh melampaui nilai kontrak. Kurangi item BOQ "
+                    f"atau naikkan nilai kontrak pada Addendum."
                 ),
-                "code": "revision_value_mismatch",
+                "code": "revision_value_exceeds_contract",
                 "contract_value": expected,
                 "boq_total": actual,
                 "diff": diff,

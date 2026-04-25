@@ -1748,19 +1748,37 @@ function RevisionsPanel({ contract, onChange }) {
                   const boqTotal = Number(r.total_value || 0);
                   const diff = Math.round((boqTotal - contractValue) * 100) / 100;
                   const inSync = Math.abs(diff) < 0.01;
-                  return inSync ? (
-                    <p className="text-[11px] text-green-700 mt-1 font-medium">
-                      ✓ Sinkron dengan nilai kontrak ({fmtCurrency(contractValue)})
-                    </p>
-                  ) : (
+                  const exceeds = diff > 0.01; // BOQ > kontrak — block
+                  if (inSync) {
+                    return (
+                      <p className="text-[11px] text-green-700 mt-1 font-medium">
+                        ✓ Sinkron dengan nilai kontrak ({fmtCurrency(contractValue)})
+                      </p>
+                    );
+                  }
+                  if (exceeds) {
+                    return (
+                      <div className="mt-2 p-2 rounded-md bg-red-50 border border-red-200 text-[11px] text-red-900">
+                        <p className="font-semibold">
+                          ⚠ Total BOQ MELEBIHI Nilai Kontrak ({fmtCurrency(contractValue)})
+                        </p>
+                        <p className="mt-0.5">
+                          Selisih: +{fmtCurrency(diff)}. <b>Approve akan ditolak</b>.
+                          Kurangi item BOQ atau naikkan nilai kontrak pada Addendum.
+                        </p>
+                      </div>
+                    );
+                  }
+                  // diff < 0: BOQ lebih kecil dari kontrak — wajar (buffer/rounding)
+                  return (
                     <div className="mt-2 p-2 rounded-md bg-amber-50 border border-amber-200 text-[11px] text-amber-900">
                       <p className="font-semibold">
-                        ⚠ Total BOQ ≠ Nilai Kontrak ({fmtCurrency(contractValue)})
+                        ℹ Nilai Kontrak lebih besar {fmtCurrency(-diff)} dari Total BOQ
                       </p>
                       <p className="mt-0.5">
-                        Selisih: {fmtCurrency(diff)}. Approve akan ditolak
-                        sampai BOQ dikoreksi atau nilai kontrak pada Addendum
-                        diubah.
+                        Wajar bila ada buffer/contingency/rounding. Approve tetap
+                        diizinkan. Kalau ingin sinkron, koreksi nilai kontrak pada
+                        Addendum atau tambah item BOQ.
                       </p>
                     </div>
                   );
