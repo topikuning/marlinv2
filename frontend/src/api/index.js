@@ -137,6 +137,18 @@ export const voAPI = {
   review: (id, data) => api.post(`/variation-orders/${id}/review`, data),
   approve: (id, data) => api.post(`/variation-orders/${id}/approve`, data),
   reject: (id, data) => api.post(`/variation-orders/${id}/reject`, data),
+  exportExcelSnapshot: (cid, params) =>
+    api.get(`/variation-orders/by-contract/${cid}/excel-snapshot`, {
+      params, responseType: "blob",
+    }),
+  parseExcelSnapshot: (cid, file, params) => {
+    const form = new FormData();
+    form.append("file", file);
+    return api.post(`/variation-orders/by-contract/${cid}/excel-parse`, form, {
+      params,
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+  },
 };
 
 export const fieldObsAPI = {

@@ -12,7 +12,7 @@ state transition di-bypass. Setiap bypass di-log dengan tag khusus.
 from decimal import Decimal
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query, UploadFile, File
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -406,6 +406,59 @@ def update_vo(
               changes={"vo_number": vo.vo_number, "god_mode_bypass": gm},
               request=request, commit=True)
     return _to_dict(vo, db=db)
+
+
+# ─── Excel Bulk Edit (snapshot export + import) ─────────────────────────────
+
+@router.get("/by-contract/{contract_id}/excel-snapshot")
+def export_excel_snapshot(
+    contract_id: str,
+    facility_ids: Optional[str] = Query(None, description="comma-separated facility IDs; kosong = semua"),
+    vo_id: Optional[str] = Query(None, description="VO yang sedang di-edit (item-nya pre-fill vol_baru)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contract.read")),
+):
+    if not user_can_access_contract(db, current_user, contract_id):
+        raise HTTPException(403, "Akses ditolak")
+    from fastapi.responses import Response
+    from app.services import vo_excel_service
+    fac_list = None
+    if facility_ids:
+        fac_list = [s.strip() for s in facility_ids.split(",") if s.strip()]
+    try:
+        data = vo_excel_service.export_snapshot(db, contract_id, fac_list, exclude_vo_id=vo_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    fname = f"vo_snapshot_{contract_id[:8]}.xlsx"
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@router.post("/by-contract/{contract_id}/excel-parse", response_model=dict)
+async def parse_excel_snapshot(
+    contract_id: str,
+    file: UploadFile = File(...),
+    vo_id: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contract.update")),
+):
+    """
+    Parse uploaded Excel snapshot. Tidak menulis ke DB — return list
+    VOItemInput dicts + warnings supaya client bisa preview lalu replace
+    items di form sebelum save VO.
+    """
+    if not user_can_access_contract(db, current_user, contract_id):
+        raise HTTPException(403, "Akses ditolak")
+    from app.services import vo_excel_service
+    raw = await file.read()
+    try:
+        result = vo_excel_service.parse_snapshot(db, contract_id, raw, exclude_vo_id=vo_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return result
 
 
 @router.delete("/{vo_id}", response_model=dict)

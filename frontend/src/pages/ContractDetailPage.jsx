@@ -2504,6 +2504,7 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
             items={form.items}
             onChange={(newItems) => setForm({ ...form, items: newItems })}
             isAdmin={role === "superadmin" || role === "admin_pusat"}
+            voId={isEdit ? initial.id : null}
           />
         </div>
       </div>
@@ -2734,7 +2735,8 @@ function FacilityPicker({ facilities, value, onChange }) {
 // dari selisih ke Vol Awal. Harga Satuan read-only by default (kontrak →
 // harga tidak boleh diubah); admin/superadmin bisa toggle override.
 // ════════════════════════════════════════════════════════════════════════════
-function VOItemsGrid({ contract, items, onChange, isAdmin = false }) {
+function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }) {
+  const [showExcelPicker, setShowExcelPicker] = useState(null); // 'export' | 'import' | null
   const allFacilities = useMemo(() =>
     (contract.locations || []).flatMap((l) =>
       (l.facilities || []).map((f) => ({
@@ -3019,6 +3021,22 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false }) {
             >
               <Trash2 size={11} /> Hapus Fasilitas
             </button>
+            <button
+              type="button"
+              className="btn-ghost btn-xs"
+              onClick={() => setShowExcelPicker("export")}
+              title="Download snapshot BOQ untuk edit massal di Excel"
+            >
+              <Download size={11} /> Export Excel
+            </button>
+            <button
+              type="button"
+              className="btn-ghost btn-xs"
+              onClick={() => setShowExcelPicker("import")}
+              title="Upload Excel hasil edit untuk apply perubahan massal"
+            >
+              <Upload size={11} /> Import Excel
+            </button>
           </>
         )}
         {isAdmin && !facilityRemoved && (
@@ -3286,7 +3304,211 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false }) {
         💡 Edit Vol Baru → action auto (naik=Tambah Vol, turun=Kurang Vol, 0=Hapus Item).
         {!allowPriceEdit && " Harga satuan kontrak tidak boleh diubah secara default."}
       </p>
+
+      {showExcelPicker && (
+        <VOExcelDialog
+          mode={showExcelPicker}
+          contract={contract}
+          allFacilities={allFacilities}
+          currentFacilityId={facilityId}
+          voId={voId}
+          items={items}
+          onClose={() => setShowExcelPicker(null)}
+          onImported={(parsedItems, facilityIds) => {
+            // Replace items utk facility_codes yang ada di file, preserve sisanya
+            const facIdSet = new Set(facilityIds);
+            const kept = items.filter((it) =>
+              !it.facility_id || !facIdSet.has(it.facility_id)
+            );
+            // Plus untuk INCREASE/DECREASE/REMOVE/MODIFY: filter via boq_item_id
+            const boqIdsNew = new Set(
+              parsedItems.filter((p) => p.boq_item_id).map((p) => p.boq_item_id)
+            );
+            const finalKept = kept.filter((it) =>
+              !it.boq_item_id || !boqIdsNew.has(it.boq_item_id)
+            );
+            onChange([...finalKept, ...parsedItems]);
+            setShowExcelPicker(null);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function VOExcelDialog({ mode, contract, allFacilities, currentFacilityId, voId, items, onClose, onImported }) {
+  const [scope, setScope] = useState("current"); // 'current' | 'all' | 'multi'
+  const [selectedFacIds, setSelectedFacIds] = useState([currentFacilityId].filter(Boolean));
+  const [busy, setBusy] = useState(false);
+  const [parseResult, setParseResult] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const facIdsForRequest = scope === "current"
+    ? [currentFacilityId]
+    : scope === "all"
+    ? null  // backend resolves: null = all facilities
+    : selectedFacIds;
+
+  const doExport = async () => {
+    setBusy(true);
+    try {
+      const params = { vo_id: voId || undefined };
+      if (facIdsForRequest && facIdsForRequest.length > 0) {
+        params.facility_ids = facIdsForRequest.join(",");
+      }
+      const { data } = await voAPI.exportExcelSnapshot(contract.id, params);
+      const fname = `vo_snapshot_${contract.contract_number || contract.id.slice(0, 8)}.xlsx`;
+      downloadBlob(data, fname);
+      toast.success("Snapshot ter-download. Edit kolom 'vol_baru' lalu Import lagi.");
+      onClose();
+    } catch (e) {
+      toast.error(parseApiError(e));
+    } finally { setBusy(false); }
+  };
+
+  const onFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBusy(true);
+    setParseResult(null);
+    try {
+      const params = { vo_id: voId || undefined };
+      const { data } = await voAPI.parseExcelSnapshot(contract.id, file, params);
+      setParseResult(data);
+    } catch (err) {
+      toast.error(parseApiError(err));
+    } finally { setBusy(false); }
+  };
+
+  const applyParsed = () => {
+    if (!parseResult?.items?.length) return;
+    // Resolve facility_ids dari facility_codes_in_file
+    const codeToId = {};
+    allFacilities.forEach((f) => { codeToId[f.facility_code] = f.id; });
+    const facIds = (parseResult.facility_codes_in_file || []).map((c) => codeToId[c]).filter(Boolean);
+    onImported(parseResult.items, facIds);
+    toast.success(`${parseResult.items.length} item ter-apply ke form.`);
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={mode === "export" ? "Export BOQ Snapshot" : "Import dari Excel"}
+      size="md"
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose}>Tutup</button>
+          {mode === "export" && (
+            <button className="btn-primary" onClick={doExport} disabled={busy}>
+              {busy && <Spinner size={12} />} Download Snapshot
+            </button>
+          )}
+          {mode === "import" && parseResult?.items?.length > 0 && (
+            <button className="btn-primary" onClick={applyParsed} disabled={busy}>
+              Terapkan {parseResult.items.length} Perubahan ke Form
+            </button>
+          )}
+        </>
+      }
+    >
+      {mode === "export" ? (
+        <div className="space-y-3 text-sm">
+          <p className="text-ink-700">Pilih scope fasilitas:</p>
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="radio" checked={scope === "current"} onChange={() => setScope("current")} />
+              <span>Hanya fasilitas saat ini</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="radio" checked={scope === "all"} onChange={() => setScope("all")} />
+              <span>Semua fasilitas di kontrak ({allFacilities.length})</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="radio" checked={scope === "multi"} onChange={() => setScope("multi")} />
+              <span>Pilih beberapa</span>
+            </label>
+            {scope === "multi" && (
+              <div className="ml-5 max-h-48 overflow-y-auto border border-ink-200 rounded p-2 space-y-1">
+                {allFacilities.map((f) => (
+                  <label key={f.id} className="flex items-center gap-2 text-xs cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selectedFacIds.includes(f.id)}
+                      onChange={(e) => {
+                        if (e.target.checked) setSelectedFacIds([...selectedFacIds, f.id]);
+                        else setSelectedFacIds(selectedFacIds.filter((id) => id !== f.id));
+                      }}
+                    />
+                    <span className="font-mono text-ink-500">[{f.location_code}] {f.facility_code}</span>
+                    <span>{f.facility_name}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="p-2 bg-ink-50 rounded text-[11px] text-ink-700">
+            <p className="font-medium">Yang akan ada di file:</p>
+            <ul className="list-disc list-inside mt-1 space-y-0.5">
+              <li>BOQ aktif fasilitas terpilih (kode, parent_code, vol_awal, harga)</li>
+              <li>Info VO APPROVED-pending lain (kolom vol_pending_vo_lain, nilai_pending, catatan_vo_lain)</li>
+              <li>vol_efektif = vol_awal + vol_pending (proyeksi kalau VO lain di-bundle)</li>
+              <li><b>vol_baru</b> editable — default = vol_efektif</li>
+            </ul>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-3 text-sm">
+          <p className="text-ink-700">
+            Upload Excel hasil edit (kolom <code className="bg-ink-100 px-1 rounded">vol_baru</code> yang anda ubah).
+            Sistem akan auto-detect action per row.
+          </p>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            onChange={onFileChange}
+            disabled={busy}
+            className="block w-full text-xs"
+          />
+          {busy && <p className="text-xs text-ink-500">Memproses...</p>}
+          {parseResult && (
+            <div className="space-y-2">
+              <div className="p-2 rounded bg-ink-50 text-xs">
+                <p className="font-semibold">Hasil parse:</p>
+                <p>{parseResult.items.length} item akan diterapkan</p>
+                <p className="text-ink-500">
+                  Facility ter-pengaruh: {(parseResult.facility_codes_in_file || []).join(", ") || "—"}
+                </p>
+              </div>
+              {parseResult.errors?.length > 0 && (
+                <div className="p-2 rounded bg-red-50 border border-red-200 text-xs text-red-800">
+                  <p className="font-semibold">{parseResult.errors.length} error — perbaiki dulu:</p>
+                  <ul className="list-disc list-inside mt-1 max-h-32 overflow-y-auto">
+                    {parseResult.errors.slice(0, 30).map((e, i) => <li key={i}>{e}</li>)}
+                  </ul>
+                </div>
+              )}
+              {parseResult.warnings?.length > 0 && (
+                <div className="p-2 rounded bg-amber-50 border border-amber-200 text-xs text-amber-800">
+                  <p className="font-semibold">{parseResult.warnings.length} warning:</p>
+                  <ul className="list-disc list-inside mt-1 max-h-32 overflow-y-auto">
+                    {parseResult.warnings.slice(0, 30).map((w, i) => <li key={i}>{w}</li>)}
+                  </ul>
+                </div>
+              )}
+              {parseResult.items.length > 0 && (
+                <div className="p-2 bg-emerald-50 border border-emerald-200 rounded text-xs">
+                  Klik tombol "Terapkan" di bawah untuk replace items existing form
+                  dengan hasil parse. Perubahan baru ter-commit ke DB saat anda klik
+                  "Simpan VO" di modal utama.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </Modal>
   );
 }
 
