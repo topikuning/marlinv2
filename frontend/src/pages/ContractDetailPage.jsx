@@ -42,6 +42,8 @@ export default function ContractDetailPage() {
   const [editLocation, setEditLocation] = useState(null); // location obj untuk edit
   const [showAddFacility, setShowAddFacility] = useState(null); // location obj
   const [showAddendum, setShowAddendum] = useState(false);
+  const [editAddendum, setEditAddendum] = useState(null); // addendum DRAFT yg di-edit
+  const [signAddendum, setSignAddendum] = useState(null); // addendum DRAFT yg mau di-sign
   const [boqFacility, setBoqFacility] = useState(null);
   const [boqItems, setBoqItems] = useState([]);
   const [boqLocation, setBoqLocation] = useState(null);
@@ -467,14 +469,25 @@ export default function ContractDetailPage() {
             />
           ) : (
             <div className="space-y-3">
-              {contract.addenda.map((a) => (
+              {contract.addenda.map((a) => {
+                const isDraft = !a.signed_at;
+                return (
                 <div key={a.id} className="card p-4 flex items-start gap-4">
-                  <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center flex-shrink-0">
-                    <FileText size={16} className="text-amber-600" />
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                    isDraft ? "bg-slate-100" : "bg-amber-50"
+                  }`}>
+                    <FileText size={16} className={isDraft ? "text-slate-500" : "text-amber-600"} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <p className="font-medium text-ink-900">{a.number}</p>
+                      <span className={`text-[10px] px-2 py-0.5 rounded border font-semibold ${
+                        isDraft
+                          ? "bg-slate-100 text-slate-700 border-slate-300"
+                          : "bg-emerald-50 text-emerald-700 border-emerald-300"
+                      }`}>
+                        {isDraft ? "DRAFT" : "SIGNED"}
+                      </span>
                       <span className="badge-gray text-[10px]">{a.addendum_type?.toUpperCase()}</span>
                       {a.extension_days > 0 && (
                         <span className="badge-yellow">+{a.extension_days} hari</span>
@@ -488,7 +501,10 @@ export default function ContractDetailPage() {
                     <p className="text-xs text-ink-500 mt-0.5">
                       Berlaku: {fmtDate(a.effective_date)}
                       {a.bundled_vos?.length > 0 && (
-                        <span className="ml-2">· {a.bundled_vos.length} VO ter-bundle</span>
+                        <span className="ml-2">· {a.bundled_vos.length} VO ter-link</span>
+                      )}
+                      {!isDraft && a.signed_at && (
+                        <span className="ml-2">· Ditandatangani {fmtDate(a.signed_at)}</span>
                       )}
                     </p>
                     {a.description && (
@@ -503,34 +519,58 @@ export default function ContractDetailPage() {
                         ))}
                       </div>
                     )}
+                    {isDraft && (
+                      <p className="text-[11px] text-amber-700 mt-2">
+                        ℹ Addendum DRAFT belum mengubah kontrak. Klik "Tanda Tangan" untuk apply.
+                      </p>
+                    )}
                   </div>
                   {canEditContract && (
-                    <button
-                      className="btn-ghost btn-xs text-red-600 hover:bg-red-50"
-                      onClick={async () => {
-                        if (!confirm(
-                          `Hapus Addendum ${a.number}?\n\n` +
-                          `Konsekuensi:\n` +
-                          `- Revisi BOQ yang dihasilkan akan ikut terhapus\n` +
-                          `- VO yang ter-bundle akan kembali ke status APPROVED` +
-                          (a.old_contract_value ? `\n- Nilai kontrak dikembalikan ke ${fmtCurrency(a.old_contract_value)}` : "") +
-                          (a.old_end_date ? `\n- Tanggal selesai dikembalikan ke ${fmtDate(a.old_end_date)}` : "")
-                        )) return;
-                        try {
-                          const { data } = await contractsAPI.deleteAddendum(contract.id, a.id);
-                          toast.success(
-                            `Addendum dihapus` +
-                            (data?.unbundled_vos ? ` — ${data.unbundled_vos} VO di-unbundle` : "")
-                          );
-                          window.location.reload();
-                        } catch (e) { toast.error(parseApiError(e)); }
-                      }}
-                    >
-                      <Trash2 size={10} /> Hapus
-                    </button>
+                    <div className="flex flex-col gap-1 flex-shrink-0">
+                      {isDraft && (
+                        <>
+                          <button
+                            className="btn-ghost btn-xs"
+                            onClick={() => setEditAddendum(a)}
+                            title="Edit metadata + VO yang di-link"
+                          >
+                            <Edit2 size={10} /> Edit
+                          </button>
+                          <button
+                            className="btn-primary btn-xs"
+                            onClick={() => setSignAddendum(a)}
+                            title="Tanda tangani & apply ke kontrak"
+                          >
+                            <Check size={10} /> Tanda Tangan
+                          </button>
+                        </>
+                      )}
+                      <button
+                        className="btn-ghost btn-xs text-red-600 hover:bg-red-50"
+                        onClick={async () => {
+                          const consequence = isDraft
+                            ? `Konsekuensi:\n- VO ter-link kembali tidak ter-link\n- Tidak ada perubahan ke kontrak (DRAFT belum apply)`
+                            : `Konsekuensi:\n- Revisi BOQ yang dihasilkan akan ikut terhapus (kalau masih DRAFT)\n- VO ter-bundle kembali ke APPROVED` +
+                              (a.old_contract_value ? `\n- Nilai kontrak dikembalikan ke ${fmtCurrency(a.old_contract_value)}` : "") +
+                              (a.old_end_date ? `\n- Tanggal selesai dikembalikan ke ${fmtDate(a.old_end_date)}` : "");
+                          if (!confirm(`Hapus Addendum ${a.number} (${isDraft ? "DRAFT" : "SIGNED"})?\n\n${consequence}`)) return;
+                          try {
+                            const { data } = await contractsAPI.deleteAddendum(contract.id, a.id);
+                            toast.success(
+                              `Addendum dihapus` +
+                              (data?.unlinked_vos ? ` — ${data.unlinked_vos} VO di-unlink` : "")
+                            );
+                            window.location.reload();
+                          } catch (e) { toast.error(parseApiError(e)); }
+                        }}
+                      >
+                        <Trash2 size={10} /> Hapus
+                      </button>
+                    </div>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -621,6 +661,24 @@ export default function ContractDetailPage() {
           load();
         }}
       />
+      <AddAddendumModal
+        open={!!editAddendum}
+        onClose={() => setEditAddendum(null)}
+        contract={contract}
+        initial={editAddendum}
+        onSuccess={() => {
+          setEditAddendum(null);
+          load();
+        }}
+      />
+      {signAddendum && (
+        <SignAddendumModal
+          contract={contract}
+          addendum={signAddendum}
+          onClose={() => setSignAddendum(null)}
+          onSuccess={() => { setSignAddendum(null); load(); }}
+        />
+      )}
       {boqLocation && (
         <BOQImportWizard
           open={showImport}
@@ -1160,7 +1218,111 @@ function blankFac(order = 0) {
 // Add Addendum Modal
 // ════════════════════════════════════════════════════════════════════════════
 
-function AddAddendumModal({ open, onClose, contract, onSuccess }) {
+// ════════════════════════════════════════════════════════════════════════════
+// SignAddendumModal — confirm tanda-tangan addendum DRAFT
+// Apply: bundle VO, clone BOQ revision, update contract status/value/end_date
+// ════════════════════════════════════════════════════════════════════════════
+function SignAddendumModal({ contract, addendum, onClose, onSuccess }) {
+  const [loading, setLoading] = useState(false);
+  const baseValue = parseFloat(contract.original_value || 0);
+  const newValue = parseFloat(addendum.new_contract_value || 0);
+  const deltaPct = baseValue > 0 ? ((newValue - baseValue) / baseValue) * 100 : 0;
+  const needsKpa = Math.abs(deltaPct) > 10;
+  const kpaMissing = needsKpa && !addendum.kpa_approved_by_id;
+
+  const submit = async () => {
+    if (kpaMissing) {
+      toast.error("KPA approval wajib untuk Δ > 10%. Edit addendum dan isi kpa_approved_by_id dulu.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const { data } = await contractsAPI.signAddendum(contract.id, addendum.id);
+      toast.success(
+        `Addendum di-sign. Revisi BOQ baru dibuat (DRAFT) — approve di tab BOQ Versions.` +
+        (data?.bundled_vos?.length ? ` ${data.bundled_vos.length} VO ter-bundle.` : "")
+      );
+      onSuccess?.();
+    } catch (e) {
+      toast.error(parseApiError(e));
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`Tanda Tangan ${addendum.number}`}
+      size="md"
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose}>Batal</button>
+          <button className="btn-primary" onClick={submit} disabled={loading || kpaMissing}>
+            {loading && <Spinner size={14} />} <Check size={12} /> Tanda Tangan & Apply
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-3 text-sm">
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded text-xs text-amber-900">
+          <p className="font-semibold mb-1">⚠ Aksi LEGAL — tidak bisa di-undo dengan mudah.</p>
+          <p>Setelah tanda tangan, sistem akan:</p>
+          <ul className="list-disc list-inside mt-1 space-y-0.5">
+            <li>Mengubah status VO ter-link dari APPROVED → BUNDLED</li>
+            <li>Membuat revisi BOQ V-baru (DRAFT) dari revisi aktif + apply perubahan VO</li>
+            <li>Mengubah nilai kontrak ke <b>{fmtCurrency(addendum.new_contract_value)}</b></li>
+            {addendum.new_end_date && (
+              <li>Mengubah tanggal selesai ke <b>{fmtDate(addendum.new_end_date)}</b></li>
+            )}
+            {addendum.extension_days > 0 && (
+              <li>Memperpanjang durasi <b>{addendum.extension_days} hari</b></li>
+            )}
+            <li>Mengubah status kontrak ke ADDENDUM</li>
+          </ul>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 text-xs">
+          <div>
+            <p className="text-ink-500">Nilai Awal</p>
+            <p className="font-semibold">{fmtCurrency(baseValue)}</p>
+          </div>
+          <div>
+            <p className="text-ink-500">Nilai Baru</p>
+            <p className="font-semibold">{fmtCurrency(newValue)}</p>
+          </div>
+          <div>
+            <p className="text-ink-500">Δ Nilai</p>
+            <p className={`font-semibold ${(newValue - baseValue) >= 0 ? "text-emerald-700" : "text-red-700"}`}>
+              {(newValue - baseValue) >= 0 ? "+" : ""}{fmtCurrency(newValue - baseValue)}
+            </p>
+          </div>
+          <div>
+            <p className="text-ink-500">Δ %</p>
+            <p className={`font-semibold ${Math.abs(deltaPct) > 10 ? "text-red-700" : ""}`}>
+              {deltaPct >= 0 ? "+" : ""}{deltaPct.toFixed(2)}%
+            </p>
+          </div>
+        </div>
+
+        {needsKpa && (
+          <div className={`p-3 rounded text-xs ${kpaMissing ? "bg-red-50 border border-red-200 text-red-900" : "bg-emerald-50 border border-emerald-200 text-emerald-900"}`}>
+            <p className="font-semibold">
+              {kpaMissing ? "✗ KPA approval BELUM diisi" : "✓ KPA approval ter-isi"}
+            </p>
+            <p className="mt-1">
+              Perpres 16/2018 ps. 54: Δ Nilai &gt; 10% wajib persetujuan KPA.
+              {kpaMissing && " Edit Addendum dan isi field 'kpa_approved_by_id' sebelum sign."}
+            </p>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+
+function AddAddendumModal({ open, onClose, contract, initial, onSuccess }) {
+  const isEdit = !!initial;
   const [form, setForm] = useState({
     number: "",
     addendum_type: "cco",
@@ -1176,7 +1338,18 @@ function AddAddendumModal({ open, onClose, contract, onSuccess }) {
   const [loadingVOs, setLoadingVOs] = useState(false);
 
   useEffect(() => {
-    if (open && contract) {
+    if (!open || !contract) return;
+    if (isEdit && initial) {
+      setForm({
+        number: initial.number || "",
+        addendum_type: initial.addendum_type || "cco",
+        effective_date: initial.effective_date || new Date().toISOString().slice(0, 10),
+        extension_days: initial.extension_days || 0,
+        new_end_date: initial.new_end_date || contract.end_date || "",
+        new_contract_value: initial.new_contract_value || contract.current_value || "",
+        description: initial.description || "",
+      });
+    } else {
       setForm({
         number: "",
         addendum_type: "cco",
@@ -1186,19 +1359,27 @@ function AddAddendumModal({ open, onClose, contract, onSuccess }) {
         new_contract_value: contract.current_value || "",
         description: "",
       });
-      // Fetch VO APPROVED yang belum di-bundle
-      setLoadingVOs(true);
-      voAPI.listByContract(contract.id, { status: "approved" })
-        .then(({ data }) => {
-          const all = data?.items || [];
-          const available = all.filter((v) => !v.bundled_addendum_id);
-          setApprovedVOs(available);
-          setSelectedVoIds(available.map((v) => v.id)); // default pilih semua
-        })
-        .catch(() => setApprovedVOs([]))
-        .finally(() => setLoadingVOs(false));
     }
-  }, [open, contract]);
+    // Fetch VO APPROVED — saat edit, include juga VO yang sudah ter-link ke
+    // addendum ini supaya checkbox-nya tampil.
+    setLoadingVOs(true);
+    voAPI.listByContract(contract.id, { status: "approved" })
+      .then(({ data }) => {
+        const all = data?.items || [];
+        const available = all.filter(
+          (v) => !v.bundled_addendum_id || (isEdit && v.bundled_addendum_id === initial.id)
+        );
+        setApprovedVOs(available);
+        if (isEdit) {
+          // Edit mode: pilih VO yang sudah ter-link ke addendum ini
+          setSelectedVoIds(available.filter((v) => v.bundled_addendum_id === initial.id).map((v) => v.id));
+        } else {
+          setSelectedVoIds(available.map((v) => v.id));
+        }
+      })
+      .catch(() => setApprovedVOs([]))
+      .finally(() => setLoadingVOs(false));
+  }, [open, contract, isEdit, initial?.id]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleVO = (id) => {
     setSelectedVoIds((prev) =>
@@ -1213,19 +1394,25 @@ function AddAddendumModal({ open, onClose, contract, onSuccess }) {
   const submit = async () => {
     setLoading(true);
     try {
-      await contractsAPI.createAddendum(contract.id, {
+      const payload = {
         ...form,
         extension_days: parseInt(form.extension_days) || 0,
         new_contract_value: form.new_contract_value
           ? parseFloat(form.new_contract_value)
           : null,
         vo_ids: selectedVoIds,
-      });
-      toast.success(
-        selectedVoIds.length > 0
-          ? `Addendum tersimpan — ${selectedVoIds.length} VO ter-bundle ke revisi baru`
-          : "Addendum tersimpan"
-      );
+      };
+      if (isEdit) {
+        await contractsAPI.updateAddendum(contract.id, initial.id, payload);
+        toast.success("Addendum DRAFT diperbarui");
+      } else {
+        await contractsAPI.createAddendum(contract.id, payload);
+        toast.success(
+          selectedVoIds.length > 0
+            ? `Addendum DRAFT tersimpan — ${selectedVoIds.length} VO ter-link. Klik 'Tanda Tangan' di tab Addendum untuk apply.`
+            : "Addendum DRAFT tersimpan"
+        );
+      }
       onSuccess?.();
     } catch (e) {
       toast.error(parseApiError(e));
@@ -1238,13 +1425,13 @@ function AddAddendumModal({ open, onClose, contract, onSuccess }) {
     <Modal
       open={open}
       onClose={onClose}
-      title="Tambah Addendum"
+      title={isEdit ? `Edit Addendum DRAFT · ${initial?.number || ""}` : "Tambah Addendum (DRAFT)"}
       size="md"
       footer={
         <>
           <button className="btn-secondary" onClick={onClose}>Batal</button>
           <button className="btn-primary" onClick={submit} disabled={loading}>
-            {loading && <Spinner size={14} />} Simpan
+            {loading && <Spinner size={14} />} {isEdit ? "Simpan Perubahan" : "Simpan sebagai DRAFT"}
           </button>
         </>
       }

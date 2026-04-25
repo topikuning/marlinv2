@@ -125,8 +125,17 @@ def _contract_to_detail(c: Contract, db: Session) -> dict:
         }
         locations.append(loc_d)
 
-    addenda = [
-        {
+    addenda = []
+    for a in c.addenda:
+        # Bundled / linked VOs (DRAFT addendum: status APPROVED + bundled_addendum_id;
+        # SIGNED addendum: status BUNDLED + bundled_addendum_id)
+        from app.models.models import VariationOrder
+        linked_vos = (
+            db.query(VariationOrder)
+            .filter(VariationOrder.bundled_addendum_id == a.id)
+            .all()
+        )
+        addenda.append({
             "id": str(a.id),
             "contract_id": str(a.contract_id),
             "number": a.number,
@@ -138,10 +147,22 @@ def _contract_to_detail(c: Contract, db: Session) -> dict:
             "old_contract_value": float(a.old_contract_value or 0),
             "new_contract_value": float(a.new_contract_value or 0),
             "description": a.description,
+            "signed_at": a.signed_at.isoformat() if a.signed_at else None,
+            "signed_by_id": str(a.signed_by_id) if a.signed_by_id else None,
+            "kpa_approved_by_id": str(a.kpa_approved_by_id) if a.kpa_approved_by_id else None,
+            "kpa_approved_at": a.kpa_approved_at.isoformat() if a.kpa_approved_at else None,
             "created_at": a.created_at.isoformat(),
-        }
-        for a in c.addenda
-    ]
+            "bundled_vos": [
+                {
+                    "id": str(v.id),
+                    "vo_number": v.vo_number,
+                    "title": v.title,
+                    "status": v.status.value if hasattr(v.status, "value") else v.status,
+                    "cost_impact": float(v.cost_impact or 0),
+                }
+                for v in linked_vos
+            ],
+        })
 
     company = db.query(Company).filter(Company.id == c.company_id).first()
     ppk = db.query(PPK).filter(PPK.id == c.ppk_id).first()
@@ -681,6 +702,10 @@ def create_addendum(
         if get_user_role_code(db, kpa_user) not in ("kpa", "superadmin") and not gm:
             raise HTTPException(400, "User yang dipilih bukan KPA.")
 
+    # Konvensi baru: addendum dibuat sebagai DRAFT (signed_at=None).
+    # Tidak bundle VO (status tetap APPROVED), tidak buat BOQ revision baru,
+    # tidak ubah contract.status / value / end_date. Semua side-effects baru
+    # terjadi saat user POST /sign endpoint terpisah.
     addendum = ContractAddendum(
         contract_id=contract_id,
         number=data.number,
@@ -692,10 +717,10 @@ def create_addendum(
         old_contract_value=c.current_value,
         new_contract_value=data.new_contract_value,
         description=data.description,
-        signed_by_id=current_user.id,
-        signed_at=datetime.utcnow(),
+        signed_by_id=None,
+        signed_at=None,  # DRAFT
         kpa_approved_by_id=data.kpa_approved_by_id,
-        kpa_approved_at=datetime.utcnow() if data.kpa_approved_by_id else None,
+        kpa_approved_at=None,
         kpa_approval_notes=data.kpa_approval_notes,
         god_mode_bypass=gm,
         created_by=current_user.id,
@@ -703,74 +728,250 @@ def create_addendum(
     db.add(addendum)
     db.flush()
 
-    # Bundle VO yang dipilih (status VO → BUNDLED)
-    bundled_vos = []
+    # Link VO ter-pilih sebagai DRAFT — set bundled_addendum_id tapi
+    # status VO TETAP APPROVED. Status berubah ke BUNDLED hanya saat sign.
+    linked_vo_ids = []
     if data.vo_ids:
-        bundled_vos = bundle_vos_to_addendum(
-            db, c, addendum, [str(i) for i in data.vo_ids],
-            god_mode=gm, user=current_user,
-        )
-
-    # Apply schedule / value changes to the contract header immediately.
-    if data.new_end_date:
-        c.end_date = data.new_end_date
-        c.duration_days = (c.end_date - c.start_date).days
-    elif data.extension_days:
-        import datetime as _dt
-        c.end_date = c.end_date + _dt.timedelta(days=data.extension_days)
-        c.duration_days = (c.end_date - c.start_date).days
-    if data.new_contract_value:
-        c.current_value = data.new_contract_value
-    c.status = ContractStatus.ADDENDUM
-
-    new_revision_id = None
-    touches_boq = data.addendum_type in (
-        AddendumType.CCO,
-        AddendumType.VALUE_CHANGE,
-        AddendumType.COMBINED,
-    ) or bool(bundled_vos)
-
-    if touches_boq:
-        from app.services import boq_revision_service
-        new_rev = boq_revision_service.clone_revision_for_addendum(
-            db, addendum, created_by_id=current_user.id,
-        )
-        # Apply VO items ke revisi baru
-        if bundled_vos:
-            _apply_vo_items_to_revision(db, new_rev, bundled_vos)
-        new_revision_id = str(new_rev.id)
+        from app.models.models import VariationOrder, VOStatus
+        for vid in data.vo_ids:
+            vo = db.query(VariationOrder).filter(VariationOrder.id == vid).first()
+            if not vo or vo.contract_id != c.id:
+                continue
+            if vo.status != VOStatus.APPROVED:
+                continue
+            vo.bundled_addendum_id = addendum.id
+            linked_vo_ids.append(str(vo.id))
 
     db.commit()
     db.refresh(addendum)
-    if gm:
-        log_god_mode_bypass(
-            db, current_user, c,
-            action="sign_addendum_with_bypass",
-            target_type="contract_addendum", target_id=str(addendum.id),
-            details={"needs_kpa": needs_kpa, "vo_ids": [str(i) for i in data.vo_ids]},
-            request=request,
-        )
-        db.commit()
     log_audit(
-        db, current_user, "sign_addendum", "addendum", str(addendum.id),
+        db, current_user, "create_addendum_draft", "addendum", str(addendum.id),
         changes={
             "contract_id": contract_id,
             "number": data.number,
             "type": data.addendum_type.value,
-            "new_revision_id": new_revision_id,
-            "bundled_vo_ids": [str(v.id) for v in bundled_vos],
-            "kpa_required": needs_kpa,
-            "kpa_approved_by": str(data.kpa_approved_by_id) if data.kpa_approved_by_id else None,
-            "god_mode_bypass": gm,
+            "linked_vo_ids": linked_vo_ids,
+            "status": "DRAFT",
         },
         request=request, commit=True,
     )
     return {
         "id": str(addendum.id),
         "success": True,
-        "new_revision_id": new_revision_id,
-        "bundled_vos": [str(v.id) for v in bundled_vos],
+        "status": "draft",
+        "linked_vos": linked_vo_ids,
         "god_mode_bypass": gm,
+        "message": "Addendum tersimpan sebagai DRAFT. Klik 'Tanda Tangan & Apply' di tab Addendum untuk menerapkan ke kontrak.",
+    }
+
+
+@router.put("/{contract_id}/addenda/{addendum_id}", response_model=dict)
+def update_addendum(
+    contract_id: str, addendum_id: str, data: AddendumCreate, request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contract.update")),
+):
+    """
+    Edit Addendum DRAFT — boleh ubah metadata + re-pilih VO yang dilink.
+    Tidak boleh untuk Addendum yang sudah SIGNED (signed_at != NULL) —
+    untuk koreksi SIGNED, user harus delete + buat ulang.
+    """
+    a = db.query(ContractAddendum).filter(
+        ContractAddendum.id == addendum_id,
+        ContractAddendum.contract_id == contract_id,
+    ).first()
+    if not a:
+        raise HTTPException(404, "Addendum tidak ditemukan")
+    if a.signed_at is not None:
+        raise HTTPException(
+            400,
+            "Addendum sudah SIGNED — tidak bisa di-edit. Hapus dan buat ulang kalau perlu koreksi.",
+        )
+
+    c = db.query(Contract).filter(Contract.id == contract_id, Contract.deleted_at.is_(None)).first()
+    if not c:
+        raise HTTPException(404, "Kontrak tidak ditemukan")
+
+    from app.api.deps import assert_role_in
+    from app.services.vo_service import is_god_mode_active
+    gm = is_god_mode_active(c)
+    if not gm:
+        assert_role_in(
+            db, current_user, "ppk", "admin_pusat", "kpa",
+            action="Edit Addendum DRAFT",
+        )
+
+    # Update metadata
+    a.number = data.number
+    a.addendum_type = data.addendum_type
+    a.effective_date = data.effective_date
+    a.extension_days = data.extension_days
+    a.new_end_date = data.new_end_date
+    a.new_contract_value = data.new_contract_value
+    a.description = data.description
+    a.kpa_approved_by_id = data.kpa_approved_by_id
+    a.kpa_approval_notes = data.kpa_approval_notes
+
+    # Re-link VOs: clear bundled_addendum_id semua yang ter-link ke addendum ini,
+    # lalu set ulang sesuai vo_ids baru.
+    from app.models.models import VariationOrder, VOStatus
+    db.query(VariationOrder).filter(
+        VariationOrder.bundled_addendum_id == a.id
+    ).update({"bundled_addendum_id": None}, synchronize_session=False)
+
+    linked = []
+    if data.vo_ids:
+        for vid in data.vo_ids:
+            vo = db.query(VariationOrder).filter(VariationOrder.id == vid).first()
+            if not vo or vo.contract_id != c.id:
+                continue
+            if vo.status != VOStatus.APPROVED:
+                continue
+            vo.bundled_addendum_id = a.id
+            linked.append(str(vo.id))
+
+    db.commit()
+    db.refresh(a)
+    log_audit(
+        db, current_user, "update_addendum_draft", "addendum", str(a.id),
+        changes={"linked_vo_ids": linked}, request=request, commit=True,
+    )
+    return {"id": str(a.id), "success": True, "linked_vos": linked}
+
+
+@router.post("/{contract_id}/addenda/{addendum_id}/sign", response_model=dict)
+def sign_addendum(
+    contract_id: str, addendum_id: str, request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("contract.update")),
+):
+    """
+    Tanda-tangani Addendum DRAFT — titik LEGAL yang menerapkan perubahan
+    ke kontrak: bundle VO (status BUNDLED), clone BOQ revision baru DRAFT,
+    apply VO items ke revisi, ubah contract.status/value/end_date.
+
+    Setelah signed, addendum jadi immutable kecuali rollback via delete.
+    """
+    from app.services.vo_service import (
+        is_god_mode_active, log_god_mode_bypass,
+        requires_kpa_approval, bundle_vos_to_addendum,
+    )
+
+    a = db.query(ContractAddendum).filter(
+        ContractAddendum.id == addendum_id,
+        ContractAddendum.contract_id == contract_id,
+    ).first()
+    if not a:
+        raise HTTPException(404, "Addendum tidak ditemukan")
+    if a.signed_at is not None:
+        raise HTTPException(400, "Addendum sudah SIGNED.")
+
+    c = db.query(Contract).filter(Contract.id == contract_id, Contract.deleted_at.is_(None)).first()
+    if not c:
+        raise HTTPException(404, "Kontrak tidak ditemukan")
+
+    gm = is_god_mode_active(c)
+
+    # Role gate — sign = aksi LEGAL, hanya PPK/admin_pusat/KPA
+    if not gm:
+        from app.api.deps import assert_role_in
+        assert_role_in(
+            db, current_user, "ppk", "admin_pusat", "kpa",
+            action="Tanda-tangan Addendum (sign_addendum)",
+        )
+
+    # Threshold check (Perpres ps. 54 — 10% rule)
+    needs_kpa = False
+    if a.new_contract_value is not None:
+        needs_kpa = requires_kpa_approval(c, a.new_contract_value)
+    if needs_kpa and not a.kpa_approved_by_id and not gm:
+        raise HTTPException(
+            400,
+            {
+                "code": "kpa_approval_required",
+                "message": (
+                    "Perubahan nilai > 10% dari nilai kontrak awal. "
+                    "Perpres 16/2018 ps. 54: Addendum ini wajib disetujui KPA. "
+                    "Edit Addendum dan isi kpa_approved_by_id sebelum sign."
+                ),
+                "threshold_percent": 10,
+                "original_value": float(c.original_value or 0),
+                "new_value": float(a.new_contract_value or 0),
+            },
+        )
+
+    # Resolve VO yang ter-link sebagai DRAFT (bundled_addendum_id=this addendum)
+    from app.models.models import VariationOrder, VOStatus
+    linked_vos = db.query(VariationOrder).filter(
+        VariationOrder.bundled_addendum_id == a.id
+    ).all()
+
+    # Set signed_at + signed_by + KPA approved_at
+    a.signed_at = datetime.utcnow()
+    a.signed_by_id = current_user.id
+    if a.kpa_approved_by_id:
+        a.kpa_approved_at = datetime.utcnow()
+
+    # Bundle VOs: status APPROVED → BUNDLED
+    for vo in linked_vos:
+        vo.status = VOStatus.BUNDLED
+
+    # Apply schedule / value changes to contract header
+    if a.new_end_date:
+        c.old_end_date = c.end_date
+        c.end_date = a.new_end_date
+        c.duration_days = (c.end_date - c.start_date).days
+    elif a.extension_days:
+        import datetime as _dt
+        c.end_date = c.end_date + _dt.timedelta(days=a.extension_days)
+        c.duration_days = (c.end_date - c.start_date).days
+    if a.new_contract_value:
+        c.current_value = a.new_contract_value
+    c.status = ContractStatus.ADDENDUM
+
+    new_revision_id = None
+    touches_boq = a.addendum_type in (
+        AddendumType.CCO,
+        AddendumType.VALUE_CHANGE,
+        AddendumType.COMBINED,
+    ) or bool(linked_vos)
+    if touches_boq:
+        from app.services import boq_revision_service
+        new_rev = boq_revision_service.clone_revision_for_addendum(
+            db, a, created_by_id=current_user.id,
+        )
+        if linked_vos:
+            _apply_vo_items_to_revision(db, new_rev, linked_vos)
+        new_revision_id = str(new_rev.id)
+
+    db.commit()
+    db.refresh(a)
+    if gm:
+        log_god_mode_bypass(
+            db, current_user, c,
+            action="sign_addendum_with_bypass",
+            target_type="contract_addendum", target_id=str(a.id),
+            details={"needs_kpa": needs_kpa, "vo_ids": [str(v.id) for v in linked_vos]},
+            request=request,
+        )
+        db.commit()
+    log_audit(
+        db, current_user, "sign_addendum", "addendum", str(a.id),
+        changes={
+            "contract_id": contract_id,
+            "new_revision_id": new_revision_id,
+            "bundled_vo_ids": [str(v.id) for v in linked_vos],
+            "kpa_required": needs_kpa,
+            "god_mode_bypass": gm,
+        },
+        request=request, commit=True,
+    )
+    return {
+        "id": str(a.id),
+        "success": True,
+        "status": "signed",
+        "new_revision_id": new_revision_id,
+        "bundled_vos": [str(v.id) for v in linked_vos],
     }
 
 
@@ -897,9 +1098,8 @@ def delete_addendum(
     ).first()
     if not a:
         raise HTTPException(404, "Addendum tidak ditemukan")
-    # Role gate — hanya PPK / admin_pusat / KPA boleh rollback addendum
     from app.api.deps import assert_role_in
-    from app.models.models import VariationOrder, VOStatus
+    from app.models.models import VariationOrder, VOStatus, BOQRevision, RevisionStatus
     c = db.query(Contract).filter(Contract.id == contract_id).first()
     from app.services.vo_service import is_god_mode_active
     gm = c is not None and is_god_mode_active(c)
@@ -908,31 +1108,65 @@ def delete_addendum(
             db, current_user, "ppk", "admin_pusat", "kpa",
             action="Hapus Addendum",
         )
-    # Hapus addendum hanya boleh saat kontrak masih dalam window scope-editable
-    # (DRAFT atau ADDENDUM yang belum di-approve revisinya). Setelah kontrak
-    # kembali ACTIVE / ON_HOLD / COMPLETED / TERMINATED, addendum sudah jadi
-    # bagian dari history dan revisi BOQ-nya sudah tetap — rollback otomatis
-    # tidak aman.
-    assert_scope_editable_by_contract(db, contract_id, entity="addendum")
-    # Un-bundle VO yang sebelumnya ter-bundle ke addendum ini — kembalikan
-    # status BUNDLED → APPROVED supaya bisa di-bundle ulang ke addendum baru.
-    bundled = db.query(VariationOrder).filter(
+
+    is_signed = a.signed_at is not None
+    if is_signed:
+        # Untuk SIGNED addendum, scope kontrak harus masih editable (DRAFT/ADDENDUM
+        # window). Setelah kontrak kembali ACTIVE pasca-approve revisi, rollback
+        # otomatis tidak aman.
+        assert_scope_editable_by_contract(db, contract_id, entity="addendum")
+
+    # Un-link VO yang sebelumnya ter-bundle ke addendum ini.
+    # - DRAFT addendum: VO status tetap APPROVED (tidak pernah BUNDLED)
+    # - SIGNED addendum: VO status BUNDLED → APPROVED
+    linked = db.query(VariationOrder).filter(
         VariationOrder.bundled_addendum_id == addendum_id
     ).all()
-    for vo in bundled:
+    for vo in linked:
         vo.bundled_addendum_id = None
         if vo.status == VOStatus.BUNDLED:
             vo.status = VOStatus.APPROVED
-    # revert contract — best effort
-    if c and a.old_contract_value:
-        c.current_value = a.old_contract_value
-    if c and a.old_end_date:
-        c.end_date = a.old_end_date
-        c.duration_days = (c.end_date - c.start_date).days
+
+    deleted_revision_id = None
+    if is_signed:
+        # Revert contract — only kalau SIGNED. DRAFT tidak pernah ubah contract.
+        if c and a.old_contract_value:
+            c.current_value = a.old_contract_value
+        if c and a.old_end_date:
+            c.end_date = a.old_end_date
+            c.duration_days = (c.end_date - c.start_date).days
+
+        # Bug fix: BOQRevision yang dihasilkan saat sign harus ikut dihapus
+        # kalau masih DRAFT (belum di-approve). Kalau sudah APPROVED, jangan
+        # delete — itu sudah bagian history valid.
+        rev = (
+            db.query(BOQRevision)
+            .filter(BOQRevision.addendum_id == a.id)
+            .first()
+        )
+        if rev and rev.status == RevisionStatus.DRAFT:
+            from app.models.models import BOQItem
+            db.query(BOQItem).filter(BOQItem.boq_revision_id == rev.id).delete(synchronize_session=False)
+            db.delete(rev)
+            deleted_revision_id = str(rev.id)
+        elif rev and rev.status == RevisionStatus.APPROVED:
+            # Revisi sudah aktif — tidak boleh di-rollback otomatis.
+            raise HTTPException(
+                400,
+                {
+                    "code": "revision_already_approved",
+                    "message": (
+                        f"Revisi BOQ {rev.revision_code} dari addendum ini sudah "
+                        "APPROVED dan menjadi aktif. Rollback otomatis tidak aman. "
+                        "Buat addendum baru untuk koreksi."
+                    ),
+                    "revision_id": str(rev.id),
+                },
+            )
+
     db.delete(a)
     db.flush()
-    # Kalau tidak ada addendum lain yang tersisa dan status kontrak masih
-    # ADDENDUM, kembalikan ke ACTIVE (restore state sebelum addendum dibuat).
+    # Kalau tidak ada addendum lain dan status masih ADDENDUM, kembalikan ke ACTIVE.
     remaining = db.query(ContractAddendum).filter(
         ContractAddendum.contract_id == contract_id
     ).count()
@@ -940,11 +1174,22 @@ def delete_addendum(
         c.status = ContractStatus.ACTIVE
     db.commit()
     log_audit(
-        db, current_user, "delete", "addendum", addendum_id,
-        changes={"unbundled_vo_ids": [str(v.id) for v in bundled]},
+        db, current_user,
+        "delete_addendum_signed" if is_signed else "delete_addendum_draft",
+        "addendum", addendum_id,
+        changes={
+            "was_signed": is_signed,
+            "unlinked_vo_ids": [str(v.id) for v in linked],
+            "deleted_revision_id": deleted_revision_id,
+        },
         request=request, commit=True,
     )
-    return {"success": True, "unbundled_vos": len(bundled)}
+    return {
+        "success": True,
+        "was_signed": is_signed,
+        "unlinked_vos": len(linked),
+        "deleted_revision_id": deleted_revision_id,
+    }
 
 
 # ═══════════════════════════════════════════ ACTIVATION / LIFECYCLE ══════════

@@ -109,6 +109,8 @@ export const contractsAPI = {
   listAddenda: (id) => api.get(`/contracts/${id}/addenda`),
   createAddendum: (id, data) => api.post(`/contracts/${id}/addenda`, data),
   deleteAddendum: (cId, aId) => api.delete(`/contracts/${cId}/addenda/${aId}`),
+  updateAddendum: (cId, aId, data) => api.put(`/contracts/${cId}/addenda/${aId}`, data),
+  signAddendum: (cId, aId) => api.post(`/contracts/${cId}/addenda/${aId}/sign`),
 
   // Tahap 2: activation / lifecycle
   readiness: (id) => api.get(`/contracts/${id}/readiness`),

@@ -440,6 +440,10 @@ class AddendumOut(ORMBase):
     old_contract_value: Optional[Decimal] = None
     new_contract_value: Optional[Decimal] = None
     description: Optional[str] = None
+    signed_at: Optional[datetime] = None
+    signed_by_id: Optional[UUID] = None
+    kpa_approved_by_id: Optional[UUID] = None
+    kpa_approved_at: Optional[datetime] = None
     created_at: datetime
 
 
