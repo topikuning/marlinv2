@@ -323,10 +323,11 @@ function CreateContractModal({ open, onClose, onSuccess }) {
               const factor = 1 + ppn / 100;
               const boqMax = factor > 0 ? total / factor : total;
               const ppnAmount = total - boqMax;
+              const fmt = (n) => n.toLocaleString("id-ID", { maximumFractionDigits: 0 });
               return (
                 <p className="text-[11px] text-ink-500 mt-1">
-                  Breakdown: BOQ pre-PPN = {boqMax.toLocaleString("id-ID", { maximumFractionDigits: 0 })} +
-                  PPN {ppn}% ({ppnAmount.toLocaleString("id-ID", { maximumFractionDigits: 0 })})
+                  Berarti BOQ {fmt(boqMax)} + PPN {ppn}% ({fmt(ppnAmount)}) = {fmt(total)}.
+                  {" "}Total BOQ harus {fmt(boqMax)}.
                 </p>
               );
             })()}

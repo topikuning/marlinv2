@@ -893,27 +893,27 @@ def approve_revision(
 
     # Konvensi:
     #   - BOQItem disimpan PRE-PPN (raw harga satuan)
-    #   - Contract.current_value POST-PPN (= BOQ × (1 + ppn_pct/100))
-    #   - Aturan validasi: BOQ × (1+PPN) ≤ Nilai Kontrak
-    #     Equivalen: BOQ + (BOQ × PPN%) ≤ Nilai Kontrak
+    #   - Contract.current_value sudah TERMASUK PPN
+    #   - Aturan validasi: BOQ + (BOQ × PPN%) ≤ Nilai Kontrak
     ppn_pct = float(contract.ppn_pct or 0)
-    ppn_factor = 1.0 + (ppn_pct / 100.0)
     contract_value = float(contract.current_value or 0)
     boq_pre = float(rev.total_value or 0)
-    boq_with_ppn = boq_pre * ppn_factor
+    ppn_amount = boq_pre * (ppn_pct / 100.0)
+    boq_with_ppn = boq_pre + ppn_amount
     diff = round(boq_with_ppn - contract_value, 2)
     if diff > 0.01:
         raise HTTPException(
             409,
             {
                 "message": (
-                    f"BOQ + PPN {ppn_pct:.0f}% ({boq_with_ppn:,.2f}) MELEBIHI "
-                    f"Nilai Kontrak ({contract_value:,.2f}). Selisih +{diff:,.2f}. "
-                    f"Kurangi item BOQ atau naikkan nilai kontrak pada Addendum."
+                    f"BOQ {boq_pre:,.2f} + PPN {ppn_pct:.0f}% ({ppn_amount:,.2f}) "
+                    f"= {boq_with_ppn:,.2f} MELEBIHI Nilai Kontrak ({contract_value:,.2f}). "
+                    f"Selisih +{diff:,.2f}. Kurangi item BOQ atau naikkan nilai kontrak."
                 ),
                 "code": "revision_value_exceeds_contract",
                 "contract_value": contract_value,
                 "boq_pre_ppn": boq_pre,
+                "ppn_amount": ppn_amount,
                 "boq_with_ppn": boq_with_ppn,
                 "ppn_pct": ppn_pct,
                 "diff": diff,

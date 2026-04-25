@@ -208,23 +208,23 @@ export default function ContractDetailPage() {
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6 pt-5 border-t border-ink-100">
           {(() => {
-            // Konvensi: Nilai Kontrak (current_value) sudah POST-PPN.
-            // Validasi: BOQ × (1+PPN%) = Nilai Kontrak.
+            // Konvensi: Nilai Kontrak (current_value) sudah termasuk PPN.
+            // Validasi: BOQ + (BOQ × PPN%) = Nilai Kontrak.
             const ppnPct = parseFloat(contract.ppn_pct || 0);
-            const ppnFactor = 1 + ppnPct / 100;
             const contractValue = parseFloat(contract.current_value || 0);
             const boqTotal = parseFloat(contract.boq_total || 0);
-            const boqWithPpn = boqTotal * ppnFactor;
+            const ppnAmount = boqTotal * (ppnPct / 100);
+            const boqWithPpn = boqTotal + ppnAmount;
             const diff = boqWithPpn - contractValue;
             const boqHint = boqTotal > 0 && Math.abs(diff) >= 0.01
-              ? `+ PPN ${ppnPct}% = ${fmtCurrency(boqWithPpn)} (Δ ${fmtCurrency(diff)})`
+              ? `+ PPN ${fmtCurrency(ppnAmount)} = ${fmtCurrency(boqWithPpn)} (Δ ${fmtCurrency(diff)})`
               : boqTotal > 0
-                ? `+ PPN ${ppnPct}% = ${fmtCurrency(boqWithPpn)} ✓`
+                ? `+ PPN ${fmtCurrency(ppnAmount)} = ${fmtCurrency(boqWithPpn)} ✓`
                 : null;
             return [
-              ["Nilai Kontrak", fmtCurrency(contractValue), `Termasuk PPN ${ppnPct}%`],
+              ["Nilai Kontrak", fmtCurrency(contractValue), `Sudah termasuk PPN ${ppnPct}%`],
               ["Total BOQ", fmtCurrency(boqTotal), boqHint],
-              ["PPN", `${ppnPct}%`, "Pajak Pertambahan Nilai"],
+              ["PPN", `${ppnPct}% · ${fmtCurrency(ppnAmount)}`, "Pajak Pertambahan Nilai"],
               ["Perusahaan", contract.company_name, null],
               ["PPK", contract.ppk_name, null],
               ["Konsultan", contract.konsultan_name || "—", null],
@@ -1504,12 +1504,13 @@ function AddAddendumModal({ open, onClose, contract, initial, onSuccess }) {
               onChange={(e) => setForm({ ...form, new_contract_value: e.target.value })}
             />
             {selectedVoIds.length > 0 && (() => {
-              // VO cost_impact = pre-PPN. Nilai Kontrak = post-PPN.
-              // Saran = current + (delta × (1 + ppn/100))
+              // VO cost_impact = pre-PPN (delta BOQ).
+              // Nilai Kontrak = sudah termasuk PPN.
+              // Saran = current + delta_BOQ + (delta_BOQ × PPN%)
               const ppnPct = parseFloat(contract.ppn_pct || 0);
-              const ppnFactor = 1 + ppnPct / 100;
               const baseValue = parseFloat(contract.current_value || 0);
-              const deltaWithPpn = totalCostImpact * ppnFactor;
+              const deltaPpnAmount = totalCostImpact * (ppnPct / 100);
+              const deltaWithPpn = totalCostImpact + deltaPpnAmount;
               const suggested = baseValue + deltaWithPpn;
               const currentInput = parseFloat(form.new_contract_value) || 0;
               const matchesSuggestion = Math.abs(currentInput - suggested) < 1;
@@ -1523,7 +1524,7 @@ function AddAddendumModal({ open, onClose, contract, initial, onSuccess }) {
                     {" = "}
                     <span className="font-semibold font-mono text-ink-800">{fmtCurrency(suggested)}</span>
                     <span className="text-ink-400 ml-1">
-                      (Δ BOQ {fmtCurrency(totalCostImpact)} + PPN {ppnPct}%, {selectedVoIds.length} VO)
+                      (Δ BOQ {fmtCurrency(totalCostImpact)} + PPN {fmtCurrency(deltaPpnAmount)}, {selectedVoIds.length} VO)
                     </span>
                   </span>
                   {!matchesSuggestion && (
@@ -1943,19 +1944,19 @@ function RevisionsPanel({ contract, onChange }) {
                   {r.approved_at && ` · Approved ${fmtDate(r.approved_at)}`}
                 </p>
                 {r.status === "draft" && (() => {
-                  // Validasi: BOQ × (1+PPN%) = Nilai Kontrak (= POST-PPN).
+                  // Validasi: BOQ + (BOQ × PPN%) = Nilai Kontrak.
                   const ppnPct = Number(contract.ppn_pct || 0);
-                  const ppnFactor = 1 + ppnPct / 100;
                   const contractValue = Number(contract.current_value || 0);
                   const boqPre = Number(r.total_value || 0);
-                  const boqWithPpn = boqPre * ppnFactor;
+                  const ppnAmount = boqPre * (ppnPct / 100);
+                  const boqWithPpn = boqPre + ppnAmount;
                   const diff = Math.round((boqWithPpn - contractValue) * 100) / 100;
                   const inSync = Math.abs(diff) < 0.01;
                   const exceeds = diff > 0.01;
                   if (inSync) {
                     return (
                       <p className="text-[11px] text-green-700 mt-1 font-medium">
-                        ✓ BOQ + PPN {ppnPct}% = Nilai Kontrak ({fmtCurrency(contractValue)})
+                        ✓ BOQ {fmtCurrency(boqPre)} + PPN {fmtCurrency(ppnAmount)} ({ppnPct}%) = Nilai Kontrak {fmtCurrency(contractValue)}
                       </p>
                     );
                   }
@@ -1963,24 +1964,23 @@ function RevisionsPanel({ contract, onChange }) {
                     return (
                       <div className="mt-2 p-2 rounded-md bg-red-50 border border-red-200 text-[11px] text-red-900">
                         <p className="font-semibold">
-                          ⚠ BOQ + PPN {ppnPct}% MELEBIHI Nilai Kontrak
+                          ⚠ BOQ + PPN MELEBIHI Nilai Kontrak
                         </p>
                         <p className="mt-0.5">
-                          {fmtCurrency(boqPre)} + {ppnPct}% = <b>{fmtCurrency(boqWithPpn)}</b>,
+                          BOQ {fmtCurrency(boqPre)} + PPN {ppnPct}% ({fmtCurrency(ppnAmount)}) = <b>{fmtCurrency(boqWithPpn)}</b>,
                           {" "}Nilai Kontrak {fmtCurrency(contractValue)}. Selisih +{fmtCurrency(diff)}.
                           {" "}<b>Approve akan ditolak</b>.
                         </p>
                       </div>
                     );
                   }
-                  // BOQ + PPN < kontrak: wajar (buffer)
                   return (
                     <div className="mt-2 p-2 rounded-md bg-amber-50 border border-amber-200 text-[11px] text-amber-900">
                       <p className="font-semibold">
                         ℹ Nilai Kontrak lebih besar {fmtCurrency(-diff)} dari (BOQ + PPN)
                       </p>
                       <p className="mt-0.5">
-                        {fmtCurrency(boqPre)} + {ppnPct}% = {fmtCurrency(boqWithPpn)}.
+                        BOQ {fmtCurrency(boqPre)} + PPN {ppnPct}% ({fmtCurrency(ppnAmount)}) = {fmtCurrency(boqWithPpn)}.
                         {" "}Wajar bila ada buffer/contingency. Approve tetap diizinkan.
                       </p>
                     </div>
@@ -1998,10 +1998,11 @@ function RevisionsPanel({ contract, onChange }) {
                   </button>
                 )}
                 {r.status === "draft" && (() => {
-                  // Validasi: BOQ × (1+PPN%) ≤ Nilai Kontrak.
-                  const ppnFactor = 1 + Number(contract.ppn_pct || 0) / 100;
+                  // Validasi: BOQ + (BOQ × PPN%) ≤ Nilai Kontrak.
+                  const boqPre = Number(r.total_value || 0);
+                  const ppnAmount = boqPre * (Number(contract.ppn_pct || 0) / 100);
+                  const boqWithPpn = boqPre + ppnAmount;
                   const contractValue = Number(contract.current_value || 0);
-                  const boqWithPpn = Number(r.total_value || 0) * ppnFactor;
                   const exceeds = boqWithPpn - contractValue > 0.01;
                   return (
                     <button
