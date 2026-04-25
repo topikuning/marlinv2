@@ -123,26 +123,28 @@ export default function ContractDetailPage() {
   const isUnlocked =
     contract.unlock_until && new Date() < new Date(contract.unlock_until);
 
+  // BOQ lock: revisi aktif sudah APPROVED dan tidak ada DRAFT pending.
+  // Unlock Mode bypass.
+  const boqLocked =
+    !isUnlocked && contract.working_revision?.status === "approved";
+
   // SCOPE kontrak (Lokasi, Fasilitas, rollback Addendum) editable saat:
-  // - status DRAFT / ADDENDUM, atau
-  // - superadmin membuka Unlock Mode (window belum expire)
-  const scopeEditable =
-    contract.status === "draft" ||
-    contract.status === "addendum" ||
-    isUnlocked;
+  // - Unlock Mode (superadmin override), ATAU
+  // - status DRAFT / ADDENDUM **DAN** BOQ belum locked (= ada revisi DRAFT
+  //   pending yang masih bisa di-edit). Kalau revisi sudah APPROVED meski
+  //   status masih ADDENDUM, scope otomatis locked — tambah/hapus fasilitas
+  //   akan affect BOQ yang sudah final.
+  const scopeEditable = isUnlocked ||
+    ((contract.status === "draft" || contract.status === "addendum") && !boqLocked);
   const facilitiesEditable = scopeEditable;
   const locationsEditable = scopeEditable;
   const scopeLockReason = scopeEditable
     ? null
-    : `Lokasi & Fasilitas dikunci karena kontrak berstatus ${contract.status}. Buat Addendum untuk mengubah.`;
+    : boqLocked
+      ? `Lokasi & Fasilitas dikunci karena revisi BOQ aktif sudah APPROVED. Buat Addendum baru untuk mengubah scope.`
+      : `Lokasi & Fasilitas dikunci karena kontrak berstatus ${contract.status}. Buat Addendum untuk mengubah.`;
   const facilityLockReason = scopeLockReason;
   const locationLockReason = scopeLockReason;
-
-  // BOQ lock: berbeda dari scope lock. BOQ items lock saat revisi aktif
-  // sudah APPROVED dan tidak ada DRAFT yang sedang dikerjakan (mis. addendum
-  // belum dibuat). Unlock Mode bypass.
-  const boqLocked =
-    !isUnlocked && contract.working_revision?.status === "approved";
 
   return (
     <div className="p-6 max-w-screen-2xl mx-auto">
