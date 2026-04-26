@@ -4116,13 +4116,15 @@ function VOComparisonView({ vo, activeBoq, loading }) {
           <thead className="bg-ink-50 sticky top-0 z-10">
             <tr className="text-left">
               <th className="px-3 py-2 font-semibold text-ink-700">Uraian</th>
-              <th className="px-3 py-2 font-semibold text-ink-700 text-right w-44">Harga BOQ Aktif</th>
-              <th className="px-3 py-2 font-semibold text-ink-700 text-right w-44">Total Usulan Perubahan</th>
+              <th className="px-3 py-2 font-semibold text-ink-700 text-right w-48">Total Nilai Fasilitas BOQ Aktif</th>
+              <th className="px-3 py-2 font-semibold text-ink-700 text-right w-48">Total BOQ Usulan</th>
+              <th className="px-3 py-2 font-semibold text-ink-700 text-right w-44">Selisih</th>
             </tr>
           </thead>
           <tbody>
             {facilities.map((f) => {
               const isOpen = !!expanded[f.id];
+              const proposed = f.activeBoqTotal + f.voTotal;
               return (
                 <React.Fragment key={f.id}>
                   <tr
@@ -4145,9 +4147,10 @@ function VOComparisonView({ vo, activeBoq, loading }) {
                         </div>
                       </div>
                     </td>
-                    <td className="px-3 py-2 text-right font-mono">{fmtCurrency(f.activeBoqTotal)}</td>
+                    <td className="px-3 py-2 text-right font-mono">{fmtCurrency(f.activeBoqTotal, false)}</td>
+                    <td className="px-3 py-2 text-right font-mono">{fmtCurrency(proposed, false)}</td>
                     <td className={`px-3 py-2 text-right font-mono font-semibold ${impactCls(f.voTotal)}`}>
-                      {f.voTotal > 0 ? "+" : ""}{fmtCurrency(f.voTotal)}
+                      {f.voTotal > 0 ? "+" : ""}{fmtCurrency(f.voTotal, false)}
                     </td>
                   </tr>
                   {isOpen && (
@@ -4160,17 +4163,19 @@ function VOComparisonView({ vo, activeBoq, loading }) {
           <tfoot className="bg-ink-50 sticky bottom-0">
             <tr className="border-t-2 border-ink-300">
               <td className="px-3 py-2 font-semibold text-ink-800">TOTAL</td>
-              <td className="px-3 py-2 text-right font-mono font-bold">{fmtCurrency(grandActive)}</td>
+              <td className="px-3 py-2 text-right font-mono font-bold">{fmtCurrency(grandActive, false)}</td>
+              <td className="px-3 py-2 text-right font-mono font-bold">{fmtCurrency(grandActive + grandVo, false)}</td>
               <td className={`px-3 py-2 text-right font-mono font-bold ${impactCls(grandVo)}`}>
-                {grandVo > 0 ? "+" : ""}{fmtCurrency(grandVo)}
+                {grandVo > 0 ? "+" : ""}{fmtCurrency(grandVo, false)}
               </td>
             </tr>
           </tfoot>
         </table>
       </div>
       <p className="text-[10px] text-ink-500 mt-1.5">
-        Catatan: <i>Harga BOQ Aktif</i> = total nilai item aktif fasilitas pada revisi BOQ aktif saat ini.
-        <i> Total Usulan Perubahan</i> = jumlah Δ biaya item-item VO (positif = naik, negatif = turun).
+        <i>Total Nilai Fasilitas BOQ Aktif</i> = total nilai item aktif fasilitas pada revisi BOQ aktif saat ini.{" "}
+        <i>Total BOQ Usulan</i> = nilai BOQ aktif + Δ usulan VO (proyeksi setelah VO disetujui).{" "}
+        <i>Selisih</i> = Δ usulan (positif = naik, negatif = turun).
       </p>
     </div>
   );
@@ -4181,32 +4186,48 @@ function VOComparisonItemRows({ fac }) {
   const impactCls = (n) =>
     n > 0 ? "text-emerald-700" : n < 0 ? "text-red-700" : "text-ink-700";
 
+  // Per-item:
+  //   active   = nilai item di BOQ aktif (sebelum VO)
+  //   proposed = proyeksi nilai item setelah VO
+  //   delta    = cost_impact (selisih)
   const rows = fac.voItems.map((it) => {
     const action = it.action;
-    const meta = VO_ACTION_META[action] || {};
     let uraian = it.description || it.target_boq?.description || it.target_facility?.name || "—";
-    let activePrice = null;
+    let active = null; // null = belum ada di BOQ aktif
+    let proposed = null;
     let scopeNote = null;
+    const delta = Number(it.cost_impact || 0);
 
     if (action === "add") {
-      activePrice = null; // belum ada di BOQ
+      active = null; // belum ada
+      proposed = delta;
       scopeNote = "Item baru";
     } else if (action === "remove_facility") {
-      activePrice = Number(it.target_facility?.total_value || 0);
+      active = Number(it.target_facility?.total_value || 0);
+      proposed = 0;
       uraian = `Hapus seluruh fasilitas: ${it.target_facility?.name || fac.name}`;
       scopeNote = `${it.target_facility?.item_count || "?"} item`;
+    } else if (action === "remove") {
+      active = Number(it.target_boq?.total_price || 0);
+      proposed = 0;
+      if (!it.description && it.target_boq?.description) uraian = it.target_boq.description;
+    } else if (action === "modify_spec") {
+      active = Number(it.target_boq?.total_price || 0);
+      proposed = active + delta; // delta biasanya 0
+      if (!it.description && it.target_boq?.description) uraian = it.target_boq.description;
     } else {
-      // increase / decrease / modify_spec / remove → ada target_boq
-      activePrice = Number(it.target_boq?.total_price || 0);
+      // increase / decrease
+      active = Number(it.target_boq?.total_price || 0);
+      proposed = active + delta;
       if (!it.description && it.target_boq?.description) uraian = it.target_boq.description;
     }
 
-    return { it, action, meta, uraian, activePrice, scopeNote };
+    return { it, action, uraian, active, proposed, delta, scopeNote };
   });
 
   return (
     <>
-      {rows.map(({ it, action, uraian, activePrice, scopeNote }) => (
+      {rows.map(({ it, action, uraian, active, proposed, delta, scopeNote }) => (
         <tr key={it.id} className="border-t border-ink-100 bg-ink-50/40">
           <td className="px-3 py-1.5 pl-9">
             <div className="flex items-start gap-2">
@@ -4224,10 +4245,13 @@ function VOComparisonItemRows({ fac }) {
             </div>
           </td>
           <td className="px-3 py-1.5 text-right font-mono text-ink-700">
-            {activePrice == null ? <span className="text-ink-400 italic">—</span> : fmtCurrency(activePrice)}
+            {active == null ? <span className="text-ink-400 italic">—</span> : fmtCurrency(active, false)}
           </td>
-          <td className={`px-3 py-1.5 text-right font-mono font-semibold ${impactCls(it.cost_impact)}`}>
-            {it.cost_impact > 0 ? "+" : ""}{fmtCurrency(it.cost_impact)}
+          <td className="px-3 py-1.5 text-right font-mono text-ink-700">
+            {proposed == null ? <span className="text-ink-400 italic">—</span> : fmtCurrency(proposed, false)}
+          </td>
+          <td className={`px-3 py-1.5 text-right font-mono font-semibold ${impactCls(delta)}`}>
+            {delta > 0 ? "+" : ""}{fmtCurrency(delta, false)}
           </td>
         </tr>
       ))}
@@ -4284,11 +4308,11 @@ function VODetailModal({ vo, onClose }) {
           </div>
           <div className="text-right">
             <p className="text-[10px] text-ink-500 uppercase">Total Δ Biaya</p>
-            <p className={`text-lg font-bold ${
+            <p className={`text-lg font-bold font-mono ${
               vo.cost_impact > 0 ? "text-emerald-700"
               : vo.cost_impact < 0 ? "text-red-700" : "text-ink-700"
             }`}>
-              {vo.cost_impact >= 0 ? "+" : ""}{fmtCurrency(vo.cost_impact)}
+              {vo.cost_impact >= 0 ? "+" : ""}{fmtCurrency(vo.cost_impact, false)}
             </p>
           </div>
         </div>
