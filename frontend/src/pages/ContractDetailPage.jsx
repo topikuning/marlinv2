@@ -2528,6 +2528,7 @@ function VariationOrdersPanel({ contract, onChange, canApprove = false, pendingF
   const [prefillFromObs, setPrefillFromObs] = useState(null);
   const [editing, setEditing] = useState(null); // full VO data saat edit
   const [detail, setDetail] = useState(null);
+  const [comparingVoId, setComparingVoId] = useState(null);
   const [actionModal, setActionModal] = useState(null);
 
   const refresh = () => {
@@ -2615,12 +2616,9 @@ function VariationOrdersPanel({ contract, onChange, canApprove = false, pendingF
                   </div>
                 </div>
                 <div className="flex gap-1 flex-wrap">
-                  <button className="btn-ghost btn-xs" onClick={async () => {
-                    try {
-                      const { data } = await voAPI.get(vo.id);
-                      setDetail(data);
-                    } catch (e) { toast.error(parseApiError(e)); }
-                  }}>Lihat</button>
+                  <button className="btn-ghost btn-xs" onClick={() => setComparingVoId(vo.id)}>
+                    Lihat
+                  </button>
                   {vo.status === "draft" && (
                     <>
                       <button className="btn-ghost btn-xs" onClick={async () => {
@@ -2675,6 +2673,17 @@ function VariationOrdersPanel({ contract, onChange, canApprove = false, pendingF
         />
       )}
       {detail && <VODetailModal vo={detail} onClose={() => setDetail(null)} />}
+      {comparingVoId && (
+        <VOComparisonDrawer
+          voId={comparingVoId}
+          contract={contract}
+          canApprove={canApprove}
+          onClose={() => setComparingVoId(null)}
+          onAction={(act) => setActionModal(act)}
+          onEdit={(voData) => setEditing(voData)}
+          onChanged={refresh}
+        />
+      )}
       {actionModal && (
         <VOActionModal vo={actionModal.vo} action={actionModal.action}
           onClose={() => setActionModal(null)}
@@ -4256,6 +4265,636 @@ function VOComparisonItemRows({ fac }) {
         </tr>
       ))}
     </>
+  );
+}
+
+// ─── VO Comparison Drawer (full-screen panel, replaces modal) ────────────────
+const COMPARISON_STATUS = {
+  tetap:             { label: "Tetap",              cls: "bg-slate-100 text-slate-700 border-slate-200" },
+  vol_berubah:       { label: "Volume Berubah",     cls: "bg-amber-50 text-amber-800 border-amber-200" },
+  harga_berubah:     { label: "Harga Berubah",      cls: "bg-amber-50 text-amber-800 border-amber-200" },
+  vol_harga_berubah: { label: "Vol & Harga Berubah", cls: "bg-amber-50 text-amber-800 border-amber-200" },
+  spec_berubah:      { label: "Spek Berubah",       cls: "bg-blue-50 text-blue-700 border-blue-200" },
+  baru:              { label: "Item Baru",          cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  dihapus:           { label: "Item Dihapus",       cls: "bg-red-50 text-red-700 border-red-200" },
+};
+
+function buildVOComparison(activeBoq, vo) {
+  const items = (vo?.items) || [];
+  const voByBoqId = new Map();
+  const addByFac = new Map();
+  const removedFacIds = new Set();
+  for (const it of items) {
+    if (it.action === "remove_facility") {
+      if (it.facility_id) removedFacIds.add(it.facility_id);
+    } else if (it.action === "add") {
+      const fid = it.facility_id || it.target_facility?.id;
+      if (!fid) continue;
+      if (!addByFac.has(fid)) addByFac.set(fid, []);
+      addByFac.get(fid).push(it);
+    } else if (it.boq_item_id) {
+      voByBoqId.set(it.boq_item_id, it);
+    }
+  }
+
+  const rows = [];
+  for (const b of activeBoq) {
+    const aktif_vol = Number(b.volume || 0);
+    const aktif_price = Number(b.unit_price || 0);
+    const aktif_jml = Number(b.total_price || 0);
+    let usulan_vol = aktif_vol, usulan_price = aktif_price, usulan_jml = aktif_jml;
+    let status = "tetap";
+    let voAction = null, voNotes = null;
+    let uraian = b.description, unit = b.unit;
+
+    if (removedFacIds.has(b.facility_id)) {
+      usulan_vol = 0; usulan_price = aktif_price; usulan_jml = 0;
+      status = "dihapus"; voAction = "remove_facility";
+    } else if (voByBoqId.has(b.id)) {
+      const vit = voByBoqId.get(b.id);
+      voAction = vit.action; voNotes = vit.notes;
+      if (vit.action === "remove") {
+        usulan_vol = 0; usulan_jml = 0; status = "dihapus";
+      } else if (vit.action === "modify_spec") {
+        uraian = vit.description || uraian;
+        unit = vit.unit || unit;
+        status = "spec_berubah";
+      } else {
+        usulan_vol = aktif_vol + Number(vit.volume_delta || 0);
+        usulan_price = Number(vit.unit_price || 0) || aktif_price;
+        usulan_jml = usulan_vol * usulan_price;
+        const volChanged = Math.abs(usulan_vol - aktif_vol) > 1e-9;
+        const priceChanged = Math.abs(usulan_price - aktif_price) > 1e-9;
+        status = volChanged && priceChanged ? "vol_harga_berubah"
+               : volChanged ? "vol_berubah"
+               : priceChanged ? "harga_berubah" : "tetap";
+      }
+    }
+
+    rows.push({
+      key: b.id, kode: b.full_code || b.original_code || "—", uraian, unit,
+      facility_id: b.facility_id, facility_code: b.facility_code, facility_name: b.facility_name,
+      location_code: b.location_code, location_name: b.location_name,
+      aktif_vol, aktif_price, aktif_jml,
+      usulan_vol, usulan_price, usulan_jml,
+      delta_vol: usulan_vol - aktif_vol,
+      delta_price: usulan_price - aktif_price,
+      delta_jml: usulan_jml - aktif_jml,
+      status, voAction, voNotes,
+      _isAdd: false,
+    });
+  }
+
+  for (const [facId, addItems] of addByFac.entries()) {
+    for (const it of addItems) {
+      const fac = it.target_facility || activeBoq.find((b) => b.facility_id === facId) || {};
+      const usulan_vol = Number(it.volume_delta || 0);
+      const usulan_price = Number(it.unit_price || 0);
+      const usulan_jml = usulan_vol * usulan_price;
+      rows.push({
+        key: `add-${it.id}`,
+        kode: it.new_item_code || "BARU",
+        uraian: it.description, unit: it.unit,
+        facility_id: facId,
+        facility_code: fac.facility_code || fac.code || "—",
+        facility_name: fac.facility_name || fac.name || "—",
+        location_code: fac.location_code, location_name: fac.location_name,
+        aktif_vol: 0, aktif_price: 0, aktif_jml: 0,
+        usulan_vol, usulan_price, usulan_jml,
+        delta_vol: usulan_vol, delta_price: usulan_price, delta_jml: usulan_jml,
+        status: "baru", voAction: "add", voNotes: it.notes,
+        _isAdd: true,
+      });
+    }
+  }
+
+  rows.sort((a, b) => {
+    const lc = (a.location_code || "").localeCompare(b.location_code || "");
+    if (lc !== 0) return lc;
+    const fc = (a.facility_code || "").localeCompare(b.facility_code || "");
+    if (fc !== 0) return fc;
+    if (a._isAdd !== b._isAdd) return a._isAdd ? 1 : -1;
+    return (a.kode || "").localeCompare(b.kode || "");
+  });
+
+  const summary = {
+    item_total: rows.length,
+    item_berubah: rows.filter((r) => r.status !== "tetap").length,
+    item_baru: rows.filter((r) => r.status === "baru").length,
+    item_dihapus: rows.filter((r) => r.status === "dihapus").length,
+    item_vol_berubah: rows.filter((r) => r.status === "vol_berubah" || r.status === "vol_harga_berubah").length,
+    item_harga_berubah: rows.filter((r) => r.status === "harga_berubah" || r.status === "vol_harga_berubah").length,
+    total_aktif: rows.reduce((s, r) => s + r.aktif_jml, 0),
+    total_usulan: rows.reduce((s, r) => s + r.usulan_jml, 0),
+  };
+  summary.delta_jml = summary.total_usulan - summary.total_aktif;
+  summary.delta_pct = summary.total_aktif > 0 ? (summary.delta_jml / summary.total_aktif) * 100 : 0;
+
+  const divMap = new Map();
+  for (const r of rows) {
+    if (!r.facility_code) continue;
+    if (!divMap.has(r.facility_code)) {
+      divMap.set(r.facility_code, {
+        code: r.facility_code, name: r.facility_name,
+        location_code: r.location_code,
+      });
+    }
+  }
+  const divisions = [...divMap.values()].sort((a, b) =>
+    (a.location_code || "").localeCompare(b.location_code || "") ||
+    (a.code || "").localeCompare(b.code || "")
+  );
+
+  return { rows, summary, divisions };
+}
+
+function VOComparisonDrawer({ voId, contract, canApprove, onClose, onAction, onEdit, onChanged }) {
+  const [vo, setVo] = useState(null);
+  const [activeBoq, setActiveBoq] = useState(null);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [filterDivisi, setFilterDivisi] = useState("");
+  const [filterStatus, setFilterStatus] = useState("all"); // all|naik|turun|tetap
+  const [hideTetap, setHideTetap] = useState(false);
+  const [tab, setTab] = useState("all"); // all|berubah|baru|dihapus|rekap
+
+  // Lock scroll + ESC
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e) => { if (e.key === "Escape") onClose?.(); };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  // Parallel fetch
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true); setError(null);
+    Promise.all([
+      voAPI.get(voId),
+      boqAPI.listByContractFlat(contract.id, false),
+    ])
+      .then(([voRes, boqRes]) => {
+        if (cancelled) return;
+        setVo(voRes.data);
+        setActiveBoq(boqRes.data || []);
+      })
+      .catch((e) => { if (!cancelled) setError(parseApiError(e)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [voId, contract.id]);
+
+  const { rows, summary, divisions } = useMemo(() => {
+    if (!vo || !activeBoq) return { rows: [], summary: null, divisions: [] };
+    return buildVOComparison(activeBoq, vo);
+  }, [vo, activeBoq]);
+
+  const visibleRows = useMemo(() => {
+    let r = rows;
+    if (tab === "berubah") r = r.filter((row) => row.status !== "tetap");
+    else if (tab === "baru") r = r.filter((row) => row.status === "baru");
+    else if (tab === "dihapus") r = r.filter((row) => row.status === "dihapus");
+    if (filterDivisi) r = r.filter((row) => row.facility_code === filterDivisi);
+    if (filterStatus === "naik") r = r.filter((row) => row.delta_jml > 0);
+    else if (filterStatus === "turun") r = r.filter((row) => row.delta_jml < 0);
+    else if (filterStatus === "tetap") r = r.filter((row) => row.delta_jml === 0);
+    if (hideTetap) r = r.filter((row) => row.status !== "tetap");
+    if (search.trim()) {
+      const s = search.trim().toLowerCase();
+      r = r.filter((row) =>
+        (row.uraian || "").toLowerCase().includes(s) ||
+        (row.kode || "").toLowerCase().includes(s)
+      );
+    }
+    return r;
+  }, [rows, tab, filterDivisi, filterStatus, hideTetap, search]);
+
+  const doSubmit = async () => {
+    try {
+      await voAPI.submit(vo.id);
+      toast.success("VO disubmit untuk review");
+      onChanged?.();
+      onClose?.();
+    } catch (e) { toast.error(parseApiError(e)); }
+  };
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex flex-col bg-ink-50">
+      {/* Header strip */}
+      <div className="bg-white border-b border-ink-200 px-5 py-3 flex items-start gap-4">
+        <button
+          onClick={onClose}
+          className="p-1.5 -ml-1 rounded hover:bg-ink-100 text-ink-600"
+          title="Tutup (Esc)"
+        >
+          <XIcon size={18} />
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-mono text-[11px] text-brand-600">{vo?.vo_number || "…"}</span>
+            {vo && (
+              <span className={`text-[10px] px-2 py-0.5 rounded border font-medium ${VO_STATUS_BADGE[vo.status]}`}>
+                {VO_STATUS_LABEL[vo.status] || vo.status}
+              </span>
+            )}
+            <h2 className="text-base font-semibold text-ink-900 truncate">
+              Komparasi BOQ {vo ? `— ${vo.title}` : ""}
+            </h2>
+          </div>
+          <p className="text-[11px] text-ink-500 mt-0.5">
+            {contract?.contract_number ? <>Kontrak {contract.contract_number} · </> : null}
+            {vo ? <>Dibuat {fmtDate(vo.created_at)}</> : "Memuat…"}
+            {vo?.source_observation && (
+              <>
+                {" · "}<span className="text-brand-700">↖ {vo.source_observation.type === "mc_0" ? "MC-0" : "MC"}</span>
+                {": "}{vo.source_observation.title}
+              </>
+            )}
+          </p>
+        </div>
+        <div className="flex gap-1.5 flex-wrap">
+          {vo?.status === "draft" && (
+            <>
+              <button className="btn-ghost btn-sm" onClick={() => { onEdit?.(vo); onClose?.(); }}>
+                <Edit2 size={12} /> Edit
+              </button>
+              <button className="btn-primary btn-sm" onClick={doSubmit}>
+                <Send size={12} /> Submit
+              </button>
+            </>
+          )}
+          {vo?.status === "under_review" && canApprove && (
+            <>
+              <button className="btn-secondary btn-sm" onClick={() => { onAction?.({ vo, action: "approve" }); onClose?.(); }}>
+                <Check size={12} /> Approve
+              </button>
+              <button className="btn-ghost btn-sm text-red-600" onClick={() => { onAction?.({ vo, action: "reject" }); onClose?.(); }}>
+                <XIcon size={12} /> Reject
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Body scroll */}
+      <div className="flex-1 overflow-auto">
+        {error && (
+          <div className="m-5 p-4 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+            Gagal memuat: {error}
+          </div>
+        )}
+
+        {/* Header info bar */}
+        <div className="px-5 pt-4">
+          <div className="bg-white border border-ink-200 rounded-lg px-4 py-3 grid grid-cols-1 md:grid-cols-4 gap-4 text-xs">
+            <div>
+              <p className="text-ink-500">Proyek</p>
+              <p className="font-medium text-ink-900">{contract?.title || "—"}</p>
+            </div>
+            <div>
+              <p className="text-ink-500">Kontrak</p>
+              <p className="font-medium text-ink-900 font-mono">{contract?.contract_number || "—"}</p>
+            </div>
+            <div className="bg-emerald-50 border border-emerald-200 rounded px-3 py-2">
+              <p className="text-ink-500 text-[10px] uppercase">BOQ Aktif (Dasar)</p>
+              <p className="font-semibold text-emerald-800">Revisi aktif saat ini</p>
+            </div>
+            <div className="bg-blue-50 border border-blue-200 rounded px-3 py-2">
+              <p className="text-ink-500 text-[10px] uppercase">VO Usulan (Dibandingkan)</p>
+              <p className="font-semibold text-blue-800">
+                {vo?.vo_number || "…"} · {vo ? fmtDate(vo.created_at) : ""}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Summary cards */}
+        <div className="px-5 pt-3">
+          <SummaryCards summary={summary} loading={loading} />
+        </div>
+
+        {/* Justifikasi (collapsible-ish: just show) */}
+        {vo?.technical_justification && (
+          <div className="px-5 pt-3">
+            <details className="bg-white border border-ink-200 rounded-lg p-3 text-xs">
+              <summary className="cursor-pointer font-semibold text-ink-700">Justifikasi Teknis & Perhitungan</summary>
+              <div className="mt-2 space-y-2">
+                <div>
+                  <p className="text-[10px] text-ink-500 uppercase">Justifikasi Teknis</p>
+                  <p className="whitespace-pre-line text-ink-800">{vo.technical_justification}</p>
+                </div>
+                {vo.quantity_calculation && (
+                  <div>
+                    <p className="text-[10px] text-ink-500 uppercase">Perhitungan Volume</p>
+                    <p className="whitespace-pre-line text-ink-800">{vo.quantity_calculation}</p>
+                  </div>
+                )}
+                {vo.rejection_reason && (
+                  <div className="p-2 bg-red-50 border border-red-200 rounded text-red-800">
+                    <p className="font-semibold">Ditolak</p>
+                    <p>{vo.rejection_reason}</p>
+                  </div>
+                )}
+              </div>
+            </details>
+          </div>
+        )}
+
+        {/* Filter bar */}
+        <div className="px-5 pt-3">
+          <div className="bg-white border border-ink-200 rounded-lg p-3 flex flex-wrap items-center gap-2 text-xs">
+            <input
+              className="input flex-1 min-w-[200px]"
+              placeholder="Cari kode atau uraian pekerjaan…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            <select className="input w-44" value={filterDivisi} onChange={(e) => setFilterDivisi(e.target.value)}>
+              <option value="">Semua Fasilitas</option>
+              {divisions.map((d) => (
+                <option key={d.code} value={d.code}>{d.location_code}/{d.code} · {d.name}</option>
+              ))}
+            </select>
+            <select className="input w-44" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
+              <option value="all">Semua Δ Nilai</option>
+              <option value="naik">Hanya Naik</option>
+              <option value="turun">Hanya Turun</option>
+              <option value="tetap">Hanya Tetap</option>
+            </select>
+            <label className="flex items-center gap-1.5 text-ink-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hideTetap}
+                onChange={(e) => setHideTetap(e.target.checked)}
+              />
+              Sembunyikan item tanpa perubahan
+            </label>
+            <button
+              className="btn-ghost btn-xs"
+              onClick={() => { setSearch(""); setFilterDivisi(""); setFilterStatus("all"); setHideTetap(false); }}
+            >
+              <RotateCcw size={11} /> Reset
+            </button>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div className="px-5 pt-3">
+          <div className="flex gap-1 border-b border-ink-200">
+            {[
+              ["all", `Semua Item${summary ? ` (${summary.item_total})` : ""}`],
+              ["berubah", `Item Berubah${summary ? ` (${summary.item_berubah})` : ""}`],
+              ["baru", `Item Baru${summary ? ` (${summary.item_baru})` : ""}`],
+              ["dihapus", `Item Dihapus${summary ? ` (${summary.item_dihapus})` : ""}`],
+              ["rekap", "Rekap Fasilitas"],
+            ].map(([k, label]) => (
+              <button
+                key={k}
+                onClick={() => setTab(k)}
+                className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${
+                  tab === k
+                    ? "border-brand-600 text-brand-700"
+                    : "border-transparent text-ink-500 hover:text-ink-700"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Table / Recap */}
+        <div className="px-5 py-3">
+          {tab === "rekap"
+            ? <FacilityRecap rows={rows} loading={loading} />
+            : <ComparisonTable rows={visibleRows} loading={loading} totalRows={rows.length} />
+          }
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function SummaryCards({ summary, loading }) {
+  if (loading || !summary) {
+    return (
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="bg-white border border-ink-200 rounded-lg p-3 animate-pulse h-20" />
+        ))}
+      </div>
+    );
+  }
+  const arrow = summary.delta_jml > 0 ? "↑" : summary.delta_jml < 0 ? "↓" : "•";
+  const trendCls = summary.delta_jml > 0 ? "text-emerald-700"
+    : summary.delta_jml < 0 ? "text-red-700" : "text-ink-700";
+  const cards = [
+    { label: "Nilai BOQ Aktif", val: fmtCurrency(summary.total_aktif, false), sub: null, cls: "text-ink-900" },
+    { label: "Nilai BOQ Usulan", val: fmtCurrency(summary.total_usulan, false), sub: null, cls: "text-ink-900" },
+    { label: "Selisih Nilai", val: `${summary.delta_jml >= 0 ? "+" : ""}${fmtCurrency(summary.delta_jml, false)}`,
+      sub: `${arrow} ${summary.delta_jml >= 0 ? "Naik" : "Turun"}`, cls: trendCls },
+    { label: "Persentase Perubahan", val: `${summary.delta_pct >= 0 ? "+" : ""}${summary.delta_pct.toFixed(2)}%`,
+      sub: null, cls: trendCls },
+    { label: "Item Bertambah", val: `${summary.item_baru} item`, sub: null, cls: "text-emerald-700" },
+    { label: "Item Dihapus", val: `${summary.item_dihapus} item`, sub: null, cls: "text-red-700" },
+    { label: "Item Volume Berubah", val: `${summary.item_vol_berubah} item`, sub: null, cls: "text-amber-700" },
+    { label: "Item Harga Berubah", val: `${summary.item_harga_berubah} item`, sub: null, cls: "text-amber-700" },
+  ];
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
+      {cards.map((c) => (
+        <div key={c.label} className="bg-white border border-ink-200 rounded-lg p-3">
+          <p className="text-[10px] text-ink-500 uppercase truncate" title={c.label}>{c.label}</p>
+          <p className={`text-base font-bold font-mono ${c.cls}`}>{c.val}</p>
+          {c.sub && <p className={`text-[10px] font-semibold ${c.cls}`}>{c.sub}</p>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ComparisonTable({ rows, loading, totalRows }) {
+  if (loading) {
+    return (
+      <div className="bg-white border border-ink-200 rounded-lg p-6 space-y-2">
+        {Array.from({ length: 8 }).map((_, i) => (
+          <div key={i} className="h-6 bg-ink-100 rounded animate-pulse" />
+        ))}
+      </div>
+    );
+  }
+  if (!rows.length) {
+    return (
+      <div className="bg-white border border-ink-200 rounded-lg p-8 text-center text-xs text-ink-500">
+        Tidak ada item yang cocok dengan filter. {totalRows ? `Total ${totalRows} item di komparasi.` : ""}
+      </div>
+    );
+  }
+  const fmt = (n) => fmtCurrency(n, false);
+  const fmtV = (n) => fmtNum(n, 2);
+  const deltaCls = (n) => n > 0 ? "text-emerald-700" : n < 0 ? "text-red-700" : "text-ink-400";
+
+  return (
+    <div className="bg-white border border-ink-200 rounded-lg overflow-hidden">
+      <div className="overflow-x-auto max-h-[60vh]">
+        <table className="w-full text-[11px]">
+          <thead className="bg-ink-50 sticky top-0 z-10">
+            <tr className="text-left">
+              <th rowSpan={2} className="px-2 py-2 font-semibold text-ink-700 border-b border-ink-200">Kode</th>
+              <th rowSpan={2} className="px-2 py-2 font-semibold text-ink-700 border-b border-ink-200 min-w-[240px]">Uraian Pekerjaan</th>
+              <th rowSpan={2} className="px-2 py-2 font-semibold text-ink-700 border-b border-ink-200">Sat</th>
+              <th colSpan={3} className="px-2 py-1 font-semibold text-ink-700 text-center border-l border-b border-ink-200">Volume</th>
+              <th colSpan={3} className="px-2 py-1 font-semibold text-ink-700 text-center border-l border-b border-ink-200">Harga Satuan (Rp)</th>
+              <th colSpan={3} className="px-2 py-1 font-semibold text-ink-700 text-center border-l border-b border-ink-200">Jumlah (Rp)</th>
+              <th rowSpan={2} className="px-2 py-2 font-semibold text-ink-700 text-center border-l border-b border-ink-200">Status</th>
+            </tr>
+            <tr className="text-right text-[10px] text-ink-600">
+              <th className="px-2 py-1 border-l border-b border-ink-200 font-medium">Aktif</th>
+              <th className="px-2 py-1 border-b border-ink-200 font-medium">Usulan</th>
+              <th className="px-2 py-1 border-b border-ink-200 font-medium">Δ</th>
+              <th className="px-2 py-1 border-l border-b border-ink-200 font-medium">Aktif</th>
+              <th className="px-2 py-1 border-b border-ink-200 font-medium">Usulan</th>
+              <th className="px-2 py-1 border-b border-ink-200 font-medium">Δ</th>
+              <th className="px-2 py-1 border-l border-b border-ink-200 font-medium">Aktif</th>
+              <th className="px-2 py-1 border-b border-ink-200 font-medium">Usulan</th>
+              <th className="px-2 py-1 border-b border-ink-200 font-medium">Δ</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const stMeta = COMPARISON_STATUS[r.status] || { label: r.status, cls: "bg-slate-100" };
+              const dim = r.status === "tetap";
+              return (
+                <tr key={r.key} className={`border-t border-ink-100 ${r.status === "baru" ? "bg-emerald-50/40" : r.status === "dihapus" ? "bg-red-50/40" : "hover:bg-ink-50/60"}`}>
+                  <td className="px-2 py-1.5 font-mono text-[10px] whitespace-nowrap">{r.kode}</td>
+                  <td className="px-2 py-1.5">
+                    <div className={r.status === "dihapus" ? "line-through text-ink-500" : ""}>{r.uraian || "—"}</div>
+                    <div className="text-[9px] font-mono text-ink-400">{r.location_code}/{r.facility_code} · {r.facility_name}</div>
+                  </td>
+                  <td className="px-2 py-1.5 text-ink-600">{r.unit || "—"}</td>
+                  {/* Volume */}
+                  <td className={`px-2 py-1.5 text-right font-mono border-l border-ink-100 ${dim ? "text-ink-500" : ""}`}>{fmtV(r.aktif_vol)}</td>
+                  <td className={`px-2 py-1.5 text-right font-mono ${dim ? "text-ink-500" : ""}`}>{fmtV(r.usulan_vol)}</td>
+                  <td className={`px-2 py-1.5 text-right font-mono font-semibold ${deltaCls(r.delta_vol)}`}>
+                    {r.delta_vol > 0 ? "+" : ""}{Math.abs(r.delta_vol) < 1e-9 ? "0" : fmtV(r.delta_vol)}
+                  </td>
+                  {/* Harga */}
+                  <td className={`px-2 py-1.5 text-right font-mono border-l border-ink-100 ${dim ? "text-ink-500" : ""}`}>{fmt(r.aktif_price)}</td>
+                  <td className={`px-2 py-1.5 text-right font-mono ${dim ? "text-ink-500" : ""}`}>{fmt(r.usulan_price)}</td>
+                  <td className={`px-2 py-1.5 text-right font-mono font-semibold ${deltaCls(r.delta_price)}`}>
+                    {r.delta_price > 0 ? "+" : ""}{Math.abs(r.delta_price) < 1e-9 ? "0" : fmt(r.delta_price)}
+                  </td>
+                  {/* Jumlah */}
+                  <td className={`px-2 py-1.5 text-right font-mono border-l border-ink-100 ${dim ? "text-ink-500" : ""}`}>{fmt(r.aktif_jml)}</td>
+                  <td className={`px-2 py-1.5 text-right font-mono ${dim ? "text-ink-500" : ""}`}>{fmt(r.usulan_jml)}</td>
+                  <td className={`px-2 py-1.5 text-right font-mono font-semibold ${deltaCls(r.delta_jml)}`}>
+                    {r.delta_jml > 0 ? "+" : ""}{Math.abs(r.delta_jml) < 1e-9 ? "0" : fmt(r.delta_jml)}
+                  </td>
+                  <td className="px-2 py-1.5 text-center border-l border-ink-100">
+                    <span className={`text-[9px] px-1.5 py-0.5 rounded border font-semibold whitespace-nowrap ${stMeta.cls}`}>
+                      {stMeta.label}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="px-3 py-2 text-[10px] text-ink-500 border-t border-ink-200 bg-ink-50">
+        Menampilkan {rows.length} dari {totalRows} item
+      </div>
+    </div>
+  );
+}
+
+function FacilityRecap({ rows, loading }) {
+  const recap = useMemo(() => {
+    const map = new Map();
+    for (const r of rows) {
+      const key = r.facility_code;
+      if (!map.has(key)) {
+        map.set(key, {
+          code: r.facility_code, name: r.facility_name,
+          location_code: r.location_code, location_name: r.location_name,
+          aktif: 0, usulan: 0, item_total: 0, item_berubah: 0,
+        });
+      }
+      const f = map.get(key);
+      f.aktif += r.aktif_jml;
+      f.usulan += r.usulan_jml;
+      f.item_total += 1;
+      if (r.status !== "tetap") f.item_berubah += 1;
+    }
+    return [...map.values()].sort((a, b) =>
+      (a.location_code || "").localeCompare(b.location_code || "") ||
+      (a.code || "").localeCompare(b.code || "")
+    );
+  }, [rows]);
+
+  if (loading) {
+    return <div className="bg-white border border-ink-200 rounded-lg p-6 h-40 animate-pulse" />;
+  }
+  const fmt = (n) => fmtCurrency(n, false);
+  const deltaCls = (n) => n > 0 ? "text-emerald-700" : n < 0 ? "text-red-700" : "text-ink-700";
+  const grandA = recap.reduce((s, f) => s + f.aktif, 0);
+  const grandU = recap.reduce((s, f) => s + f.usulan, 0);
+
+  return (
+    <div className="bg-white border border-ink-200 rounded-lg overflow-hidden">
+      <table className="w-full text-xs">
+        <thead className="bg-ink-50">
+          <tr className="text-left">
+            <th className="px-3 py-2 font-semibold text-ink-700">Fasilitas</th>
+            <th className="px-3 py-2 font-semibold text-ink-700 text-right">Item Berubah / Total</th>
+            <th className="px-3 py-2 font-semibold text-ink-700 text-right">Nilai BOQ Aktif</th>
+            <th className="px-3 py-2 font-semibold text-ink-700 text-right">Nilai BOQ Usulan</th>
+            <th className="px-3 py-2 font-semibold text-ink-700 text-right">Selisih</th>
+          </tr>
+        </thead>
+        <tbody>
+          {recap.map((f) => {
+            const delta = f.usulan - f.aktif;
+            return (
+              <tr key={f.code} className="border-t border-ink-100">
+                <td className="px-3 py-2">
+                  <div className="font-medium text-ink-900">{f.name || f.code}</div>
+                  <div className="text-[10px] font-mono text-ink-500">{f.location_code}/{f.code}</div>
+                </td>
+                <td className="px-3 py-2 text-right font-mono">
+                  <span className={f.item_berubah > 0 ? "text-amber-700 font-semibold" : "text-ink-500"}>
+                    {f.item_berubah}
+                  </span>
+                  <span className="text-ink-400"> / {f.item_total}</span>
+                </td>
+                <td className="px-3 py-2 text-right font-mono">{fmt(f.aktif)}</td>
+                <td className="px-3 py-2 text-right font-mono">{fmt(f.usulan)}</td>
+                <td className={`px-3 py-2 text-right font-mono font-semibold ${deltaCls(delta)}`}>
+                  {delta > 0 ? "+" : ""}{fmt(delta)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+        <tfoot className="bg-ink-50">
+          <tr className="border-t-2 border-ink-300">
+            <td className="px-3 py-2 font-bold">TOTAL</td>
+            <td className="px-3 py-2"></td>
+            <td className="px-3 py-2 text-right font-mono font-bold">{fmt(grandA)}</td>
+            <td className="px-3 py-2 text-right font-mono font-bold">{fmt(grandU)}</td>
+            <td className={`px-3 py-2 text-right font-mono font-bold ${deltaCls(grandU - grandA)}`}>
+              {grandU - grandA > 0 ? "+" : ""}{fmt(grandU - grandA)}
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
   );
 }
 
