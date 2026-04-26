@@ -2774,11 +2774,14 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
           technical_justification: initial.technical_justification || "",
           quantity_calculation: initial.quantity_calculation || "",
           source_observation_id: initial.source_observation_id || null,
-          items: (initial.items || []).filter((it) =>
-            // Buang ADD items dengan volume ≤ 0 — legacy data rusak dari sebelum validasi
-            // diperbaiki. Tidak mungkin valid; memblokir save kalau dibiarkan masuk form.
-            it.action !== "add" || Number(it.volume_delta) > 0
-          ).map((it) => ({
+          items: (initial.items || []).filter((it) => {
+            if (it.action !== "add") return true;
+            if (Number(it.volume_delta) > 0) return true;
+            // Item PARENT/INFO/OWNER/TITIPAN sah punya volume 0 — jangan dibuang
+            const kw = ["PARENT", "INFO", "OWNER", "TITIPAN"];
+            const notes = (it.notes || "").trim().toUpperCase();
+            return kw.some((k) => notes === k || notes.startsWith(k + ":") || notes.startsWith(k + " "));
+          }).map((it) => ({
             action: it.action,
             boq_item_id: it.boq_item_id || null,
             facility_id: (it.action === "add" && !it.facility_id && it.new_facility_code)
@@ -2858,7 +2861,7 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
         const hasBypass = ZERO_PRICE_BYPASS.some((kw) => notesStr.toUpperCase().startsWith(kw));
         if (!it.description?.trim()) return toast.error(`Item baru #${idx + 1}: deskripsi wajib`);
         const _vol = parseFloat(it.volume_delta);
-        if (!(_vol > 0)) return toast.error(`Item baru ${itemLabel}: volume harus > 0 (nilai: ${it.volume_delta || "kosong"})`);
+        if (!(_vol > 0) && !hasBypass) return toast.error(`Item baru ${itemLabel}: volume harus > 0 (nilai: ${it.volume_delta || "kosong"})`);
         if (parseFloat(it.unit_price) <= 0 && !hasBypass) {
           const reason = notesStr
             ? `catatan saat ini: "${notesStr.slice(0, 40)}${notesStr.length > 40 ? "…" : ""}" (tidak diawali keyword)`

@@ -240,7 +240,13 @@ def _apply_items_from_payload(vo: VariationOrder, items_input, db: Session):
                     "Item ADD harus menyertakan facility_id atau new_facility_code "
                     "(untuk fasilitas yang dibuat dalam VO yang sama).",
                 )
-            if not (Decimal(it.volume_delta or 0) > 0):
+            bypass_kw = ("PARENT", "INFO", "OWNER", "TITIPAN")
+            notes_up = (it.notes or "").strip().upper()
+            has_bypass = any(
+                notes_up == k or notes_up.startswith(k + ":") or notes_up.startswith(k + " ")
+                for k in bypass_kw
+            )
+            if not (Decimal(it.volume_delta or 0) > 0) and not has_bypass:
                 raise HTTPException(400, f"Item ADD '{it.description or '?'}': volume harus > 0.")
         elif action == VOItemAction.REMOVE_FACILITY:
             if not it.facility_id:
