@@ -240,6 +240,8 @@ def _apply_items_from_payload(vo: VariationOrder, items_input, db: Session):
                     "Item ADD harus menyertakan facility_id atau new_facility_code "
                     "(untuk fasilitas yang dibuat dalam VO yang sama).",
                 )
+            if not (Decimal(it.volume_delta or 0) > 0):
+                raise HTTPException(400, f"Item ADD '{it.description or '?'}': volume harus > 0.")
         elif action == VOItemAction.REMOVE_FACILITY:
             if not it.facility_id:
                 raise HTTPException(400, "Item REMOVE_FACILITY harus menyertakan facility_id.")

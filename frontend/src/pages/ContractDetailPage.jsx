@@ -2774,7 +2774,11 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
           technical_justification: initial.technical_justification || "",
           quantity_calculation: initial.quantity_calculation || "",
           source_observation_id: initial.source_observation_id || null,
-          items: (initial.items || []).map((it) => ({
+          items: (initial.items || []).filter((it) =>
+            // Buang ADD items dengan volume ≤ 0 — legacy data rusak dari sebelum validasi
+            // diperbaiki. Tidak mungkin valid; memblokir save kalau dibiarkan masuk form.
+            it.action !== "add" || Number(it.volume_delta) > 0
+          ).map((it) => ({
             action: it.action,
             boq_item_id: it.boq_item_id || null,
             facility_id: (it.action === "add" && !it.facility_id && it.new_facility_code)
