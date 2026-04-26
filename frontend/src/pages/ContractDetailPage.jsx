@@ -416,7 +416,24 @@ export default function ContractDetailPage() {
 
                   {loc.facilities?.length > 0 && (
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-3 pt-3 border-t border-ink-100">
-                      {loc.facilities.map((f) => (
+                      {loc.facilities.map((f) =>
+                        f.is_removed_in_active_rev ? (
+                          <div
+                            key={f.id}
+                            className="flex items-center gap-2 px-3 py-2 bg-red-50 rounded-lg border border-red-200 opacity-60"
+                            title="Fasilitas ini dihapus via Adendum (REMOVE_FACILITY)"
+                          >
+                            <XIcon size={12} className="text-red-400 flex-shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-medium text-ink-500 truncate line-through">
+                                {f.facility_name}
+                              </p>
+                              <p className="text-[10px] text-red-400 font-mono">
+                                {f.facility_code} · <span className="italic">Dihapus via Adendum</span>
+                              </p>
+                            </div>
+                          </div>
+                        ) : (
                         <div
                           key={f.id}
                           className="group flex items-center gap-2 px-3 py-2 bg-ink-50 hover:bg-brand-50 rounded-lg border border-ink-200 hover:border-brand-300 transition"
@@ -455,7 +472,8 @@ export default function ContractDetailPage() {
                             </button>
                           )}
                         </div>
-                      ))}
+                        )
+                      )}
                     </div>
                   )}
                 </div>

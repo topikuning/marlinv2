@@ -95,6 +95,32 @@ def _assign_contract_to_user(db: Session, user: User, contract_id: str) -> bool:
 
 
 def _contract_to_detail(c: Contract, db: Session) -> dict:
+    # Deteksi fasilitas yang dihapus via REMOVE_FACILITY di revisi BOQ aktif.
+    # Kriteria: facility punya item di revisi aktif tapi seluruhnya is_active=False.
+    from app.models.models import BOQRevision
+    active_rev = (
+        db.query(BOQRevision)
+        .filter(BOQRevision.contract_id == c.id, BOQRevision.is_active == True)  # noqa: E712
+        .first()
+    )
+    removed_facility_ids: set = set()
+    if active_rev:
+        all_in_rev = {
+            str(r.facility_id)
+            for r in db.query(BOQItem.facility_id)
+            .filter(BOQItem.boq_revision_id == active_rev.id)
+            .distinct()
+            .all()
+        }
+        still_active = {
+            str(r.facility_id)
+            for r in db.query(BOQItem.facility_id)
+            .filter(BOQItem.boq_revision_id == active_rev.id, BOQItem.is_active == True)  # noqa: E712
+            .distinct()
+            .all()
+        }
+        removed_facility_ids = all_in_rev - still_active
+
     locations = []
     for loc in c.locations:
         loc_d = {
@@ -119,6 +145,7 @@ def _contract_to_detail(c: Contract, db: Session) -> dict:
                     "display_order": f.display_order,
                     "total_value": float(f.total_value or 0),
                     "is_active": f.is_active,
+                    "is_removed_in_active_rev": str(f.id) in removed_facility_ids,
                 }
                 for f in sorted(loc.facilities, key=lambda x: x.display_order)
             ],
