@@ -2782,20 +2782,42 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
         }
   );
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [collapseMeta, setCollapseMeta] = useState(false);
+  const initialFormRef = useRef(form);
+
+  const attemptClose = () => {
+    if (saving) return;
+    if (dirty && !confirm("Perubahan belum disimpan. Tutup tanpa menyimpan?")) return;
+    onClose?.();
+  };
+
+  // Track dirty state
+  useEffect(() => {
+    setDirty(JSON.stringify(form) !== JSON.stringify(initialFormRef.current));
+  }, [form]);
+
+  // Lock body scroll + ESC to close (with dirty guard)
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e) => { if (e.key === "Escape") attemptClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dirty, saving]);
 
   const submit = async () => {
     if (form.technical_justification.length < 50) return toast.error("Justifikasi teknis minimal 50 karakter");
     if (!form.items.length) return toast.error("Edit minimal 1 item perubahan di grid");
-    // Validasi field wajib per action + nilai
     for (const [idx, it] of form.items.entries()) {
       const needFac = it.action === "add" || it.action === "remove_facility";
       const needBoq = !needFac;
-      if (needBoq && !it.boq_item_id) {
-        return toast.error(`Item ${idx + 1}: boq_item_id hilang`);
-      }
-      if (needFac && !it.facility_id) {
-        return toast.error(`Item ${idx + 1}: facility_id hilang`);
-      }
+      if (needBoq && !it.boq_item_id) return toast.error(`Item ${idx + 1}: boq_item_id hilang`);
+      if (needFac && !it.facility_id) return toast.error(`Item ${idx + 1}: facility_id hilang`);
       if (it.action === "add") {
         const itemLabel = it.description?.trim() ? `"${it.description.trim()}"` : `#${idx + 1}`;
         const ZERO_PRICE_BYPASS = ["PARENT", "INFO", "OWNER", "TITIPAN"];
@@ -2808,9 +2830,6 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
     }
     setSaving(true);
     try {
-      // Normalisasi payload:
-      // - volume_delta / unit_price parseFloat supaya decimal dikirim benar
-      // - UUID kosong ("") harus dikirim null, kalau tidak Pydantic UUID reject
       const payload = {
         ...form,
         items: form.items.map((it) => ({
@@ -2828,72 +2847,181 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
         await voAPI.create(contract.id, payload);
         toast.success("VO tersimpan sebagai DRAFT");
       }
+      setDirty(false);
       onSuccess?.();
     } catch (e) { toast.error(parseApiError(e)); }
     finally { setSaving(false); }
   };
 
-  return (
-    <Modal open onClose={onClose} title={isEdit ? `Edit ${initial.vo_number}` : "VO Baru · DRAFT"} size="xl" footer={
-      <>
-        <button className="btn-secondary" onClick={onClose}>Batal</button>
-        <button className="btn-primary" onClick={submit} disabled={saving}>
-          {saving && <Spinner size={12} />} {isEdit ? "Simpan Perubahan" : "Simpan sebagai DRAFT"}
+  const justificationLen = form.technical_justification.length;
+  const justificationOk = justificationLen >= 50;
+  const itemCount = form.items.length;
+  const totalImpact = form.items.reduce((s, it) => {
+    if (it.action === "remove_facility") return s; // dihitung backend
+    const v = parseFloat(it.volume_delta) || 0;
+    const p = parseFloat(it.unit_price) || 0;
+    return s + v * p;
+  }, 0);
+
+  const titleStr = isEdit
+    ? `Edit ${initial.vo_number}`
+    : prefillFromObs
+    ? `VO Baru · Tindak Lanjut ${prefillFromObs.type === "mc_0" ? "MC-0" : "MC"}`
+    : "VO Baru · DRAFT";
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex flex-col bg-ink-50">
+      {/* Sticky header */}
+      <div className="bg-white border-b border-ink-200 px-5 py-3 flex items-center gap-4">
+        <button
+          onClick={attemptClose}
+          disabled={saving}
+          className={`p-1.5 -ml-1 rounded text-ink-600 ${saving ? "opacity-40 cursor-not-allowed" : "hover:bg-ink-100"}`}
+          title="Tutup (Esc)"
+        >
+          <XIcon size={18} />
         </button>
-      </>
-    }>
-      <div className="space-y-3 text-sm">
-        {prefillFromObs && !isEdit && (
-          <div className="p-2.5 rounded-md bg-brand-50 border border-brand-200 text-xs text-brand-800 flex items-start gap-2">
-            <span className="font-bold flex-shrink-0">↖</span>
-            <div className="flex-1">
-              <p className="font-semibold">
-                Dari {prefillFromObs.type === "mc_0" ? "MC-0" : "MC Lanjutan"}: {prefillFromObs.title}
-              </p>
-              <p className="text-[11px] mt-0.5 text-brand-700">
-                VO ini akan otomatis ter-link ke observasi tanggal {fmtDate(prefillFromObs.observation_date)}.
-                Judul & justifikasi sudah di-pre-fill dari temuan — silakan edit sesuai kebutuhan, lalu tambah item perubahan BOQ.
-              </p>
-            </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-base font-semibold text-ink-900 truncate">{titleStr}</h2>
+            {isEdit && initial?.status && (
+              <span className={`text-[10px] px-2 py-0.5 rounded border font-medium ${VO_STATUS_BADGE[initial.status]}`}>
+                {VO_STATUS_LABEL[initial.status] || initial.status}
+              </span>
+            )}
+            {dirty && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200 font-medium">
+                ● Belum disimpan
+              </span>
+            )}
           </div>
-        )}
-        <div>
-          <label className="label">Judul *</label>
-          <input className="input" value={form.title} maxLength={200}
-            onChange={(e) => setForm({ ...form, title: e.target.value })}
-            placeholder="Contoh: Penambahan revetmen segmen timur akibat abrasi" />
-        </div>
-        <div>
-          <label className="label">Justifikasi Teknis * (min 50 karakter)</label>
-          <textarea className="input" rows={4} value={form.technical_justification}
-            onChange={(e) => setForm({ ...form, technical_justification: e.target.value })}
-            placeholder="Jelaskan latar belakang teknis perubahan ini..." />
           <p className="text-[11px] text-ink-500 mt-0.5">
-            {form.technical_justification.length} / 50 karakter minimum
+            {contract?.contract_number ? <>Kontrak {contract.contract_number} · </> : null}
+            {itemCount} item perubahan
+            {totalImpact !== 0 && (
+              <> · Estimasi Δ biaya: <span className={`font-semibold ${totalImpact > 0 ? "text-emerald-700" : "text-red-700"}`}>
+                {totalImpact > 0 ? "+" : ""}{fmtCurrency(totalImpact, false)}
+              </span></>
+            )}
           </p>
         </div>
-        <div>
-          <label className="label">Perhitungan Volume (opsional)</label>
-          <textarea className="input" rows={2} value={form.quantity_calculation}
-            onChange={(e) => setForm({ ...form, quantity_calculation: e.target.value })} />
-        </div>
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <label className="label mb-0">Item Perubahan BOQ</label>
-            <p className="text-[11px] text-ink-500">
-              Pilih fasilitas → edit Vol Baru langsung di tabel. Action auto-detected dari perubahan volume.
-            </p>
-          </div>
-          <VOItemsGrid
-            contract={contract}
-            items={form.items}
-            onChange={(newItems) => setForm({ ...form, items: newItems })}
-            isAdmin={role === "superadmin" || role === "admin_pusat"}
-            voId={isEdit ? initial.id : null}
-          />
+        <div className="flex gap-1.5 items-center">
+          <button className="btn-secondary btn-sm" onClick={attemptClose} disabled={saving}>
+            Batal
+          </button>
+          <button className="btn-primary btn-sm" onClick={submit} disabled={saving}>
+            {saving
+              ? <><Spinner size={12} /> Menyimpan…</>
+              : isEdit ? "Simpan Perubahan" : "Simpan sebagai DRAFT"}
+          </button>
         </div>
       </div>
-    </Modal>
+
+      {/* Body */}
+      <div className="flex-1 overflow-auto">
+        <div className="max-w-[1600px] mx-auto p-5 space-y-4">
+          {prefillFromObs && !isEdit && (
+            <div className="p-3 rounded-md bg-brand-50 border border-brand-200 text-xs text-brand-800 flex items-start gap-2">
+              <span className="font-bold flex-shrink-0">↖</span>
+              <div className="flex-1">
+                <p className="font-semibold">
+                  Dari {prefillFromObs.type === "mc_0" ? "MC-0" : "MC Lanjutan"}: {prefillFromObs.title}
+                </p>
+                <p className="text-[11px] mt-0.5 text-brand-700">
+                  VO ini akan otomatis ter-link ke observasi tanggal {fmtDate(prefillFromObs.observation_date)}.
+                  Judul & justifikasi sudah di-pre-fill — silakan edit lalu tambah item perubahan BOQ.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {isEdit && initial?.review_notes && (
+            <div className="p-3 bg-amber-50 border border-amber-300 rounded-md text-xs flex items-start gap-2">
+              <RotateCcw size={14} className="text-amber-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold text-amber-800">Dikembalikan untuk Revisi</p>
+                <p className="text-amber-700 whitespace-pre-line mt-0.5">{initial.review_notes}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Meta section: collapsible */}
+          <div className="bg-white border border-ink-200 rounded-lg overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setCollapseMeta((v) => !v)}
+              className="w-full px-4 py-2.5 flex items-center justify-between bg-ink-50 hover:bg-ink-100 border-b border-ink-200"
+            >
+              <span className="text-xs font-semibold text-ink-700 flex items-center gap-2">
+                <ChevronRight size={14} className={`text-ink-500 transition-transform ${collapseMeta ? "" : "rotate-90"}`} />
+                Informasi Umum & Justifikasi
+                {!justificationOk && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">
+                    Justifikasi {justificationLen}/50
+                  </span>
+                )}
+                {!form.title.trim() && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">
+                    Judul kosong
+                  </span>
+                )}
+              </span>
+              <span className="text-[10px] text-ink-500">
+                {collapseMeta ? "Klik untuk tampilkan" : "Klik untuk sembunyikan"}
+              </span>
+            </button>
+            {!collapseMeta && (
+              <div className="p-4 grid grid-cols-1 lg:grid-cols-3 gap-3 text-sm">
+                <div className="lg:col-span-3">
+                  <label className="label">Judul *</label>
+                  <input className="input" value={form.title} maxLength={200}
+                    onChange={(e) => setForm({ ...form, title: e.target.value })}
+                    placeholder="Contoh: Penambahan revetmen segmen timur akibat abrasi" />
+                </div>
+                <div className="lg:col-span-2">
+                  <label className="label">Justifikasi Teknis * (min 50 karakter)</label>
+                  <textarea className="input" rows={3} value={form.technical_justification}
+                    onChange={(e) => setForm({ ...form, technical_justification: e.target.value })}
+                    placeholder="Jelaskan latar belakang teknis perubahan ini..." />
+                  <p className={`text-[11px] mt-0.5 ${justificationOk ? "text-emerald-600" : "text-red-600"}`}>
+                    {justificationLen} / 50 karakter {justificationOk ? "✓" : "minimum"}
+                  </p>
+                </div>
+                <div>
+                  <label className="label">Perhitungan Volume (opsional)</label>
+                  <textarea className="input" rows={3} value={form.quantity_calculation}
+                    onChange={(e) => setForm({ ...form, quantity_calculation: e.target.value })}
+                    placeholder="Detail rumus / dasar perhitungan..." />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Items grid */}
+          <div className="bg-white border border-ink-200 rounded-lg p-4">
+            <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+              <div>
+                <h3 className="text-sm font-semibold text-ink-800">Item Perubahan BOQ</h3>
+                <p className="text-[11px] text-ink-500">
+                  Pilih fasilitas → edit Vol Baru langsung di tabel. Action auto-detected dari perubahan volume.
+                </p>
+              </div>
+              <div className="text-[11px] text-ink-600">
+                {itemCount > 0 ? <><b>{itemCount}</b> item</> : <span className="text-red-600">Belum ada item — wajib min 1</span>}
+              </div>
+            </div>
+            <VOItemsGrid
+              contract={contract}
+              items={form.items}
+              onChange={(newItems) => setForm({ ...form, items: newItems })}
+              isAdmin={role === "superadmin" || role === "admin_pusat"}
+              voId={isEdit ? initial.id : null}
+            />
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 }
 
