@@ -2554,8 +2554,16 @@ function VariationOrdersPanel({ contract, onChange, canApprove = false, pendingF
       if (action === "submit") await voAPI.submit(vo.id);
       else if (action === "approve") await voAPI.approve(vo.id, payload);
       else if (action === "reject") await voAPI.reject(vo.id, payload);
+      else if (action === "return_for_revision") await voAPI.review(vo.id, payload);
       else if (action === "delete") await voAPI.remove(vo.id);
-      toast.success(`VO ${action} sukses`);
+      const label = {
+        submit: "disubmit untuk review",
+        approve: "disetujui",
+        reject: "ditolak",
+        return_for_revision: "dikembalikan untuk revisi",
+        delete: "dihapus",
+      }[action] || action;
+      toast.success(`VO ${label}`);
       setActionModal(null);
       refresh();
     } catch (e) { toast.error(parseApiError(e)); }
@@ -2607,6 +2615,15 @@ function VariationOrdersPanel({ contract, onChange, canApprove = false, pendingF
                     )}
                   </div>
                   <p className="font-medium text-ink-900 mt-1">{vo.title}</p>
+                  {vo.status === "draft" && vo.review_notes && (
+                    <div className="mt-1.5 flex items-start gap-1.5 text-[11px] bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                      <RotateCcw size={11} className="text-amber-600 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <span className="font-semibold text-amber-800">Dikembalikan untuk revisi · </span>
+                        <span className="text-amber-700">{vo.review_notes}</span>
+                      </div>
+                    </div>
+                  )}
                   <p className="text-xs text-ink-500 mt-0.5 line-clamp-2">{vo.technical_justification}</p>
                   <div className="flex items-center gap-3 text-[11px] text-ink-500 mt-1.5">
                     <span>Dampak: <span className={`font-semibold ${vo.cost_impact >= 0 ? "text-ink-800" : "text-red-700"}`}>
@@ -2636,6 +2653,9 @@ function VariationOrdersPanel({ contract, onChange, canApprove = false, pendingF
                     <>
                       <button className="btn-secondary btn-xs" onClick={() => setActionModal({ vo, action: "approve" })}>
                         <Check size={10} /> Approve
+                      </button>
+                      <button className="btn-ghost btn-xs text-amber-600" onClick={() => setActionModal({ vo, action: "return_for_revision" })}>
+                        <RotateCcw size={10} /> Kembalikan
                       </button>
                       <button className="btn-ghost btn-xs text-red-600" onClick={() => setActionModal({ vo, action: "reject" })}>
                         <XIcon size={10} /> Reject
@@ -4533,6 +4553,9 @@ function VOComparisonDrawer({ voId, contract, canApprove, onClose, onAction, onE
               <button className="btn-secondary btn-sm" onClick={() => { onAction?.({ vo, action: "approve" }); onClose?.(); }}>
                 <Check size={12} /> Approve
               </button>
+              <button className="btn-ghost btn-sm text-amber-600" onClick={() => { onAction?.({ vo, action: "return_for_revision" }); onClose?.(); }}>
+                <RotateCcw size={12} /> Kembalikan untuk Revisi
+              </button>
               <button className="btn-ghost btn-sm text-red-600" onClick={() => { onAction?.({ vo, action: "reject" }); onClose?.(); }}>
                 <XIcon size={12} /> Reject
               </button>
@@ -4572,6 +4595,22 @@ function VOComparisonDrawer({ voId, contract, canApprove, onClose, onAction, onE
             </div>
           </div>
         </div>
+
+        {/* Banner: dikembalikan untuk revisi */}
+        {vo?.review_notes && (
+          <div className="px-5 pt-3">
+            <div className="flex items-start gap-2 bg-amber-50 border border-amber-300 rounded-lg px-4 py-3 text-xs">
+              <RotateCcw size={14} className="text-amber-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold text-amber-800 mb-0.5">
+                  Dikembalikan untuk Revisi
+                  {vo.reviewed_at ? ` · ${fmtDate(vo.reviewed_at)}` : ""}
+                </p>
+                <p className="text-amber-700 whitespace-pre-line">{vo.review_notes}</p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Summary cards */}
         <div className="px-5 pt-3">
@@ -5043,26 +5082,42 @@ function VOActionModal({ vo, action, onClose, onConfirm }) {
   const [reason, setReason] = useState("");
   const isApprove = action === "approve";
   const isReject = action === "reject";
-  const canConfirm = isApprove || (isReject && reason.trim().length >= 20);
+  const isReturn = action === "return_for_revision";
+
+  const canConfirm = isApprove
+    || (isReject && reason.trim().length >= 20)
+    || (isReturn && notes.trim().length >= 10);
+
+  const title = isApprove ? `Approve ${vo.vo_number}`
+    : isReturn ? `Kembalikan untuk Revisi — ${vo.vo_number}`
+    : `Reject ${vo.vo_number}`;
+
+  const confirmPayload = isReject ? { reason }
+    : isReturn ? { notes }
+    : { notes };
+
+  const confirmCls = isReject
+    ? "btn-primary bg-red-600 hover:bg-red-700 border-red-600"
+    : isReturn
+    ? "btn-primary bg-amber-500 hover:bg-amber-600 border-amber-500"
+    : "btn-primary";
+
+  const confirmLabel = isReject ? "Reject (Permanen)" : isReturn ? "Kembalikan untuk Revisi" : "Approve";
+
   return (
-    <Modal open onClose={onClose}
-      title={isApprove ? `Approve ${vo.vo_number}` : `Reject ${vo.vo_number}`}
-      size="md"
+    <Modal open onClose={onClose} title={title} size="md"
       footer={
         <>
           <button className="btn-secondary" onClick={onClose}>Batal</button>
-          <button
-            className={isReject ? "btn-primary bg-red-600 hover:bg-red-700 border-red-600" : "btn-primary"}
-            onClick={() => onConfirm(isReject ? { reason } : { notes })}
-            disabled={!canConfirm}>
-            {isReject ? "Reject" : "Approve"}
+          <button className={confirmCls} onClick={() => onConfirm(confirmPayload)} disabled={!canConfirm}>
+            {confirmLabel}
           </button>
         </>
       }
     >
       <div className="space-y-3">
         <p className="text-sm text-ink-700">{vo.title}</p>
-        {isApprove ? (
+        {isApprove && (
           <div>
             <label className="label">Catatan (opsional)</label>
             <textarea className="input" rows={3} value={notes}
@@ -5072,14 +5127,33 @@ function VOActionModal({ vo, action, onClose, onConfirm }) {
               ⓘ Approve = VO masuk antrean BUNDLED. Belum mengubah BOQ sampai di-bundle ke Addendum yang ditandatangani.
             </p>
           </div>
-        ) : (
+        )}
+        {isReturn && (
+          <div>
+            <label className="label">Catatan Revisi * (min 10 karakter)</label>
+            <textarea className="input" rows={4} value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Jelaskan apa yang perlu diperbaiki oleh kontraktor..." />
+            <p className="text-[11px] text-ink-500 mt-0.5">
+              {notes.trim().length} / 10 karakter minimum
+            </p>
+            <p className="text-[11px] text-amber-700 mt-1">
+              ⓘ VO kembali ke status DRAFT. Kontraktor dapat mengedit lalu submit ulang, atau membatalkan/menghapus VO.
+              Catatan ini akan ditampilkan sebagai banner kuning pada card VO.
+            </p>
+          </div>
+        )}
+        {isReject && (
           <div>
             <label className="label">Alasan Penolakan * (min 20 karakter)</label>
             <textarea className="input" rows={4} value={reason}
               onChange={(e) => setReason(e.target.value)}
               placeholder="Jelaskan alasan teknis/administratif penolakan..." />
             <p className="text-[11px] text-ink-500 mt-0.5">
-              {reason.trim().length} / 20 karakter · Penolakan bersifat terminal (tidak bisa di-undo)
+              {reason.trim().length} / 20 karakter
+            </p>
+            <p className="text-[11px] text-red-700 mt-1">
+              ⚠ Penolakan bersifat terminal — VO tidak bisa diedit atau disubmit ulang. Gunakan "Kembalikan untuk Revisi" jika masih ingin ada perbaikan.
             </p>
           </div>
         )}
