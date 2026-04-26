@@ -11,7 +11,7 @@ from app.schemas.schemas import (
     FacilityCreate, FacilityUpdate, FacilityBulkCreate, FacilityOut, ExcelImportResult,
 )
 from app.api.deps import get_current_user, require_permission
-from app.api._guards import assert_scope_editable_by_location
+from app.api._guards import assert_scope_editable_by_location, resolve_active_addendum_id
 from app.services.audit_service import log_audit
 
 router = APIRouter(prefix="/facilities", tags=["facilities"])
@@ -69,6 +69,7 @@ def list_by_location(location_id: str, db: Session = Depends(get_db), _=Depends(
             "facility_code": f.facility_code, "facility_type": f.facility_type,
             "facility_name": f.facility_name, "display_order": f.display_order,
             "total_value": float(f.total_value or 0), "is_active": f.is_active,
+            "addendum_id": str(f.addendum_id) if f.addendum_id else None,
         } for f in rows
     ]
 
@@ -79,7 +80,8 @@ def create_facility(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contract.update")),
 ):
-    if not db.query(Location).filter(Location.id == data.location_id).first():
+    loc = db.query(Location).filter(Location.id == data.location_id).first()
+    if not loc:
         raise HTTPException(400, "Lokasi tidak ditemukan")
     assert_scope_editable_by_location(db, data.location_id)
     if db.query(Facility).filter(
@@ -105,12 +107,21 @@ def create_facility(
         if not payload.get("facility_type"):
             payload["facility_type"] = master.facility_type
 
+    # Traceability: kalau dibuat dalam mode ADDENDUM, link ke addendum aktif
+    addendum_id = resolve_active_addendum_id(db, str(loc.contract_id))
+    if addendum_id:
+        payload["addendum_id"] = addendum_id
+
     f = Facility(**payload)
     db.add(f)
     db.commit()
     db.refresh(f)
     log_audit(db, current_user, "create", "facility", str(f.id), request=request, commit=True)
-    return {"id": str(f.id), "success": True, "master_facility_id": str(f.master_facility_id) if f.master_facility_id else None}
+    return {
+        "id": str(f.id), "success": True,
+        "master_facility_id": str(f.master_facility_id) if f.master_facility_id else None,
+        "addendum_id": str(f.addendum_id) if f.addendum_id else None,
+    }
 
 
 @router.post("/bulk", response_model=dict)
@@ -119,9 +130,12 @@ def bulk_create_facilities(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contract.update")),
 ):
-    if not db.query(Location).filter(Location.id == data.location_id).first():
+    loc = db.query(Location).filter(Location.id == data.location_id).first()
+    if not loc:
         raise HTTPException(400, "Lokasi tidak ditemukan")
     assert_scope_editable_by_location(db, data.location_id)
+
+    addendum_id = resolve_active_addendum_id(db, str(loc.contract_id))
 
     created = 0
     skipped = 0
@@ -154,6 +168,7 @@ def bulk_create_facilities(
             facility_name=name,
             display_order=int(row.get("display_order") or idx),
             notes=str(row.get("notes") or "") or None,
+            addendum_id=addendum_id,
         ))
         created += 1
     db.commit()
@@ -170,9 +185,11 @@ async def import_facilities_excel(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contract.update")),
 ):
-    if not db.query(Location).filter(Location.id == location_id).first():
+    loc = db.query(Location).filter(Location.id == location_id).first()
+    if not loc:
         raise HTTPException(404, "Lokasi tidak ditemukan")
     assert_scope_editable_by_location(db, location_id)
+    addendum_id = resolve_active_addendum_id(db, str(loc.contract_id))
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
         tmp.write(await file.read())
         tmp_path = tmp.name
@@ -211,6 +228,7 @@ async def import_facilities_excel(
                 facility_name=name,
                 display_order=int(float(rec.get("display_order") or idx)),
                 notes=str(rec.get("notes") or "") or None,
+                addendum_id=addendum_id,
             ))
             result.items_imported += 1
         db.commit()

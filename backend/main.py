@@ -52,6 +52,9 @@ def _ensure_columns():
         # ADD_FACILITY: lokasi target + facility_code yang akan dibuat
         ("variation_order_items", "location_id", "UUID REFERENCES locations(id)"),
         ("variation_order_items", "new_facility_code", "VARCHAR(50)"),
+        # Traceability: link Facility/Location ke addendum yang membuatnya
+        ("facilities", "addendum_id", "UUID REFERENCES contract_addenda(id)"),
+        ("locations", "addendum_id", "UUID REFERENCES contract_addenda(id)"),
     ]
     with engine.begin() as conn:
         for table, col, ddl in pending:

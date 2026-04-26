@@ -680,6 +680,9 @@ class Location(Base):
     konsultan_id = Column(UUID(as_uuid=True), ForeignKey("companies.id"), nullable=True)
 
     is_active = Column(Boolean, default=True)
+    # Traceability: addendum yang menambahkan lokasi ini.
+    # NULL = baseline kontrak (V0). Diisi saat lokasi dibuat dalam status ADDENDUM.
+    addendum_id = Column(UUID(as_uuid=True), ForeignKey("contract_addenda.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -710,6 +713,10 @@ class Facility(Base):
     total_value = Column(Numeric(18, 2), default=0)
     notes = Column(Text)
     is_active = Column(Boolean, default=True)
+    # Traceability: addendum yang menambahkan fasilitas ini.
+    # NULL = baseline kontrak (V0). Diisi saat fasilitas dibuat dalam
+    # status ADDENDUM (baik via VO ADD_FACILITY maupun direct POST).
+    addendum_id = Column(UUID(as_uuid=True), ForeignKey("contract_addenda.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     location = relationship("Location", back_populates="facilities")

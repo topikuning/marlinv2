@@ -135,6 +135,7 @@ def _contract_to_detail(c: Contract, db: Session) -> dict:
             "latitude": float(loc.latitude) if loc.latitude else None,
             "longitude": float(loc.longitude) if loc.longitude else None,
             "is_active": loc.is_active,
+            "addendum_id": str(loc.addendum_id) if loc.addendum_id else None,
             "facilities": [
                 {
                     "id": str(f.id),
@@ -146,6 +147,7 @@ def _contract_to_detail(c: Contract, db: Session) -> dict:
                     "total_value": float(f.total_value or 0),
                     "is_active": f.is_active,
                     "is_removed_in_active_rev": str(f.id) in removed_facility_ids,
+                    "addendum_id": str(f.addendum_id) if f.addendum_id else None,
                 }
                 for f in sorted(loc.facilities, key=lambda x: x.display_order)
             ],
@@ -1067,6 +1069,7 @@ def _apply_vo_items_to_revision(db: Session, new_rev, bundled_vos):
                 facility_code=vi.new_facility_code,
                 facility_name=vi.description,
                 display_order=0,
+                addendum_id=new_rev.addendum_id,  # traceability
             )
             db.add(new_fac)
     db.flush()

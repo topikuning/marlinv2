@@ -355,6 +355,14 @@ export default function ContractDetailPage() {
                     <div>
                       <p className="font-mono text-xs text-brand-600 mb-1">
                         {loc.location_code}
+                        {loc.addendum_id && (
+                          <span
+                            className="ml-2 text-[9px] px-1 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200 font-mono"
+                            title="Lokasi ini ditambahkan via Adendum"
+                          >
+                            📎 Adendum
+                          </span>
+                        )}
                       </p>
                       <p className="font-semibold text-ink-900">{loc.name}</p>
                       <p className="text-xs text-ink-500 flex items-center gap-1 mt-0.5">
@@ -450,6 +458,14 @@ export default function ContractDetailPage() {
                           >
                             <p className="text-xs font-medium text-ink-800 truncate">
                               {f.facility_name}
+                              {f.addendum_id && (
+                                <span
+                                  className="ml-1 text-[9px] px-1 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200 font-mono"
+                                  title="Fasilitas ini ditambahkan via Adendum"
+                                >
+                                  📎 Adendum
+                                </span>
+                              )}
                             </p>
                             <p className="text-[10px] text-ink-400 font-mono">
                               {f.facility_code} · {fmtNum(f.total_value)}
