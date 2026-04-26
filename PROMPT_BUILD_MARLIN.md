@@ -277,13 +277,74 @@ Saat revisi N+1 menggantikan revisi N: data progres mingguan yang sudah ada di i
 - Konsumsi: dashboard eksekutif (notif kritis), notifikasi PPK.
 
 ### 8.5 Dashboard Eksekutif
-- Visual ringkasan multi-kontrak untuk pejabat.
-- Konten:
-  - Peta lokasi (lat/long) dengan marker progres.
-  - Galeri foto per fasilitas (tarikan dari laporan harian/mingguan).
-  - Kurva-S per kontrak (planned vs actual, dengan marker addendum).
-  - Tabel deviasi & SPI lintas kontrak.
-  - Lightbox foto fullscreen + search.
+
+Visual ringkasan multi-kontrak untuk pejabat (eksekutif, PPK, Itjen). Tampilan harus mengutamakan **kemudahan eksplorasi** — pejabat harus bisa zoom dari level nasional → lokasi → kontrak → fasilitas dalam beberapa klik.
+
+#### 8.5.1 Peta Interaktif Lokasi Proyek
+- **Peta utama** menampilkan seluruh lokasi proyek dengan marker berdasarkan koordinat (lat/long).
+- **Warna marker** mencerminkan status proyek: hijau (NORMAL/FAST), kuning (WARNING), merah (CRITICAL), abu-abu (DRAFT/COMPLETED).
+- **Cluster marker** otomatis saat zoom out (jika banyak titik berdekatan), pecah saat zoom in.
+- **Hover marker** → tooltip ringkas: nama lokasi, kontrak, % progres, status deviasi.
+- **Klik marker** → buka panel/popup detail dengan:
+  - Header: nomor kontrak, nama, PPK, kontraktor, periode, nilai kontrak, % progres aktual.
+  - Daftar fasilitas di lokasi tersebut beserta % progres masing-masing.
+  - **Kurva-S mini** (planned vs actual) langsung di popup.
+  - Tombol "Buka detail kontrak" → navigasi ke halaman kontrak penuh.
+  - Tombol "Lihat galeri foto lokasi" → buka galeri foto (lihat 8.5.3).
+- **Layer toggle**: bisa hidup-matikan layer per status (mis. tampilkan hanya CRITICAL), per tahun anggaran, atau per provinsi.
+- **Pencarian peta**: kotak search untuk lompat ke kontrak/lokasi tertentu.
+- **Heatmap mode** (opsional): density warning per region.
+- **Legenda peta** selalu terlihat di pojok dengan keterangan warna marker.
+- **Basemap** standar (mis. street + satellite toggle).
+
+#### 8.5.2 Kurva-S Interaktif
+- Per kontrak: chart line dengan dua kurva (planned vs actual).
+- **Marker addendum** ditampilkan sebagai vertical line di titik tanggal sign, dengan label `V1`, `V2`, dst.
+- **Hover titik kurva** → tooltip: minggu ke-N, % planned, % actual, deviasi, SPI.
+- **Zoom & pan** (terutama untuk kontrak dengan durasi panjang).
+- **Multi-kontrak overlay** (opsional): pilih beberapa kontrak untuk dibandingkan kurvanya dalam satu chart.
+- **Ekspor**: tombol unduh chart sebagai PNG dan data sebagai Excel.
+- **Tabel deviasi mingguan** di bawah chart, klik baris → highlight titik di kurva.
+
+#### 8.5.3 Galeri Foto Interaktif
+Tarikan foto dari laporan harian & mingguan. Kontrol harus mudah di tangan user.
+
+- **Filter atas galeri:**
+  - **Tanggal** — date range picker; preset shortcut (hari ini, 7 hari terakhir, bulan ini, custom range).
+  - **Kontrak** — dropdown filterable.
+  - **Lokasi** — dropdown filterable, multi-select.
+  - **Fasilitas** — dropdown filterable, multi-select (mengikuti lokasi terpilih).
+  - **Tipe laporan** — toggle: Harian / Mingguan / Semua.
+  - **Pencarian teks** — caption / catatan foto.
+- **Layout galeri:**
+  - **Grid responsif** (2–6 kolom tergantung lebar layar) dengan thumbnail.
+  - **Group by** (toggle): per tanggal, per fasilitas, atau per lokasi.
+  - **Infinite scroll** atau pagination — pilih sesuai jumlah data.
+  - **Lazy-load** thumbnail (tidak load semua sekaligus).
+- **Klik thumbnail** → buka **lightbox fullscreen** dengan kontrol:
+  - **Navigasi keyboard**: panah kiri/kanan untuk foto sebelumnya/berikutnya, Esc untuk tutup, Spasi untuk play slideshow.
+  - **Tombol navigasi swipe** untuk mobile.
+  - **Zoom in/out** + pan saat zoom.
+  - **Rotate** (90° kiri/kanan).
+  - **Caption panel** di sisi/bawah: tanggal foto, fasilitas, lokasi, kontrak, sumber laporan (link ke laporan asli), nama pengupload, catatan.
+  - **Tombol unduh** foto asli.
+  - **Tombol "Buka konteks"** → loncat ke laporan asal foto tsb.
+  - **Slideshow auto-play** dengan kontrol kecepatan & pause.
+  - **Counter** "X dari Y" supaya user tahu posisi.
+- **Bulk action di galeri**: pilih foto (checkbox) → unduh ZIP, ekspor ke PDF album, atau lampirkan ke laporan eksekutif.
+- **Performance**: galeri besar (ribuan foto) wajib menggunakan virtualisasi grid + thumbnail server-generated, foto asli on-demand.
+
+#### 8.5.4 KPI & Tabel Ringkas
+- **KPI cards** di atas: total kontrak aktif, total nilai kontrak, % progres tertimbang nasional, jumlah warning aktif, jumlah temuan Itjen open.
+- **Tabel deviasi & SPI lintas kontrak**: sortir/filter per kolom; klik baris → buka detail kontrak.
+- **Status pembayaran termin**: ringkasan termin yang ELIGIBLE / SUBMITTED / VERIFIED / PAID per kontrak.
+- **Heatmap warning** per provinsi (opsional, jika data cukup).
+
+#### 8.5.5 Aturan Umum Dashboard
+- **Auto-refresh** data setiap N menit (konfigurable, default 5 menit) tanpa reload halaman.
+- **Ekspor seluruh dashboard** sebagai PDF laporan eksekutif (snapshot).
+- **Mode presentasi** (fullscreen, sembunyikan menu) untuk tampil di rapat.
+- **Permission-aware**: data yang ditampilkan otomatis difilter sesuai scope user (mis. PPK hanya melihat kontraknya).
 
 ---
 
