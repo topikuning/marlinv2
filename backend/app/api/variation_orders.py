@@ -415,6 +415,7 @@ def export_excel_snapshot(
     contract_id: str,
     facility_ids: Optional[str] = Query(None, description="comma-separated facility IDs; kosong = semua"),
     vo_id: Optional[str] = Query(None, description="VO yang sedang di-edit (item-nya pre-fill vol_baru)"),
+    mode: str = Query("flat", description="flat | per_facility"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("contract.read")),
 ):
@@ -422,11 +423,13 @@ def export_excel_snapshot(
         raise HTTPException(403, "Akses ditolak")
     from fastapi.responses import Response
     from app.services import vo_excel_service
+    if mode not in ("flat", "per_facility"):
+        raise HTTPException(400, "mode harus 'flat' atau 'per_facility'")
     fac_list = None
     if facility_ids:
         fac_list = [s.strip() for s in facility_ids.split(",") if s.strip()]
     try:
-        data = vo_excel_service.export_snapshot(db, contract_id, fac_list, exclude_vo_id=vo_id)
+        data = vo_excel_service.export_snapshot(db, contract_id, fac_list, exclude_vo_id=vo_id, mode=mode)
     except ValueError as e:
         raise HTTPException(400, str(e))
     fname = f"vo_snapshot_{contract_id[:8]}.xlsx"

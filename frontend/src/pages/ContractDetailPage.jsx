@@ -3657,6 +3657,7 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
 function VOExcelDialog({ mode, contract, allFacilities, currentFacilityId, voId, items, onClose, onImported }) {
   const [scope, setScope] = useState("current"); // 'current' | 'all' | 'multi'
   const [selectedFacIds, setSelectedFacIds] = useState([currentFacilityId].filter(Boolean));
+  const [sheetMode, setSheetMode] = useState("flat"); // 'flat' | 'per_facility'
   const [busy, setBusy] = useState(false);
   const [parseResult, setParseResult] = useState(null);
   const fileInputRef = useRef(null);
@@ -3667,10 +3668,13 @@ function VOExcelDialog({ mode, contract, allFacilities, currentFacilityId, voId,
     ? null  // backend resolves: null = all facilities
     : selectedFacIds;
 
+  // per_facility hanya relevan saat scope all/multi (>1 fasilitas)
+  const showSheetModeOption = scope === "all" || scope === "multi";
+
   const doExport = async () => {
     setBusy(true);
     try {
-      const params = { vo_id: voId || undefined };
+      const params = { vo_id: voId || undefined, mode: showSheetModeOption ? sheetMode : "flat" };
       if (facIdsForRequest && facIdsForRequest.length > 0) {
         params.facility_ids = facIdsForRequest.join(",");
       }
@@ -3765,6 +3769,29 @@ function VOExcelDialog({ mode, contract, allFacilities, currentFacilityId, voId,
               </div>
             )}
           </div>
+
+          {showSheetModeOption && (
+            <div>
+              <p className="text-ink-700 mb-1">Format sheet:</p>
+              <div className="space-y-1">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="radio" checked={sheetMode === "flat"} onChange={() => setSheetMode("flat")} />
+                  <span>Satu sheet (semua fasilitas digabung)</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="radio" checked={sheetMode === "per_facility"} onChange={() => setSheetMode("per_facility")} />
+                  <span>Sheet terpisah per fasilitas <span className="text-ink-400 text-[11px]">(+ sheet REKAP)</span></span>
+                </label>
+              </div>
+              {sheetMode === "per_facility" && (
+                <p className="mt-1 text-[11px] text-indigo-600">
+                  Import akan auto-detect format ini — sheet <code className="bg-indigo-50 px-1 rounded">FAC_*</code> dibaca semua sekaligus.
+                  Anda bisa hapus sheet fasilitas yang tidak perlu diedit sebelum upload.
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="p-2 bg-ink-50 rounded text-[11px] text-ink-700">
             <p className="font-medium">Yang akan ada di file:</p>
             <ul className="list-disc list-inside mt-1 space-y-0.5">
