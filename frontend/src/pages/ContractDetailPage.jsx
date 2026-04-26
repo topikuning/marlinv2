@@ -3961,8 +3961,8 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
         </div>
       ) : facility?._isPending && addRows.length === 0 ? (
         <div className="p-3 rounded bg-amber-50 border border-amber-200 text-xs text-amber-800">
-          🆕 Fasilitas <b>{facility.facility_code}</b> belum ada di database — akan dibuat saat adendum di-tanda-tangan.
-          Klik <b>+ Item Baru</b> untuk langsung menambahkan item BOQ ke fasilitas ini dalam VO yang sama.
+          🏗 Fasilitas baru <b>{facility.facility_code} — {facility.facility_name}</b> belum punya item BOQ.
+          Klik <b>+ Item Baru</b> untuk menambah; nilai dan rincian item akan ikut tampil di rekap & detail VO.
         </div>
       ) : loadingBoq ? (
         <p className="text-xs text-ink-500 p-3">Memuat BOQ fasilitas...</p>
@@ -3974,8 +3974,9 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
         <>
           {/* Banner for pending facility with items */}
           {facility?._isPending && (
-            <div className="px-2 py-1.5 bg-amber-50 border border-amber-200 rounded text-[10px] text-amber-800">
-              🆕 Fasilitas <b>{facility.facility_code}</b> belum ada di DB — item di bawah akan dibuat saat adendum di-tanda-tangan.
+            <div className="px-2 py-1.5 bg-emerald-50 border border-emerald-200 rounded text-[10px] text-emerald-800">
+              🏗 Fasilitas baru <b>{facility.facility_code} — {facility.facility_name}</b> dibuat dalam VO ini.
+              Item yang ditambahkan di bawah ikut menjadi bagian VO ini dan tampil di detail/rekap.
             </div>
           )}
           {/* Search filter */}
@@ -4884,13 +4885,26 @@ function buildVOComparison(activeBoq, vo) {
   const addByFac = new Map();
   const removedFacIds = new Set();
   const addFacilityItems = []; // ADD_FACILITY items, ditampilkan sebagai row sendiri
+  // Indeks ADD_FACILITY by code → dipakai untuk hidrasi facility info pada
+  // ADD items yang target-nya fasilitas pending (dibuat di VO yang sama).
+  const pendingFacByCode = new Map();
+  for (const it of items) {
+    if (it.action === "add_facility" && it.new_facility_code) {
+      pendingFacByCode.set(it.new_facility_code, it);
+    }
+  }
   for (const it of items) {
     if (it.action === "remove_facility") {
       if (it.facility_id) removedFacIds.add(it.facility_id);
     } else if (it.action === "add_facility") {
       addFacilityItems.push(it);
     } else if (it.action === "add") {
-      const fid = it.facility_id || it.target_facility?.id;
+      // Target bisa fasilitas existing (facility_id) ATAU fasilitas pending
+      // di VO yang sama (new_facility_code, facility_id null).
+      let fid = it.facility_id || it.target_facility?.id;
+      if (!fid && it.new_facility_code) {
+        fid = `PENDING:${it.new_facility_code}`;
+      }
       if (!fid) continue;
       if (!addByFac.has(fid)) addByFac.set(fid, []);
       addByFac.get(fid).push(it);
@@ -4948,8 +4962,24 @@ function buildVOComparison(activeBoq, vo) {
   }
 
   for (const [facId, addItems] of addByFac.entries()) {
+    const isPending = typeof facId === "string" && facId.startsWith("PENDING:");
+    let pendingFacRef = null;
+    if (isPending) {
+      const code = facId.slice("PENDING:".length);
+      pendingFacRef = pendingFacByCode.get(code);
+    }
     for (const it of addItems) {
-      const fac = it.target_facility || activeBoq.find((b) => b.facility_id === facId) || {};
+      let fac;
+      if (isPending && pendingFacRef) {
+        const loc = pendingFacRef.target_location || {};
+        fac = {
+          facility_code: pendingFacRef.new_facility_code,
+          facility_name: pendingFacRef.description || "Fasilitas Baru",
+          location_code: loc.code, location_name: loc.name,
+        };
+      } else {
+        fac = it.target_facility || activeBoq.find((b) => b.facility_id === facId) || {};
+      }
       const usulan_vol = Number(it.volume_delta || 0);
       const usulan_price = Number(it.unit_price || 0);
       const usulan_jml = usulan_vol * usulan_price;
@@ -4966,6 +4996,7 @@ function buildVOComparison(activeBoq, vo) {
         delta_vol: usulan_vol, delta_price: usulan_price, delta_jml: usulan_jml,
         status: "baru", voAction: "add", voNotes: it.notes,
         _isAdd: true,
+        _isPendingFacility: isPending,
       });
     }
   }
@@ -5494,13 +5525,18 @@ function FacilityRecap({ rows, loading }) {
           code: r.facility_code, name: r.facility_name,
           location_code: r.location_code, location_name: r.location_name,
           aktif: 0, usulan: 0, item_total: 0, item_berubah: 0,
+          isNew: false,
         });
       }
       const f = map.get(key);
       f.aktif += r.aktif_jml;
       f.usulan += r.usulan_jml;
-      f.item_total += 1;
-      if (r.status !== "tetap") f.item_berubah += 1;
+      // Pseudo-row ADD_FACILITY hanya marker — tidak dihitung sebagai item BOQ
+      if (!r._isNewFacility) {
+        f.item_total += 1;
+        if (r.status !== "tetap") f.item_berubah += 1;
+      }
+      if (r._isNewFacility || r._isPendingFacility) f.isNew = true;
     }
     return [...map.values()].sort((a, b) =>
       (a.location_code || "").localeCompare(b.location_code || "") ||
@@ -5532,9 +5568,16 @@ function FacilityRecap({ rows, loading }) {
           {recap.map((f) => {
             const delta = f.usulan - f.aktif;
             return (
-              <tr key={f.code} className="border-t border-ink-100">
+              <tr key={f.code} className={`border-t border-ink-100 ${f.isNew ? "bg-emerald-50/40" : ""}`}>
                 <td className="px-3 py-2">
-                  <div className="font-medium text-ink-900">{f.name || f.code}</div>
+                  <div className="font-medium text-ink-900 flex items-center gap-1.5">
+                    {f.isNew && (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 font-semibold">
+                        FASILITAS BARU
+                      </span>
+                    )}
+                    {f.name || f.code}
+                  </div>
                   <div className="text-[10px] font-mono text-ink-500">{f.location_code}/{f.code}</div>
                 </td>
                 <td className="px-3 py-2 text-right font-mono">
