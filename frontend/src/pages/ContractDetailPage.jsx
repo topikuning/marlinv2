@@ -2774,14 +2774,27 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
           technical_justification: initial.technical_justification || "",
           quantity_calculation: initial.quantity_calculation || "",
           source_observation_id: initial.source_observation_id || null,
-          items: (initial.items || []).filter((it) => {
-            if (it.action !== "add") return true;
-            if (Number(it.volume_delta) > 0) return true;
-            // Item PARENT/INFO/OWNER/TITIPAN sah punya volume 0 — jangan dibuang
+          items: (() => {
             const kw = ["PARENT", "INFO", "OWNER", "TITIPAN"];
-            const notes = (it.notes || "").trim().toUpperCase();
-            return kw.some((k) => notes === k || notes.startsWith(k + ":") || notes.startsWith(k + " "));
-          }).map((it) => ({
+            const isBypass = (it) => {
+              const n = (it.notes || "").trim().toUpperCase();
+              return kw.some((k) => n === k || n.startsWith(k + ":") || n.startsWith(k + " "));
+            };
+            const all = initial.items || [];
+            const corrupt = all.filter(
+              (it) => it.action === "add" && !(Number(it.volume_delta) > 0) && !isBypass(it)
+            );
+            if (corrupt.length) {
+              setTimeout(() => toast.warning(
+                `${corrupt.length} item ADD dengan volume 0 dihapus otomatis (data tidak valid). Tambahkan ulang jika diperlukan.`
+              ), 300);
+            }
+            return all.filter((it) => {
+              if (it.action !== "add") return true;
+              if (Number(it.volume_delta) > 0) return true;
+              return isBypass(it);
+            });
+          })().map((it) => ({
             action: it.action,
             boq_item_id: it.boq_item_id || null,
             facility_id: (it.action === "add" && !it.facility_id && it.new_facility_code)
@@ -3488,6 +3501,8 @@ function AddFacilitySection({ items, onChange, locations }) {
 // ════════════════════════════════════════════════════════════════════════════
 function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }) {
   const [showExcelPicker, setShowExcelPicker] = useState(null); // 'export' | 'import' | null
+  const [showNewFacForm, setShowNewFacForm] = useState(false);
+  const [newFac, setNewFac] = useState({ location_id: "", code: "", name: "" });
   const existingFacilities = useMemo(() =>
     (contract.locations || []).flatMap((l) =>
       (l.facilities || []).map((f) => ({
@@ -3764,7 +3779,38 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
   const totalDelta = items.reduce((sum, it) => sum + (parseFloat(it.cost_impact) || (parseFloat(it.volume_delta || 0) * parseFloat(it.unit_price || 0))), 0);
   const hasInvalid = rows.some((r) => r.invalid);
 
-  if (!allFacilities.length) {
+  const confirmNewFacility = () => {
+    const code = newFac.code.trim();
+    const name = newFac.name.trim();
+    if (!newFac.location_id) return toast.error("Pilih lokasi terlebih dahulu.");
+    if (!code) return toast.error("Kode fasilitas wajib diisi.");
+    if (!name) return toast.error("Nama fasilitas wajib diisi.");
+    const pendingId = `PENDING:${code}`;
+    if (allFacilities.some((f) => f.facility_code === code)) {
+      return toast.error(`Kode fasilitas "${code}" sudah ada di kontrak atau VO ini.`);
+    }
+    onChange([
+      ...items,
+      {
+        action: "add_facility",
+        boq_item_id: null,
+        facility_id: null,
+        location_id: newFac.location_id,
+        new_facility_code: code,
+        description: name,
+        unit: "",
+        volume_delta: 0,
+        unit_price: 0,
+        notes: "",
+      },
+    ]);
+    setFacilityId(pendingId);
+    setShowNewFacForm(false);
+    setNewFac({ location_id: "", code: "", name: "" });
+    toast.success(`Fasilitas "${code} — ${name}" ditambahkan. Isi item BOQ-nya di bawah.`);
+  };
+
+  if (!allFacilities.length && !showNewFacForm) {
     return (
       <div className="p-3 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
         Kontrak ini belum punya fasilitas. Tambah lokasi & fasilitas dulu sebelum membuat VO.
@@ -3777,12 +3823,25 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
       {/* Toolbar */}
       <div className="flex items-center gap-2 flex-wrap p-2 bg-ink-50 rounded border border-ink-200">
         <label className="text-xs font-medium text-ink-700">Fasilitas:</label>
-        <FacilityPicker
-          facilities={allFacilities}
-          value={facilityId}
-          onChange={setFacilityId}
-        />
-        {!facilityRemoved && (
+        {allFacilities.length > 0 && (
+          <FacilityPicker
+            facilities={allFacilities}
+            value={facilityId}
+            onChange={setFacilityId}
+          />
+        )}
+        <button
+          type="button"
+          className={`btn-ghost btn-xs text-emerald-700 border border-emerald-300 ${showNewFacForm ? "bg-emerald-50" : ""}`}
+          onClick={() => {
+            setShowNewFacForm((v) => !v);
+            if (!showNewFacForm) setNewFac({ location_id: (contract.locations || [])[0]?.id || "", code: "", name: "" });
+          }}
+          title="Tambahkan fasilitas baru ke dalam VO ini"
+        >
+          🏗 Fasilitas Baru
+        </button>
+        {!facilityRemoved && allFacilities.length > 0 && (
           <>
             <button type="button" className="btn-ghost btn-xs" onClick={addNewItem}>
               <Plus size={11} /> Item Baru
@@ -3829,6 +3888,58 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
           </label>
         )}
       </div>
+
+      {/* Inline form — tambah fasilitas baru ke VO */}
+      {showNewFacForm && (
+        <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-lg space-y-2">
+          <p className="text-xs font-semibold text-emerald-800">🏗 Tambah Fasilitas Baru ke VO</p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div>
+              <label className="text-[10px] text-ink-600 font-medium block mb-0.5">Lokasi *</label>
+              <select
+                className="input py-0.5 text-xs w-full"
+                value={newFac.location_id}
+                onChange={(e) => setNewFac({ ...newFac, location_id: e.target.value })}
+              >
+                <option value="">— pilih —</option>
+                {(contract.locations || []).map((l) => (
+                  <option key={l.id} value={l.id}>{l.location_code} — {l.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] text-ink-600 font-medium block mb-0.5">Kode Fasilitas *</label>
+              <input
+                className="input py-0.5 text-xs w-full font-mono"
+                placeholder="mis. 7.NewBlok"
+                maxLength={50}
+                value={newFac.code}
+                onChange={(e) => setNewFac({ ...newFac, code: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-ink-600 font-medium block mb-0.5">Nama Fasilitas *</label>
+              <input
+                className="input py-0.5 text-xs w-full"
+                placeholder="mis. Gudang Pendingin Blok Baru"
+                value={newFac.name}
+                onChange={(e) => setNewFac({ ...newFac, name: e.target.value })}
+              />
+            </div>
+          </div>
+          <p className="text-[10px] text-emerald-700">
+            Setelah dikonfirmasi, fasilitas langsung aktif di picker di atas — isi item BOQ-nya di bawah.
+          </p>
+          <div className="flex gap-2">
+            <button type="button" className="btn-primary btn-xs" onClick={confirmNewFacility}>
+              ✓ Konfirmasi &amp; Mulai Isi BOQ
+            </button>
+            <button type="button" className="btn-secondary btn-xs" onClick={() => setShowNewFacForm(false)}>
+              Batal
+            </button>
+          </div>
+        </div>
+      )}
 
       {facilityRemoved ? (
         <div className="p-3 rounded bg-red-50 border border-red-200 text-xs text-red-800 flex items-start gap-2">
@@ -4099,13 +4210,6 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
         </div>
         </>
       )}
-
-      {/* Section: ADD_FACILITY — fasilitas baru di lokasi existing */}
-      <AddFacilitySection
-        items={items}
-        onChange={onChange}
-        locations={contract.locations || []}
-      />
 
       {/* Footer summary */}
       <div className="flex items-center justify-between p-2 bg-ink-50 rounded text-xs">
