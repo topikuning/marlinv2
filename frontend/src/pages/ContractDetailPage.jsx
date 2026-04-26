@@ -2777,7 +2777,9 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
           items: (initial.items || []).map((it) => ({
             action: it.action,
             boq_item_id: it.boq_item_id || null,
-            facility_id: it.facility_id || null,
+            facility_id: (it.action === "add" && !it.facility_id && it.new_facility_code)
+              ? `PENDING:${it.new_facility_code}`
+              : (it.facility_id || null),
             parent_boq_item_id: it.parent_boq_item_id || null,
             parent_code: it.parent_code || null,
             new_item_code: it.new_item_code || null,
@@ -2867,13 +2869,22 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
     try {
       const payload = {
         ...form,
-        items: form.items.map((it) => ({
-          ...it,
-          boq_item_id: it.boq_item_id || null,
-          facility_id: it.facility_id || null,
-          volume_delta: parseFloat(it.volume_delta) || 0,
-          unit_price: parseFloat(it.unit_price) || 0,
-        })),
+        items: form.items.map((it) => {
+          const base = {
+            ...it,
+            boq_item_id: it.boq_item_id || null,
+            facility_id: it.facility_id || null,
+            volume_delta: parseFloat(it.volume_delta) || 0,
+            unit_price: parseFloat(it.unit_price) || 0,
+          };
+          // ADD items targeting a pending (same-VO) facility use PENDING:CODE as
+          // the virtual facility_id in form state. Convert back for the backend.
+          if (it.action === "add" && (it.facility_id || "").startsWith("PENDING:")) {
+            base.facility_id = null;
+            base.new_facility_code = it.facility_id.slice("PENDING:".length);
+          }
+          return base;
+        }),
       };
       if (isEdit) {
         await voAPI.update(initial.id, payload);
@@ -3223,7 +3234,10 @@ function FacilityPicker({ facilities, value, onChange }) {
       >
         {selected ? (
           <span className="truncate">
-            <span className="text-ink-500 font-mono mr-1">[{selected.location_code}] {selected.facility_code}</span>
+            {selected._isPending
+              ? <span className="text-amber-600 font-mono mr-1">🆕 {selected.facility_code}</span>
+              : <span className="text-ink-500 font-mono mr-1">[{selected.location_code}] {selected.facility_code}</span>
+            }
             {selected.facility_name}
           </span>
         ) : (
@@ -3255,13 +3269,23 @@ function FacilityPicker({ facilities, value, onChange }) {
                 }`}
                 onClick={() => { onChange(f.id); setOpen(false); setSearch(""); }}
               >
-                <div className="font-mono text-[10px] text-ink-500">
-                  [{f.location_code}] {f.facility_code}
-                </div>
-                <div>
-                  {f.facility_name}
-                  {f.total_value ? <span className="text-[10px] text-ink-500 ml-1">— {fmtCurrency(f.total_value)}</span> : null}
-                </div>
+                {f._isPending ? (
+                  <div className="flex items-center gap-1">
+                    <span className="text-[9px] px-1 py-0.5 rounded bg-amber-100 text-amber-700 font-semibold">BARU</span>
+                    <span className="font-mono text-[10px] text-amber-700">{f.facility_code}</span>
+                    <span className="text-[10px] text-amber-800">{f.facility_name}</span>
+                  </div>
+                ) : (
+                  <>
+                    <div className="font-mono text-[10px] text-ink-500">
+                      [{f.location_code}] {f.facility_code}
+                    </div>
+                    <div>
+                      {f.facility_name}
+                      {f.total_value ? <span className="text-[10px] text-ink-500 ml-1">— {fmtCurrency(f.total_value)}</span> : null}
+                    </div>
+                  </>
+                )}
               </button>
             ))}
             {filtered.length > 200 && (
@@ -3281,8 +3305,9 @@ function FacilityPicker({ facilities, value, onChange }) {
 // AddFacilitySection — bagian terpisah untuk action ADD_FACILITY
 // (tambah fasilitas baru di lokasi existing). Tidak terikat ke facility picker
 // utama karena action ini menambah Facility, bukan mengubah BOQ items.
-// Item-item BOQ untuk fasilitas baru dibuat di VO terpisah setelah adendum
-// di-bundle (fasilitas baru sudah ada di DB).
+// Setelah ADD_FACILITY ditambahkan di sini, fasilitas baru langsung muncul di
+// picker BOQ Items section (dengan badge "BARU") dan bisa langsung diisi item BOQ
+// dalam VO yang sama, atau juga boleh dibiarkan kosong dulu dan diisi lewat VO lain.
 // ════════════════════════════════════════════════════════════════════════════
 function AddFacilitySection({ items, onChange, locations }) {
   const [open, setOpen] = useState(false);
@@ -3336,7 +3361,7 @@ function AddFacilitySection({ items, onChange, locations }) {
           )}
         </span>
         <span className="text-[10px] text-emerald-700 font-normal">
-          Item-item BOQ untuk fasilitas baru ditambahkan via VO terpisah setelah adendum di-bundle
+          Setelah ditambahkan, fasilitas baru langsung bisa diisi BOQ item di section bawah
         </span>
       </button>
 
@@ -3456,7 +3481,7 @@ function AddFacilitySection({ items, onChange, locations }) {
 // ════════════════════════════════════════════════════════════════════════════
 function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }) {
   const [showExcelPicker, setShowExcelPicker] = useState(null); // 'export' | 'import' | null
-  const allFacilities = useMemo(() =>
+  const existingFacilities = useMemo(() =>
     (contract.locations || []).flatMap((l) =>
       (l.facilities || []).map((f) => ({
         ...f,
@@ -3464,6 +3489,23 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
         location_name: l.name,
       }))
     ), [contract.locations]
+  );
+  // Virtual facilities defined by ADD_FACILITY items in the same VO (not in DB yet)
+  const virtualFacilities = useMemo(() =>
+    items
+      .filter((it) => it.action === "add_facility" && (it.new_facility_code || "").trim())
+      .map((it) => ({
+        id: `PENDING:${it.new_facility_code.trim()}`,
+        facility_code: it.new_facility_code.trim(),
+        facility_name: it.description || `Fasilitas Baru (${it.new_facility_code.trim()})`,
+        location_id: it.location_id,
+        _isPending: true,
+      })),
+    [items]
+  );
+  const allFacilities = useMemo(
+    () => [...existingFacilities, ...virtualFacilities],
+    [existingFacilities, virtualFacilities]
   );
   const [facilityId, setFacilityId] = useState(allFacilities[0]?.id || "");
   const [boqItems, setBoqItems] = useState([]);
@@ -3475,6 +3517,11 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
 
   useEffect(() => {
     if (!facilityId) return;
+    // Pending (same-VO ADD_FACILITY) facilities don't exist in DB yet — skip fetch
+    if (facilityId.startsWith("PENDING:")) {
+      setBoqItems([]);
+      return;
+    }
     if (boqCache[facilityId]) {
       setBoqItems(boqCache[facilityId]);
       return;
@@ -3733,30 +3780,35 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
             <button type="button" className="btn-ghost btn-xs" onClick={addNewItem}>
               <Plus size={11} /> Item Baru
             </button>
-            <button
-              type="button"
-              className="btn-ghost btn-xs text-red-600"
-              onClick={removeFacility}
-              title="Tandai seluruh fasilitas untuk dihapus"
-            >
-              <Trash2 size={11} /> Hapus Fasilitas
-            </button>
-            <button
-              type="button"
-              className="btn-ghost btn-xs"
-              onClick={() => setShowExcelPicker("export")}
-              title="Download snapshot BOQ untuk edit massal di Excel"
-            >
-              <Download size={11} /> Export Excel
-            </button>
-            <button
-              type="button"
-              className="btn-ghost btn-xs"
-              onClick={() => setShowExcelPicker("import")}
-              title="Upload Excel hasil edit untuk apply perubahan massal"
-            >
-              <Upload size={11} /> Import Excel
-            </button>
+            {/* Buttons below only apply to existing (non-pending) facilities */}
+            {!facility?._isPending && (
+              <>
+                <button
+                  type="button"
+                  className="btn-ghost btn-xs text-red-600"
+                  onClick={removeFacility}
+                  title="Tandai seluruh fasilitas untuk dihapus"
+                >
+                  <Trash2 size={11} /> Hapus Fasilitas
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost btn-xs"
+                  onClick={() => setShowExcelPicker("export")}
+                  title="Download snapshot BOQ untuk edit massal di Excel"
+                >
+                  <Download size={11} /> Export Excel
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost btn-xs"
+                  onClick={() => setShowExcelPicker("import")}
+                  title="Upload Excel hasil edit untuk apply perubahan massal"
+                >
+                  <Upload size={11} /> Import Excel
+                </button>
+              </>
+            )}
           </>
         )}
         {isAdmin && !facilityRemoved && (
@@ -3789,6 +3841,11 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
             </button>
           </div>
         </div>
+      ) : facility?._isPending && addRows.length === 0 ? (
+        <div className="p-3 rounded bg-amber-50 border border-amber-200 text-xs text-amber-800">
+          🆕 Fasilitas <b>{facility.facility_code}</b> belum ada di database — akan dibuat saat adendum di-tanda-tangan.
+          Klik <b>+ Item Baru</b> untuk langsung menambahkan item BOQ ke fasilitas ini dalam VO yang sama.
+        </div>
       ) : loadingBoq ? (
         <p className="text-xs text-ink-500 p-3">Memuat BOQ fasilitas...</p>
       ) : rows.length === 0 && addRows.length === 0 ? (
@@ -3797,6 +3854,12 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
         </div>
       ) : (
         <>
+          {/* Banner for pending facility with items */}
+          {facility?._isPending && (
+            <div className="px-2 py-1.5 bg-amber-50 border border-amber-200 rounded text-[10px] text-amber-800">
+              🆕 Fasilitas <b>{facility.facility_code}</b> belum ada di DB — item di bawah akan dibuat saat adendum di-tanda-tangan.
+            </div>
+          )}
           {/* Search filter */}
           <div className="flex items-center gap-2 px-1">
             <Search size={13} className="text-ink-400" />

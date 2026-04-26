@@ -233,9 +233,16 @@ def _apply_items_from_payload(vo: VariationOrder, items_input, db: Session):
         #   REMOVE_FACILITY → facility_id (fasilitas mana yang dihapus)
         #   ADD_FACILITY    → location_id + new_facility_code + description (nama)
         #   INCREASE/DECREASE/MODIFY_SPEC/REMOVE → boq_item_id (item yang diubah)
-        if action in (VOItemAction.ADD, VOItemAction.REMOVE_FACILITY):
+        if action == VOItemAction.ADD:
+            if not it.facility_id and not (it.new_facility_code or "").strip():
+                raise HTTPException(
+                    400,
+                    "Item ADD harus menyertakan facility_id atau new_facility_code "
+                    "(untuk fasilitas yang dibuat dalam VO yang sama).",
+                )
+        elif action == VOItemAction.REMOVE_FACILITY:
             if not it.facility_id:
-                raise HTTPException(400, f"Item {action.value} harus menyertakan facility_id.")
+                raise HTTPException(400, "Item REMOVE_FACILITY harus menyertakan facility_id.")
         elif action == VOItemAction.ADD_FACILITY:
             if not it.location_id:
                 raise HTTPException(400, "Item add_facility harus menyertakan location_id.")
@@ -287,7 +294,10 @@ def _apply_items_from_payload(vo: VariationOrder, items_input, db: Session):
             parent_code=it.parent_code if action == VOItemAction.ADD else None,
             new_item_code=it.new_item_code if action == VOItemAction.ADD else None,
             location_id=it.location_id if action == VOItemAction.ADD_FACILITY else None,
-            new_facility_code=it.new_facility_code if action == VOItemAction.ADD_FACILITY else None,
+            new_facility_code=(
+                (it.new_facility_code or "").strip() or None
+                if action in (VOItemAction.ADD_FACILITY, VOItemAction.ADD) else None
+            ),
             master_work_code=it.master_work_code,
             description=desc_override,
             unit=it.unit,

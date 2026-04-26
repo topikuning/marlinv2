@@ -1074,6 +1074,20 @@ def _apply_vo_items_to_revision(db: Session, new_rev, bundled_vos):
             db.add(new_fac)
     db.flush()
 
+    # Build map: new_facility_code → Facility.id untuk facilities yang baru saja
+    # dibuat di PASS-0. Dipakai di ADD processing untuk resolve ADD items yang
+    # target-nya adalah fasilitas yang dibuat dalam VO yang sama.
+    pending_fac_map: dict = {}
+    for vo in bundled_vos:
+        for vi in vo.items:
+            if vi.action == VOItemAction.ADD_FACILITY and vi.new_facility_code:
+                fac = db.query(Facility).filter(
+                    Facility.location_id == vi.location_id,
+                    Facility.facility_code == vi.new_facility_code,
+                ).first()
+                if fac:
+                    pending_fac_map[vi.new_facility_code] = fac.id
+
     # Build map: source_item_id (revisi lama) → cloned item (revisi baru)
     all_cloned = db.query(BOQItem).filter(BOQItem.boq_revision_id == new_rev.id).all()
     cloned_items = {
@@ -1134,10 +1148,25 @@ def _apply_vo_items_to_revision(db: Session, new_rev, bundled_vos):
                 it.change_type = "removed"
 
     # ── ADD items: multi-pass untuk resolve parent chain (ADD → ADD) ──────────
+    # Resolve facility_id untuk ADD items yang target-nya fasilitas pending
+    # (facility_id None, new_facility_code diisi → dibuat di PASS-0 atas).
+    resolved_fac_ids: dict = {}
+    for vi in add_vis:
+        if vi.facility_id:
+            resolved_fac_ids[vi.id] = vi.facility_id
+        elif vi.new_facility_code:
+            resolved = pending_fac_map.get(vi.new_facility_code)
+            if resolved:
+                resolved_fac_ids[vi.id] = resolved
+            # else: tidak bisa di-resolve → akan di-skip di loop bawah
+
+    def _fac_id(vi):
+        return resolved_fac_ids.get(vi.id)
+
     # new_items_by_code: (facility_id_str, new_item_code) → BOQItem baru
     new_items_by_code: dict = {}
 
-    unresolved = list(add_vis)
+    unresolved = [vi for vi in add_vis if _fac_id(vi)]  # drop unresolvable
     for _ in range(6):  # BOQ max 4 level, margin 2 untuk safety
         if not unresolved:
             break
@@ -1145,13 +1174,14 @@ def _apply_vo_items_to_revision(db: Session, new_rev, bundled_vos):
         created_this_pass = []
 
         for vi in unresolved:
+            fac_id = _fac_id(vi)
+            fac_id_str = str(fac_id) if fac_id else None
             parent_clone = None
 
             if vi.parent_boq_item_id:
                 # Parent = item existing di revisi lama, sudah di-clone ke revisi baru
                 parent_clone = cloned_items.get(str(vi.parent_boq_item_id))
-            elif vi.parent_code and vi.facility_id:
-                fac_id_str = str(vi.facility_id)
+            elif vi.parent_code and fac_id_str:
                 # 1. Coba item existing di revisi baru (dari revisi lama)
                 parent_clone = cloned_by_fac_code.get((fac_id_str, vi.parent_code))
                 if not parent_clone:
@@ -1168,7 +1198,7 @@ def _apply_vo_items_to_revision(db: Session, new_rev, bundled_vos):
 
             new_item = BOQItem(
                 boq_revision_id=new_rev.id,
-                facility_id=vi.facility_id,
+                facility_id=fac_id,
                 parent_id=parent_clone.id if parent_clone else None,
                 original_code=vi.new_item_code or None,
                 level=parent_level,
@@ -1189,8 +1219,9 @@ def _apply_vo_items_to_revision(db: Session, new_rev, bundled_vos):
         if created_this_pass:
             db.flush()  # agar ID tersedia untuk child di pass berikutnya
             for vi, new_item in created_this_pass:
-                if vi.new_item_code and vi.facility_id:
-                    new_items_by_code[(str(vi.facility_id), vi.new_item_code)] = new_item
+                fac_id = _fac_id(vi)
+                if vi.new_item_code and fac_id:
+                    new_items_by_code[(str(fac_id), vi.new_item_code)] = new_item
 
         unresolved = still_unresolved
 
@@ -1198,7 +1229,7 @@ def _apply_vo_items_to_revision(db: Session, new_rev, bundled_vos):
     for vi in unresolved:
         new_item = BOQItem(
             boq_revision_id=new_rev.id,
-            facility_id=vi.facility_id,
+            facility_id=_fac_id(vi),
             parent_id=None,
             original_code=vi.new_item_code or None,
             level=0,

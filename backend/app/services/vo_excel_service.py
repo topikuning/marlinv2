@@ -42,7 +42,7 @@ HEADERS = [
     "code", "parent_code",
     "description", "unit",
     "vol_awal", "vol_pending_vo_lain", "nilai_pending",
-    "vol_efektif", "vol_baru",
+    "vol_efektif", "vol_baru", "nilai_baru",
     "unit_price", "catatan_vo_lain",
 ]
 
@@ -201,6 +201,7 @@ def _write_facility_rows(
                 it.original_code or "", parent_code_str,
                 it.description, it.unit or "",
                 "", "", "", "", "",
+                "",  # nilai_baru (empty for non-leaf)
                 "", fac_remove_note or "(group/parent — vol_baru kosong)",
             ])
             continue
@@ -228,18 +229,20 @@ def _write_facility_rows(
         else:
             vol_baru = vol_efektif
 
+        nilai_baru = vol_baru * unit_price
         ws.append([
             str(it.id),
             fac.facility_code, fac.facility_name,
             it.original_code or "",
             parent_code_str,
             it.description, it.unit or "",
-            float(vol_awal),
-            float(pending_vol),
-            float(pending_cost),
-            float(vol_efektif),
-            float(vol_baru),
-            float(unit_price),
+            float(str(vol_awal)),
+            float(str(pending_vol)),
+            float(str(pending_cost)),
+            float(str(vol_efektif)),
+            float(str(vol_baru)),
+            float(str(nilai_baru)),
+            float(str(unit_price)),
             combined_notes,
         ])
 
@@ -281,6 +284,9 @@ def _add_petunjuk_sheet(wb: Workbook, mode: str = "flat") -> None:
         "- vol_efektif: vol_awal + vol_pending — proyeksi kalau semua VO pending lolos",
         "- vol_baru: ★ KOLOM YG ANDA EDIT ★ — volume final yang anda inginkan",
         "  Default = vol_efektif (artinya tidak ada perubahan baru dari VO ini)",
+        "- nilai_baru: vol_baru × unit_price dihitung sistem (read-only, referensi)",
+        "  Gunakan kolom ini (bukan rumus Excel manual) untuk verifikasi total — nilai",
+        "  dihitung dengan Decimal/presisi penuh sebelum di-export.",
         "- unit_price: harga satuan (read-only — kontrak tidak boleh diubah)",
         "- catatan_vo_lain: daftar VO lain yang sudah ubah item ini",
         "",
@@ -572,8 +578,11 @@ def _parse_df_rows(
                 f"({vol_efektif_excel} → {vol_efektif_now}). Disarankan re-export."
             )
 
-        delta = vol_baru - vol_efektif_used
-        # Fix floating noise
+        # Round to 6 d.p. to eliminate IEEE-754 float-subtraction noise
+        # e.g. 33.36 - 30.0 = 3.3600000000000016 without rounding → Decimal stores
+        # the exact float repr which differs from Decimal("3.36"), causing tiny
+        # cost_impact discrepancies vs. the user's Excel formula.
+        delta = round(vol_baru - vol_efektif_used, 6)
         if abs(delta) < 1e-6:
             continue  # no change
 
