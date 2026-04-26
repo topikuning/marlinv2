@@ -2786,7 +2786,7 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
             master_work_code: it.master_work_code || null,
             description: it.description || "",
             unit: it.unit || "",
-            volume_delta: it.volume_delta != null ? String(it.volume_delta) : "",
+            volume_delta: it.volume_delta != null && it.volume_delta !== 0 ? String(it.volume_delta) : "",
             unit_price: it.unit_price != null ? String(it.unit_price) : "",
             notes: it.notes || "",
           })),
@@ -2851,7 +2851,8 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
         const notesStr = (it.notes || "").trim();
         const hasBypass = ZERO_PRICE_BYPASS.some((kw) => notesStr.toUpperCase().startsWith(kw));
         if (!it.description?.trim()) return toast.error(`Item baru #${idx + 1}: deskripsi wajib`);
-        if (parseFloat(it.volume_delta) <= 0) return toast.error(`Item baru ${itemLabel}: volume harus > 0`);
+        const _vol = parseFloat(it.volume_delta);
+        if (!(_vol > 0)) return toast.error(`Item baru ${itemLabel}: volume harus > 0 (nilai: ${it.volume_delta || "kosong"})`);
         if (parseFloat(it.unit_price) <= 0 && !hasBypass) {
           const reason = notesStr
             ? `catatan saat ini: "${notesStr.slice(0, 40)}${notesStr.length > 40 ? "…" : ""}" (tidak diawali keyword)`
