@@ -2734,9 +2734,13 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
         return toast.error(`Item ${idx + 1}: facility_id hilang`);
       }
       if (it.action === "add") {
+        const itemLabel = it.description?.trim() ? `"${it.description.trim()}"` : `#${idx + 1}`;
+        const ZERO_PRICE_BYPASS = ["PARENT", "INFO", "OWNER", "TITIPAN"];
+        const hasBypass = ZERO_PRICE_BYPASS.some((kw) => (it.notes || "").trim().toUpperCase().startsWith(kw));
         if (!it.description?.trim()) return toast.error(`Item baru #${idx + 1}: deskripsi wajib`);
-        if (parseFloat(it.volume_delta) <= 0) return toast.error(`Item baru #${idx + 1}: volume harus > 0`);
-        if (parseFloat(it.unit_price) <= 0) return toast.error(`Item baru #${idx + 1}: harga satuan harus > 0`);
+        if (parseFloat(it.volume_delta) <= 0) return toast.error(`Item baru ${itemLabel}: volume harus > 0`);
+        if (parseFloat(it.unit_price) <= 0 && !hasBypass)
+          return toast.error(`Item baru ${itemLabel}: harga satuan harus > 0 (atau isi catatan dengan PARENT/INFO/OWNER/TITIPAN untuk bypass)`);
       }
     }
     setSaving(true);
