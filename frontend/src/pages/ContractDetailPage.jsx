@@ -2821,11 +2821,18 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
       if (it.action === "add") {
         const itemLabel = it.description?.trim() ? `"${it.description.trim()}"` : `#${idx + 1}`;
         const ZERO_PRICE_BYPASS = ["PARENT", "INFO", "OWNER", "TITIPAN"];
-        const hasBypass = ZERO_PRICE_BYPASS.some((kw) => (it.notes || "").trim().toUpperCase().startsWith(kw));
+        const notesStr = (it.notes || "").trim();
+        const hasBypass = ZERO_PRICE_BYPASS.some((kw) => notesStr.toUpperCase().startsWith(kw));
         if (!it.description?.trim()) return toast.error(`Item baru #${idx + 1}: deskripsi wajib`);
         if (parseFloat(it.volume_delta) <= 0) return toast.error(`Item baru ${itemLabel}: volume harus > 0`);
-        if (parseFloat(it.unit_price) <= 0 && !hasBypass)
-          return toast.error(`Item baru ${itemLabel}: harga satuan harus > 0 (atau isi catatan dengan PARENT/INFO/OWNER/TITIPAN untuk bypass)`);
+        if (parseFloat(it.unit_price) <= 0 && !hasBypass) {
+          const reason = notesStr
+            ? `catatan saat ini: "${notesStr.slice(0, 40)}${notesStr.length > 40 ? "…" : ""}" (tidak diawali keyword)`
+            : "catatan kosong";
+          return toast.error(
+            `Item baru ${itemLabel}: harga satuan = 0 — ${reason}. Awali catatan dengan PARENT / INFO / OWNER / TITIPAN, atau isi harga > 0.`
+          );
+        }
       }
     }
     setSaving(true);
@@ -3459,6 +3466,7 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
         unit: "",
         volume_delta: "",
         unit_price: "",
+        notes: "",
       },
     ]);
   };
@@ -3622,6 +3630,7 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
                 <th className="table-th text-right w-32">Harga {allowPriceEdit ? "*" : "(RO)"}</th>
                 <th className="table-th text-right w-28">Δ Nilai</th>
                 <th className="table-th text-center w-24">Status</th>
+                <th className="table-th text-left w-44">Catatan</th>
                 <th className="table-th text-center w-16"></th>
               </tr>
             </thead>
@@ -3635,7 +3644,7 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
                       <td className="table-td font-mono text-[10px] text-ink-600">
                         <span style={{ paddingLeft: `${indent}px` }}>📁 {r.original_code}</span>
                       </td>
-                      <td className="table-td font-semibold text-ink-700" colSpan={8}>
+                      <td className="table-td font-semibold text-ink-700" colSpan={9}>
                         {r.description}
                       </td>
                       <td className="table-td"></td>
@@ -3694,6 +3703,10 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
                     </td>
                     <td className="table-td text-center">
                       {r.action ? <VOActionBadge action={r.action} /> : <span className="text-ink-400 text-[10px]">tetap</span>}
+                    </td>
+                    <td className="table-td text-[10px] text-ink-500">
+                      {/* INC/DEC/MOD/REM tidak punya kolom catatan langsung */}
+                      —
                     </td>
                     <td className="table-td text-center">
                       {r.action && (
@@ -3776,6 +3789,28 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
                     </td>
                     <td className="table-td text-center">
                       <VOActionBadge action="add" />
+                    </td>
+                    <td className="table-td">
+                      <input
+                        className="input py-0.5 text-[10px] w-full"
+                        value={r.notes || ""}
+                        onChange={(e) => updateAddRow(r._idx, "notes", e.target.value)}
+                        placeholder={newPrice === 0 ? "PARENT/INFO/OWNER/TITIPAN…" : "Catatan opsional"}
+                        title={newPrice === 0
+                          ? "Kalau harga 0, awali catatan dengan PARENT, INFO, OWNER, atau TITIPAN supaya validasi bypass"
+                          : "Catatan tambahan untuk item ini"}
+                      />
+                      {newPrice === 0 && (() => {
+                        const ZERO_PRICE_BYPASS = ["PARENT", "INFO", "OWNER", "TITIPAN"];
+                        const hasBypass = ZERO_PRICE_BYPASS.some((kw) =>
+                          (r.notes || "").trim().toUpperCase().startsWith(kw)
+                        );
+                        return hasBypass ? (
+                          <p className="text-[9px] text-emerald-700 mt-0.5">✓ bypass aktif</p>
+                        ) : (
+                          <p className="text-[9px] text-amber-700 mt-0.5">⚠ harga 0 — wajib keyword</p>
+                        );
+                      })()}
                     </td>
                     <td className="table-td text-center">
                       <button
