@@ -644,7 +644,10 @@ class VOItemInput(BaseModel):
     action: str                       # add/increase/decrease/modify_spec/remove
     boq_item_id: Optional[UUID] = None
     facility_id: Optional[UUID] = None
-    parent_boq_item_id: Optional[UUID] = None  # untuk ADD: parent dalam hirarki BOQ
+    parent_boq_item_id: Optional[UUID] = None  # untuk ADD: parent item existing di hirarki BOQ
+    # Untuk ADD chain: parent juga item ADD baru di VO yang sama
+    parent_code: Optional[str] = None       # original_code item ADD yang jadi parent
+    new_item_code: Optional[str] = None     # original_code yang akan di-assign ke BOQItem baru
     master_work_code: Optional[str] = None
     description: str
     unit: Optional[str] = None
@@ -682,6 +685,9 @@ class VOItemOut(ORMBase):
     action: str
     boq_item_id: Optional[UUID] = None
     facility_id: Optional[UUID] = None
+    parent_boq_item_id: Optional[UUID] = None
+    parent_code: Optional[str] = None
+    new_item_code: Optional[str] = None
     master_work_code: Optional[str] = None
     description: str
     unit: Optional[str] = None

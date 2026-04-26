@@ -492,22 +492,26 @@ def _parse_df_rows(
             if unit_price <= 0:
                 errors.append(f"Baris {idx+2}: ADD perlu unit_price > 0.")
                 continue
-            # Parent lookup (kalau parent_code diisi)
+            # Parent lookup: coba match ke item existing di DB
+            # Kalau tidak ketemu → simpan parent_code string untuk di-resolve
+            # saat apply (bisa jadi item ADD lain di sheet yang sama)
             parent_boq_id = None
+            parent_code_to_store = None
             if parent_code:
                 parent_item = boq_by_code.get((fac_code, parent_code))
                 if parent_item:
                     parent_boq_id = str(parent_item.id)
                 else:
-                    warnings.append(
-                        f"Baris {idx+2}: parent_code '{parent_code}' tidak ditemukan di {fac_code}, "
-                        f"item dibuat sebagai root."
-                    )
+                    # Parent mungkin item ADD baru lain di sheet ini — simpan
+                    # sebagai string, tidak lagi jadi warning
+                    parent_code_to_store = parent_code
             items_out.append({
                 "action": "add",
                 "facility_id": str(fac.id),
                 "boq_item_id": None,
                 "parent_boq_item_id": parent_boq_id,
+                "parent_code": parent_code_to_store,
+                "new_item_code": code or None,
                 "description": description,
                 "unit": unit,
                 "volume_delta": vol_baru,

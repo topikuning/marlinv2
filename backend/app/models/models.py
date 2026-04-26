@@ -628,6 +628,12 @@ class VariationOrderItem(Base):
     # baru di-set = clone dari parent ini.
     parent_boq_item_id = Column(UUID(as_uuid=True), ForeignKey("boq_items.id"), nullable=True)
 
+    # Untuk ADD chain (parent juga item ADD baru di VO yang sama):
+    # parent_code = original_code item ADD yang jadi parent (fallback jika parent_boq_item_id null)
+    # new_item_code = original_code yang akan di-assign ke BOQItem baru ini
+    parent_code = Column(String(100), nullable=True)
+    new_item_code = Column(String(100), nullable=True)
+
     # Detail item (snapshot saat VO dibuat)
     master_work_code = Column(String(30))
     description = Column(Text, nullable=False)

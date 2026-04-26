@@ -45,6 +45,9 @@ def _ensure_columns():
         ("variation_order_items", "parent_boq_item_id", "UUID REFERENCES boq_items(id)"),
         # PPN per-contract — default 11% (UU HPP 2021)
         ("contracts", "ppn_pct", "NUMERIC(5,2) NOT NULL DEFAULT 11.00"),
+        # ADD chain: parent di antara item-item ADD baru di VO yang sama
+        ("variation_order_items", "parent_code", "VARCHAR(100)"),
+        ("variation_order_items", "new_item_code", "VARCHAR(100)"),
     ]
     with engine.begin() as conn:
         for table, col, ddl in pending:
