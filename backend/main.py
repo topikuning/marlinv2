@@ -26,6 +26,7 @@ def _ensure_enum_values():
     from sqlalchemy import text
     pending = [
         ("voitemaction", "REMOVE_FACILITY"),
+        ("voitemaction", "ADD_FACILITY"),
     ]
     with engine.begin() as conn:
         for enum_name, value in pending:
@@ -48,6 +49,9 @@ def _ensure_columns():
         # ADD chain: parent di antara item-item ADD baru di VO yang sama
         ("variation_order_items", "parent_code", "VARCHAR(100)"),
         ("variation_order_items", "new_item_code", "VARCHAR(100)"),
+        # ADD_FACILITY: lokasi target + facility_code yang akan dibuat
+        ("variation_order_items", "location_id", "UUID REFERENCES locations(id)"),
+        ("variation_order_items", "new_facility_code", "VARCHAR(50)"),
     ]
     with engine.begin() as conn:
         for table, col, ddl in pending:

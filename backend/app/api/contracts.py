@@ -1042,8 +1042,34 @@ def _apply_vo_items_to_revision(db: Session, new_rev, bundled_vos):
     ADD chain support: item ADD bisa menjadi parent item ADD lain di VO yang sama.
     Resolusi dilakukan multi-pass (topological order) menggunakan parent_code string.
     """
-    from app.models.models import VOItemAction, BOQItem
+    from app.models.models import VOItemAction, BOQItem, Facility
     from app.services.boq_revision_service import recalc_revision_totals
+
+    # ── PASS-0: ADD_FACILITY — buat Facility baru dulu ────────────────────────
+    # Harus pertama supaya kalau VO lain di addendum yang sama referensi
+    # facility baru ini lewat facility_id, sudah ada di DB.
+    contract_id = new_rev.contract_id
+    for vo in bundled_vos:
+        for vi in vo.items:
+            if vi.action != VOItemAction.ADD_FACILITY:
+                continue
+            if not vi.location_id or not vi.new_facility_code:
+                continue
+            # Idempotency: skip kalau code sudah ada di lokasi tsb
+            existing = db.query(Facility).filter(
+                Facility.location_id == vi.location_id,
+                Facility.facility_code == vi.new_facility_code,
+            ).first()
+            if existing:
+                continue
+            new_fac = Facility(
+                location_id=vi.location_id,
+                facility_code=vi.new_facility_code,
+                facility_name=vi.description,
+                display_order=0,
+            )
+            db.add(new_fac)
+    db.flush()
 
     # Build map: source_item_id (revisi lama) → cloned item (revisi baru)
     all_cloned = db.query(BOQItem).filter(BOQItem.boq_revision_id == new_rev.id).all()
@@ -1057,11 +1083,13 @@ def _apply_vo_items_to_revision(db: Session, new_rev, bundled_vos):
         for it in all_cloned if it.original_code
     }
 
-    # Pisahkan ADD dari non-ADD
+    # Pisahkan ADD dari non-ADD (skip ADD_FACILITY karena sudah diproses pass-0)
     add_vis = []
     non_add_vis = []
     for vo in bundled_vos:
         for vi in vo.items:
+            if vi.action == VOItemAction.ADD_FACILITY:
+                continue  # Sudah diproses di pass-0
             if vi.action == VOItemAction.ADD:
                 add_vis.append(vi)
             else:

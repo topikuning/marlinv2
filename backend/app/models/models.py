@@ -166,6 +166,7 @@ class VOItemAction(str, enum.Enum):
     MODIFY_SPEC = "modify_spec"         # ubah spesifikasi (deskripsi/satuan)
     REMOVE = "remove"                   # hilangkan item dari BOQ
     REMOVE_FACILITY = "remove_facility" # hilangkan seluruh fasilitas beserta item-nya
+    ADD_FACILITY = "add_facility"       # tambah fasilitas baru di lokasi existing
 
 
 class NotificationStatus(str, enum.Enum):
@@ -633,6 +634,13 @@ class VariationOrderItem(Base):
     # new_item_code = original_code yang akan di-assign ke BOQItem baru ini
     parent_code = Column(String(100), nullable=True)
     new_item_code = Column(String(100), nullable=True)
+
+    # Untuk ADD_FACILITY:
+    # location_id      = lokasi tempat fasilitas baru akan dibuat
+    # new_facility_code = facility_code yang akan di-assign ke Facility baru
+    # description       = facility_name (re-purposed dari kolom yang sama)
+    location_id = Column(UUID(as_uuid=True), ForeignKey("locations.id"), nullable=True)
+    new_facility_code = Column(String(50), nullable=True)
 
     # Detail item (snapshot saat VO dibuat)
     master_work_code = Column(String(30))

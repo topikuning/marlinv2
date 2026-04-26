@@ -2763,6 +2763,10 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
             boq_item_id: it.boq_item_id || null,
             facility_id: it.facility_id || null,
             parent_boq_item_id: it.parent_boq_item_id || null,
+            parent_code: it.parent_code || null,
+            new_item_code: it.new_item_code || null,
+            location_id: it.location_id || null,
+            new_facility_code: it.new_facility_code || null,
             master_work_code: it.master_work_code || null,
             description: it.description || "",
             unit: it.unit || "",
@@ -2814,6 +2818,13 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
     if (form.technical_justification.length < 50) return toast.error("Justifikasi teknis minimal 50 karakter");
     if (!form.items.length) return toast.error("Edit minimal 1 item perubahan di grid");
     for (const [idx, it] of form.items.entries()) {
+      // ADD_FACILITY punya validasi sendiri (location_id + new_facility_code + description)
+      if (it.action === "add_facility") {
+        if (!it.location_id) return toast.error(`Fasilitas Baru #${idx + 1}: lokasi wajib dipilih`);
+        if (!(it.new_facility_code || "").trim()) return toast.error(`Fasilitas Baru #${idx + 1}: kode fasilitas wajib`);
+        if (!(it.description || "").trim()) return toast.error(`Fasilitas Baru #${idx + 1}: nama fasilitas wajib`);
+        continue;
+      }
       const needFac = it.action === "add" || it.action === "remove_facility";
       const needBoq = !needFac;
       if (needBoq && !it.boq_item_id) return toast.error(`Item ${idx + 1}: boq_item_id hilang`);
@@ -3248,6 +3259,177 @@ function FacilityPicker({ facilities, value, onChange }) {
   );
 }
 
+
+// ════════════════════════════════════════════════════════════════════════════
+// AddFacilitySection — bagian terpisah untuk action ADD_FACILITY
+// (tambah fasilitas baru di lokasi existing). Tidak terikat ke facility picker
+// utama karena action ini menambah Facility, bukan mengubah BOQ items.
+// Item-item BOQ untuk fasilitas baru dibuat di VO terpisah setelah adendum
+// di-bundle (fasilitas baru sudah ada di DB).
+// ════════════════════════════════════════════════════════════════════════════
+function AddFacilitySection({ items, onChange, locations }) {
+  const [open, setOpen] = useState(false);
+  const addFacItems = items
+    .map((it, i) => ({ ...it, _idx: i }))
+    .filter((it) => it.action === "add_facility");
+
+  const addRow = () => {
+    onChange([
+      ...items,
+      {
+        action: "add_facility",
+        boq_item_id: null,
+        facility_id: null,
+        location_id: locations[0]?.id || null,
+        new_facility_code: "",
+        description: "",
+        unit: "",
+        volume_delta: 0,
+        unit_price: 0,
+        notes: "",
+      },
+    ]);
+    setOpen(true);
+  };
+
+  const updateRow = (idx, key, val) => {
+    onChange(items.map((it, i) => (i === idx ? { ...it, [key]: val } : it)));
+  };
+
+  const removeRow = (idx) => {
+    onChange(items.filter((_, i) => i !== idx));
+  };
+
+  const totalNew = addFacItems.length;
+
+  return (
+    <div className="border border-emerald-200 rounded-lg overflow-hidden bg-emerald-50/30">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-50"
+      >
+        <span className="flex items-center gap-1.5">
+          <ChevronRight size={13} className={`transition-transform ${open ? "rotate-90" : ""}`} />
+          🏗 Fasilitas Baru (ADD_FACILITY)
+          {totalNew > 0 && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200">
+              {totalNew} usulan
+            </span>
+          )}
+        </span>
+        <span className="text-[10px] text-emerald-700 font-normal">
+          Item-item BOQ untuk fasilitas baru ditambahkan via VO terpisah setelah adendum di-bundle
+        </span>
+      </button>
+
+      {open && (
+        <div className="p-3 border-t border-emerald-200 bg-white">
+          {addFacItems.length === 0 ? (
+            <p className="text-xs text-ink-500 italic mb-2">
+              Belum ada usulan fasilitas baru. Klik "+ Fasilitas Baru" untuk menambahkan.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-ink-50">
+                  <tr className="text-left">
+                    <th className="px-2 py-1.5 font-semibold text-ink-700 w-48">Lokasi *</th>
+                    <th className="px-2 py-1.5 font-semibold text-ink-700 w-32">Kode Fasilitas *</th>
+                    <th className="px-2 py-1.5 font-semibold text-ink-700">Nama Fasilitas *</th>
+                    <th className="px-2 py-1.5 font-semibold text-ink-700 w-44">Catatan</th>
+                    <th className="px-2 py-1.5 w-10"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {addFacItems.map((r) => {
+                    const loc = locations.find((l) => l.id === r.location_id);
+                    const codeOk = (r.new_facility_code || "").trim().length > 0;
+                    const nameOk = (r.description || "").trim().length > 0;
+                    const locOk = !!r.location_id;
+                    return (
+                      <tr key={r._idx} className="border-t border-ink-100">
+                        <td className="px-2 py-1">
+                          <select
+                            className={`input py-0.5 text-xs w-full ${!locOk ? "border-red-300" : ""}`}
+                            value={r.location_id || ""}
+                            onChange={(e) => updateRow(r._idx, "location_id", e.target.value || null)}
+                          >
+                            <option value="">— pilih lokasi —</option>
+                            {locations.map((l) => (
+                              <option key={l.id} value={l.id}>
+                                {l.location_code} — {l.name}
+                              </option>
+                            ))}
+                          </select>
+                          {loc && (
+                            <p className="text-[9px] font-mono text-ink-500 mt-0.5">
+                              {(loc.facilities || []).length} fasilitas existing
+                            </p>
+                          )}
+                        </td>
+                        <td className="px-2 py-1">
+                          <input
+                            className={`input py-0.5 text-xs w-full font-mono ${!codeOk ? "border-red-300" : ""}`}
+                            value={r.new_facility_code || ""}
+                            onChange={(e) => updateRow(r._idx, "new_facility_code", e.target.value)}
+                            placeholder="mis. 7.NewBlock"
+                            maxLength={50}
+                          />
+                        </td>
+                        <td className="px-2 py-1">
+                          <input
+                            className={`input py-0.5 text-xs w-full ${!nameOk ? "border-red-300" : ""}`}
+                            value={r.description || ""}
+                            onChange={(e) => updateRow(r._idx, "description", e.target.value)}
+                            placeholder="mis. Gudang Beku Blok B"
+                            maxLength={500}
+                          />
+                        </td>
+                        <td className="px-2 py-1">
+                          <input
+                            className="input py-0.5 text-xs w-full"
+                            value={r.notes || ""}
+                            onChange={(e) => updateRow(r._idx, "notes", e.target.value)}
+                            placeholder="opsional"
+                          />
+                        </td>
+                        <td className="px-2 py-1 text-center">
+                          <button
+                            type="button"
+                            className="text-red-600 hover:text-red-800"
+                            onClick={() => removeRow(r._idx)}
+                            title="Hapus baris"
+                          >
+                            <Trash2 size={11} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <button
+              type="button"
+              className="btn-ghost btn-xs text-emerald-700"
+              onClick={addRow}
+              disabled={locations.length === 0}
+            >
+              <Plus size={11} /> Fasilitas Baru
+            </button>
+            <p className="text-[10px] text-ink-500">
+              💡 Cost impact = 0 (fasilitas kosong saat dibuat). Setelah adendum disetujui, buat VO baru untuk tambah ADD item ke fasilitas ini.
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ════════════════════════════════════════════════════════════════════════════
 // VOItemsGrid — grid editor untuk item VO per fasilitas.
@@ -3831,6 +4013,13 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
         </>
       )}
 
+      {/* Section: ADD_FACILITY — fasilitas baru di lokasi existing */}
+      <AddFacilitySection
+        items={items}
+        onChange={onChange}
+        locations={contract.locations || []}
+      />
+
       {/* Footer summary */}
       <div className="flex items-center justify-between p-2 bg-ink-50 rounded text-xs">
         <div className="text-ink-600">
@@ -4094,6 +4283,7 @@ const VO_ACTION_META = {
   modify_spec: { label: "~ Ubah Spek", color: "blue", sign: "" },
   remove: { label: "✕ Hapus Item", color: "red", sign: "−" },
   remove_facility: { label: "✕✕ Hapus Fasilitas", color: "red", sign: "−" },
+  add_facility: { label: "+🏗 Tambah Fasilitas", color: "emerald", sign: "+" },
 };
 
 function VOActionBadge({ action }) {
@@ -4494,6 +4684,7 @@ const COMPARISON_STATUS = {
   spec_berubah:      { label: "Spek Berubah",       cls: "bg-blue-50 text-blue-700 border-blue-200" },
   baru:              { label: "Item Baru",          cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
   dihapus:           { label: "Item Dihapus",       cls: "bg-red-50 text-red-700 border-red-200" },
+  fasilitas_baru:    { label: "Fasilitas Baru",     cls: "bg-emerald-100 text-emerald-800 border-emerald-300" },
 };
 
 function buildVOComparison(activeBoq, vo) {
@@ -4501,9 +4692,12 @@ function buildVOComparison(activeBoq, vo) {
   const voByBoqId = new Map();
   const addByFac = new Map();
   const removedFacIds = new Set();
+  const addFacilityItems = []; // ADD_FACILITY items, ditampilkan sebagai row sendiri
   for (const it of items) {
     if (it.action === "remove_facility") {
       if (it.facility_id) removedFacIds.add(it.facility_id);
+    } else if (it.action === "add_facility") {
+      addFacilityItems.push(it);
     } else if (it.action === "add") {
       const fid = it.facility_id || it.target_facility?.id;
       if (!fid) continue;
@@ -4585,6 +4779,26 @@ function buildVOComparison(activeBoq, vo) {
     }
   }
 
+  // ADD_FACILITY rows — tampilkan sebagai row level fasilitas sendiri
+  for (const it of addFacilityItems) {
+    const loc = it.target_location || {};
+    rows.push({
+      key: `addfac-${it.id}`,
+      kode: it.new_facility_code || "BARU",
+      uraian: it.description, unit: "—",
+      facility_id: null,
+      facility_code: it.new_facility_code || "—",
+      facility_name: it.description || "Fasilitas Baru",
+      location_code: loc.code, location_name: loc.name,
+      aktif_vol: 0, aktif_price: 0, aktif_jml: 0,
+      usulan_vol: 0, usulan_price: 0, usulan_jml: 0,
+      delta_vol: 0, delta_price: 0, delta_jml: 0,
+      status: "fasilitas_baru", voAction: "add_facility", voNotes: it.notes,
+      _isAdd: true,
+      _isNewFacility: true,
+    });
+  }
+
   rows.sort((a, b) => {
     const lc = (a.location_code || "").localeCompare(b.location_code || "");
     if (lc !== 0) return lc;
@@ -4599,6 +4813,7 @@ function buildVOComparison(activeBoq, vo) {
     item_berubah: rows.filter((r) => r.status !== "tetap").length,
     item_baru: rows.filter((r) => r.status === "baru").length,
     item_dihapus: rows.filter((r) => r.status === "dihapus").length,
+    item_fasilitas_baru: rows.filter((r) => r.status === "fasilitas_baru").length,
     item_vol_berubah: rows.filter((r) => r.status === "vol_berubah" || r.status === "vol_harga_berubah").length,
     item_harga_berubah: rows.filter((r) => r.status === "harga_berubah" || r.status === "vol_harga_berubah").length,
     total_aktif: rows.reduce((s, r) => s + r.aktif_jml, 0),
@@ -4674,7 +4889,7 @@ function VOComparisonDrawer({ voId, contract, canApprove, onClose, onAction, onE
   const visibleRows = useMemo(() => {
     let r = rows;
     if (tab === "berubah") r = r.filter((row) => row.status !== "tetap");
-    else if (tab === "baru") r = r.filter((row) => row.status === "baru");
+    else if (tab === "baru") r = r.filter((row) => row.status === "baru" || row.status === "fasilitas_baru");
     else if (tab === "dihapus") r = r.filter((row) => row.status === "dihapus");
     if (filterDivisi) r = r.filter((row) => row.facility_code === filterDivisi);
     if (filterStatus === "naik") r = r.filter((row) => row.delta_jml > 0);
@@ -4912,8 +5127,8 @@ function VOComparisonDrawer({ voId, contract, canApprove, onClose, onAction, onE
             {[
               ["all", `Semua Item${summary ? ` (${summary.item_total})` : ""}`],
               ["berubah", `Item Berubah${summary ? ` (${summary.item_berubah})` : ""}`],
-              ["baru", `Item Baru${summary ? ` (${summary.item_baru})` : ""}`],
-              ["dihapus", `Item Dihapus${summary ? ` (${summary.item_dihapus})` : ""}`],
+              ["baru", `Baru${summary ? ` (${summary.item_baru + summary.item_fasilitas_baru})` : ""}`],
+              ["dihapus", `Dihapus${summary ? ` (${summary.item_dihapus})` : ""}`],
               ["rekap", "Rekap Fasilitas"],
             ].map(([k, label]) => (
               <button
@@ -4947,8 +5162,8 @@ function VOComparisonDrawer({ voId, contract, canApprove, onClose, onAction, onE
 function SummaryCards({ summary, loading }) {
   if (loading || !summary) {
     return (
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
-        {Array.from({ length: 6 }).map((_, i) => (
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-9 gap-2">
+        {Array.from({ length: 9 }).map((_, i) => (
           <div key={i} className="bg-white border border-ink-200 rounded-lg p-3 animate-pulse h-20" />
         ))}
       </div>
@@ -4964,13 +5179,14 @@ function SummaryCards({ summary, loading }) {
       sub: `${arrow} ${summary.delta_jml >= 0 ? "Naik" : "Turun"}`, cls: trendCls },
     { label: "Persentase Perubahan", val: `${summary.delta_pct >= 0 ? "+" : ""}${summary.delta_pct.toFixed(2)}%`,
       sub: null, cls: trendCls },
+    { label: "Fasilitas Baru", val: `${summary.item_fasilitas_baru} fasilitas`, sub: null, cls: "text-emerald-700" },
     { label: "Item Bertambah", val: `${summary.item_baru} item`, sub: null, cls: "text-emerald-700" },
     { label: "Item Dihapus", val: `${summary.item_dihapus} item`, sub: null, cls: "text-red-700" },
-    { label: "Item Volume Berubah", val: `${summary.item_vol_berubah} item`, sub: null, cls: "text-amber-700" },
-    { label: "Item Harga Berubah", val: `${summary.item_harga_berubah} item`, sub: null, cls: "text-amber-700" },
+    { label: "Volume Berubah", val: `${summary.item_vol_berubah} item`, sub: null, cls: "text-amber-700" },
+    { label: "Harga Berubah", val: `${summary.item_harga_berubah} item`, sub: null, cls: "text-amber-700" },
   ];
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-9 gap-2">
       {cards.map((c) => (
         <div key={c.label} className="bg-white border border-ink-200 rounded-lg p-3">
           <p className="text-[10px] text-ink-500 uppercase truncate" title={c.label}>{c.label}</p>
@@ -5034,7 +5250,7 @@ function ComparisonTable({ rows, loading, totalRows }) {
               const stMeta = COMPARISON_STATUS[r.status] || { label: r.status, cls: "bg-slate-100" };
               const dim = r.status === "tetap";
               return (
-                <tr key={r.key} className={`border-t border-ink-100 ${r.status === "baru" ? "bg-emerald-50/40" : r.status === "dihapus" ? "bg-red-50/40" : "hover:bg-ink-50/60"}`}>
+                <tr key={r.key} className={`border-t border-ink-100 ${r.status === "baru" || r.status === "fasilitas_baru" ? "bg-emerald-50/40" : r.status === "dihapus" ? "bg-red-50/40" : "hover:bg-ink-50/60"}`}>
                   <td className="px-2 py-1.5 font-mono text-[10px] whitespace-nowrap">{r.kode}</td>
                   <td className="px-2 py-1.5">
                     <div className={r.status === "dihapus" ? "line-through text-ink-500" : ""}>{r.uraian || "—"}</div>

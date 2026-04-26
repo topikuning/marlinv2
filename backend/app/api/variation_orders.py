@@ -51,6 +51,10 @@ def _item_to_dict(i: VariationOrderItem, *, db: Session = None) -> dict:
         "boq_item_id": str(i.boq_item_id) if i.boq_item_id else None,
         "facility_id": str(i.facility_id) if i.facility_id else None,
         "parent_boq_item_id": str(i.parent_boq_item_id) if i.parent_boq_item_id else None,
+        "parent_code": getattr(i, "parent_code", None),
+        "new_item_code": getattr(i, "new_item_code", None),
+        "location_id": str(i.location_id) if getattr(i, "location_id", None) else None,
+        "new_facility_code": getattr(i, "new_facility_code", None),
         "master_work_code": i.master_work_code,
         "description": i.description,
         "unit": i.unit,
@@ -62,6 +66,7 @@ def _item_to_dict(i: VariationOrderItem, *, db: Session = None) -> dict:
         "notes": i.notes,
         "target_boq": None,
         "target_facility": None,
+        "target_location": None,
     }
     if db is None:
         return d
@@ -106,6 +111,16 @@ def _item_to_dict(i: VariationOrderItem, *, db: Session = None) -> dict:
                 "item_count": item_count,
                 "location_code": loc.location_code if loc else None,
                 "location_name": loc.name if loc else None,
+            }
+    # Enrichment — target Location (untuk ADD_FACILITY)
+    if getattr(i, "location_id", None):
+        from app.models.models import Location
+        loc = db.query(Location).filter(Location.id == i.location_id).first()
+        if loc:
+            d["target_location"] = {
+                "id": str(loc.id),
+                "code": loc.location_code,
+                "name": loc.name,
             }
     return d
 
@@ -188,6 +203,9 @@ def _recompute_cost_impact(db: Session, vo: VariationOrder) -> None:
             # Re-query facility supaya sinkron kalau total_value berubah
             fac = db.query(Facility).filter(Facility.id == it.facility_id).first() if it.facility_id else None
             expected = -Decimal(str(fac.total_value or 0)) if fac else Decimal(str(it.cost_impact or 0))
+        elif it.action == VOItemAction.ADD_FACILITY:
+            # Fasilitas baru tanpa items = 0; items ADD ditangani terpisah
+            expected = Decimal("0")
         else:
             delta = Decimal(it.volume_delta or 0)
             price = Decimal(it.unit_price or 0)
@@ -213,13 +231,18 @@ def _apply_items_from_payload(vo: VariationOrder, items_input, db: Session):
         # Validasi field wajib per action:
         #   ADD             → facility_id (item baru di fasilitas mana)
         #   REMOVE_FACILITY → facility_id (fasilitas mana yang dihapus)
+        #   ADD_FACILITY    → location_id + new_facility_code + description (nama)
         #   INCREASE/DECREASE/MODIFY_SPEC/REMOVE → boq_item_id (item yang diubah)
         if action in (VOItemAction.ADD, VOItemAction.REMOVE_FACILITY):
             if not it.facility_id:
-                raise HTTPException(
-                    400,
-                    f"Item {action.value} harus menyertakan facility_id.",
-                )
+                raise HTTPException(400, f"Item {action.value} harus menyertakan facility_id.")
+        elif action == VOItemAction.ADD_FACILITY:
+            if not it.location_id:
+                raise HTTPException(400, "Item add_facility harus menyertakan location_id.")
+            if not (it.new_facility_code or "").strip():
+                raise HTTPException(400, "Item add_facility harus menyertakan new_facility_code.")
+            if not (it.description or "").strip():
+                raise HTTPException(400, "Item add_facility harus menyertakan description (nama fasilitas).")
         else:
             if not it.boq_item_id:
                 raise HTTPException(
@@ -246,21 +269,30 @@ def _apply_items_from_payload(vo: VariationOrder, items_input, db: Session):
                 f"Hilangkan seluruh fasilitas {fac.facility_code} {fac.facility_name}"
                 if fac else "Hilangkan fasilitas"
             )
+        elif action == VOItemAction.ADD_FACILITY:
+            # Fasilitas baru = 0 nilai sampai item ADD ditambahkan terpisah
+            cost_impact_val = Decimal("0")
+            desc_override = it.description
         else:
             cost_impact_val = Decimal(it.volume_delta or 0) * Decimal(it.unit_price or 0)
             desc_override = it.description
 
+        zero_actions = (VOItemAction.REMOVE_FACILITY, VOItemAction.ADD_FACILITY)
         db.add(VariationOrderItem(
             variation_order_id=vo.id,
             action=action,
             boq_item_id=it.boq_item_id,
             facility_id=it.facility_id,
             parent_boq_item_id=it.parent_boq_item_id if action == VOItemAction.ADD else None,
+            parent_code=it.parent_code if action == VOItemAction.ADD else None,
+            new_item_code=it.new_item_code if action == VOItemAction.ADD else None,
+            location_id=it.location_id if action == VOItemAction.ADD_FACILITY else None,
+            new_facility_code=it.new_facility_code if action == VOItemAction.ADD_FACILITY else None,
             master_work_code=it.master_work_code,
             description=desc_override,
             unit=it.unit,
-            volume_delta=it.volume_delta if action != VOItemAction.REMOVE_FACILITY else Decimal("0"),
-            unit_price=it.unit_price if action != VOItemAction.REMOVE_FACILITY else Decimal("0"),
+            volume_delta=Decimal("0") if action in zero_actions else it.volume_delta,
+            unit_price=Decimal("0") if action in zero_actions else it.unit_price,
             cost_impact=cost_impact_val,
             old_description=old_desc,
             old_unit=old_unit,
