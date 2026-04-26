@@ -34,6 +34,39 @@ Sebelum menulis kode satu baris pun:
 
 ---
 
+## 1.5 Dasar Hukum & Kepatuhan Regulasi
+
+Sistem ini WAJIB align dengan kerangka regulasi Pengadaan Barang/Jasa Pemerintah (PBJP) Indonesia:
+
+- **Perpres 16/2018** — basis Pengadaan Barang/Jasa Pemerintah.
+- **Perpres 12/2021** — perubahan pertama atas Perpres 16/2018.
+- **Perpres 46/2025** — **perubahan kedua, berlaku 30 April 2025**. Menggeser tata kelola PBJ ke prinsip "cepat, akuntabel, berbasis data".
+
+**Konsekuensi desain dari Perpres 46/2025 yang harus diakomodasi:**
+
+1. **Threshold perubahan kontrak 10% TIDAK lagi mutlak.** Perubahan > 10% diizinkan sepanjang:
+   - Harga tambahan dinilai wajar (referensi pasar / studi teknis internal / kontrak sejenis).
+   - Tidak mengubah tujuan dasar pengadaan.
+   - Tidak bertentangan dengan regulasi sektoral konstruksi.
+   - **Justifikasi tertulis lengkap** dilampirkan & **siap audit BPK** kapan saja.
+2. **Justifikasi perubahan signifikan** dikategorikan jadi:
+   1. Kondisi darurat (terkuat) — bencana alam (gempa, banjir, longsor, dll.).
+   2. Bencana non-alam — pandemi, kegagalan teknologi sistemik.
+   3. Gangguan sosial/keamanan, kerusakan fasilitas vital.
+   Setiap addendum yang menyentuh nilai/lingkup wajib pilih kategori + narasi.
+3. **Tipe kontrak konstruksi yang harus didukung sistem** (Perpres 46/2025 Pasal 27):
+   - **Lump Sum** — harga pasti, kuantitas final.
+   - **Harga Satuan** — kuantitas estimatif, harga per unit pasti.
+   - **Gabungan Lump Sum & Harga Satuan**.
+   - **Turnkey** — bayar setelah fungsi terpenuhi.
+   - **Modified Turnkey** — variasi turnkey dengan pembayaran termin tertentu.
+4. **e-Kontrak** — PPK wajib input kontrak ke sistem e-Kontrak nasional. Sistem ini **harus menyediakan ekspor data kontrak dalam format kompatibel e-Kontrak** untuk memudahkan unggah ke sistem nasional.
+5. **Threshold pengadaan langsung konstruksi: Rp 400 juta.** Untuk informasi tampil di UI saat input nilai kontrak (warning saja, bukan rule kaku — sistem ini monitoring, bukan tender).
+
+**Aturan emas:** sistem TIDAK menggantikan keputusan PPK/KPA, tapi **menjamin jejak audit yang lengkap** (siapa menyetujui apa, dengan dasar apa, kapan) sehingga setiap keputusan bisa dipertanggungjawabkan saat pemeriksaan BPK.
+
+---
+
 ## 2. Pengguna & Peran (RBAC)
 
 | Peran | Deskripsi singkat | Hak utama |
@@ -68,7 +101,7 @@ Berikut object bisnis utama. Relasi dijelaskan dalam bahasa fungsional, bukan sk
 - **Master Work Code** — katalog kode pekerjaan standar dengan kategori (persiapan, struktural, MEP, finishing, dll.).
 
 ### 3.2 Kontrak & Lingkupnya
-- **Kontrak** — perjanjian kerja. Punya nomor unik, nama, PPK pemilik, perusahaan kontraktor, tahun anggaran, nilai original (post-PPN), nilai current (post-PPN), tanggal mulai/selesai, durasi, persentase PPN, dokumen kontrak (file).
+- **Kontrak** — perjanjian kerja. Punya nomor unik, nama, PPK pemilik, perusahaan kontraktor, tahun anggaran, nilai original (post-PPN), nilai current (post-PPN), tanggal mulai/selesai, durasi, persentase PPN, dokumen kontrak (file), dan **`contract_type`** (enum konstruksi: `LUMP_SUM` / `HARGA_SATUAN` / `GABUNGAN` / `TURNKEY` / `MODIFIED_TURNKEY` — sesuai Perpres 46/2025 Pasal 27). Tipe ini memengaruhi perlakuan pembayaran termin & validasi BOQ (mis. lump sum: volume akhir tidak boleh berubah; harga satuan: volume boleh menyesuaikan lapangan).
 - **Lokasi** — area geografis di bawah satu kontrak. Punya kode, nama desa/kecamatan/kota/provinsi, koordinat (lat/long wajib), dan satu konsultan MK pengawas.
 - **Fasilitas** — bangunan/struktur di dalam satu lokasi. Punya kode unik per lokasi, tipe (referensi master), nama, urutan tampil.
 
@@ -213,7 +246,28 @@ Saat revisi N+1 menggantikan revisi N: data progres mingguan yang sudah ada di i
   3. VO items diterapkan ke revisi baru sesuai action-nya.
   4. Revisi baru di-approve dan di-aktifkan; revisi lama jadi SUPERSEDED.
   5. Field kontrak ter-update: `current_value`, `end_date`, `duration_days` (sesuai tipe addendum).
-- **Threshold KPA:** Bila perubahan nilai > 10% dari nilai original, addendum butuh persetujuan KPA (Kuasa Pengguna Anggaran) — field `kpa_approval` dengan tanda tangan & timestamp wajib sebelum boleh SIGNED.
+
+#### 6.3.1 Justifikasi Wajib (Perpres 46/2025)
+
+Setiap addendum yang menyentuh **nilai atau lingkup** wajib mengisi blok justifikasi:
+
+- **`justification_category`** (enum, wajib dipilih salah satu — sesuai Perpres 46/2025):
+  - `KONDISI_DARURAT` — bencana alam (gempa, banjir, longsor, dll.).
+  - `BENCANA_NON_ALAM` — pandemi, kegagalan teknologi sistemik.
+  - `GANGGUAN_SOSIAL_KEAMANAN` — kerusuhan, gangguan keamanan, kerusakan fasilitas vital.
+  - `OPTIMALISASI_TEKNIS` — penyesuaian lingkup non-darurat (mis. perubahan desain demi efisiensi).
+  - `PENYESUAIAN_LAPANGAN` — selisih kondisi nyata vs perencanaan (relevan untuk kontrak HARGA_SATUAN).
+- **`justification_narrative`** (teks panjang, wajib) — uraian alasan teknis.
+- **`price_fairness_basis`** (enum) — dasar penilaian kewajaran harga tambahan: `REFERENSI_PASAR` / `STUDI_TEKNIS_INTERNAL` / `KONTRAK_SEJENIS`. Wajib jika ada item ADD atau perubahan harga satuan.
+- **`supporting_documents`** (list file) — lampiran wajib (BA MC, foto lapangan, surat keterangan darurat, kajian teknis, dll.) — siap audit BPK kapan saja.
+
+#### 6.3.2 Approval Workflow & Warning Threshold
+
+- **Tidak ada threshold kaku 10%.** Persetujuan addendum sepenuhnya berbasis **workflow approval** (PPK signs, opsional KPA review untuk perubahan signifikan).
+- Sistem menyediakan **`warning_threshold_pct`** konfigurable per kontrak (default 10%, bisa diubah). Bila `(new_value - original_value) / original_value × 100% > warning_threshold_pct`, UI menampilkan **banner peringatan** kuning di halaman addendum:
+  > *"Perubahan nilai melebihi X% dari nilai awal kontrak. Pastikan justifikasi tertulis & dokumen pendukung lengkap untuk audit BPK."*
+- Banner peringatan **tidak memblokir SIGN** — hanya mengingatkan. Tanggung jawab approval tetap di PPK.
+- Setiap perubahan yang melewati threshold dicatat di audit log dengan flag `value_change_warning=true` + nilai persentase aktual untuk memudahkan filter audit.
 
 ### 6.4 Hubungan VO ↔ Addendum
 
@@ -358,7 +412,7 @@ Wajib dienforce di backend. UI hanya hint.
 4. **Validasi nilai:** `sum(BOQ leaf) × (1 + ppn/100) ≤ nilai_kontrak`, toleransi Rp 1.
 5. **Hanya leaf masuk progres.** Parent tidak punya volume/harga sendiri; total = sum leaf.
 6. **VO state machine tidak boleh diloncati.** Transisi legal: DRAFT→{UNDER_REVIEW, REJECTED}; UNDER_REVIEW→{APPROVED, REJECTED, DRAFT}; APPROVED→{BUNDLED, REJECTED}. REJECTED & BUNDLED terminal.
-7. **Threshold KPA 10%.** Addendum dengan perubahan nilai > 10% dari nilai original wajib `kpa_approval` sebelum SIGNED.
+7. **Justifikasi addendum wajib (Perpres 46/2025).** Setiap addendum yang mengubah nilai/lingkup wajib mengisi `justification_category` (5 enum), `justification_narrative`, `price_fairness_basis` (jika ada item ADD/perubahan harga), dan minimal 1 `supporting_document`. Tidak ada threshold kaku 10% — `warning_threshold_pct` hanya konfigurable warning, tidak memblokir SIGN. Tanggung jawab approval di PPK; sistem menjamin jejak audit.
 8. **MC-0 unik per kontrak** (`UNIQUE(contract_id, type) WHERE type='MC-0'`).
 9. **Termin di-anchor ke revisi BOQ saat SUBMIT.** Jika BOQ berubah setelahnya (via addendum), termin tetap mengacu ke revisi lama untuk audit BPK.
 10. **Progres mingguan monotonic non-decreasing** per item.
@@ -369,6 +423,11 @@ Wajib dienforce di backend. UI hanya hint.
 15. **User auto-provisioning:** Saat Company atau PPK dibuat, otomatis spawn satu user default (`auto_provisioned=true`, `must_change_password=true`).
 16. **Konsultan filter per-lokasi**, bukan per-kontrak. Konsultan A di kontrak X lokasi 1 tidak bisa lihat lokasi 2 di kontrak yang sama bila ditugaskan konsultan B.
 17. **Permission `contract.create`** dimiliki PPK (selain Admin/Superadmin) — PPK boleh buat kontrak sendiri.
+18. **Validasi `contract_type` terhadap perubahan BOQ:**
+    - `LUMP_SUM` — volume akhir item tidak boleh berubah lewat addendum (kecuali kondisi darurat dengan justifikasi `KONDISI_DARURAT`/`BENCANA_NON_ALAM`/`GANGGUAN_SOSIAL_KEAMANAN`). Untuk lump sum, perubahan biasanya ke spesifikasi atau lingkup, bukan kuantitas.
+    - `HARGA_SATUAN` — volume bebas menyesuaikan lapangan (justifikasi `PENYESUAIAN_LAPANGAN` umum dipakai).
+    - `GABUNGAN` — campuran; UI harus tampilkan tag per item BOQ ("lump-sum part" vs "unit-price part").
+    - `TURNKEY` / `MODIFIED_TURNKEY` — termin pembayaran terikat ke milestone fungsional, bukan progres BOQ. Sistem harus support keduanya.
 
 ---
 
@@ -446,6 +505,21 @@ volume, unit_price, total_price, planned_start_week, planned_duration_weeks
 ### 11.4 File Upload
 - Dokumen kontrak & addendum: PDF/image, simpan path di field document.
 - Foto laporan: jpg/jpeg/png/gif. Auto-generate thumbnail (max ~300px width). Filename di-sanitize (UUID + ext).
+
+### 11.5 Ekspor Data Kontrak — Format e-Kontrak (Perpres 46/2025)
+
+PPK wajib menginput kontrak ke **sistem e-Kontrak nasional** (terintegrasi SPSE/INAPROC). Sistem ini wajib menyediakan **ekspor data kontrak dalam format kompatibel e-Kontrak** untuk memudahkan unggah ke sistem nasional.
+
+- Format ekspor: **Excel terstruktur** dengan sheet & kolom yang mengikuti standar e-Kontrak terbaru (LKPP) — termasuk:
+  - Identitas kontrak (nomor, nama, tanggal, nilai, durasi, tipe).
+  - Identitas para pihak (PPK, kontraktor, NPWP, alamat).
+  - Lingkup pekerjaan & lokasi.
+  - Jadwal pembayaran (termin & milestone).
+  - Daftar BOQ ringkas (per fasilitas, atau detail leaf — sesuai pilihan user).
+  - Adendum & history perubahan (nomor, tanggal, perubahan nilai, justifikasi).
+- **Format spec e-Kontrak konkret** belum ditetapkan di prompt ini — saat implementasi, **AI WAJIB tanya** ke user untuk template/skema terkini dari LKPP. Sediakan endpoint `/api/contracts/{id}/export/e-kontrak` sebagai stub yang bisa diisi format definitif kemudian.
+- Tombol "Ekspor e-Kontrak" tampil di halaman detail kontrak, accessible untuk PPK & Admin.
+- Setiap ekspor masuk audit log.
 
 ---
 
