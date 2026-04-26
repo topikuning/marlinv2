@@ -2549,7 +2549,12 @@ function VariationOrdersPanel({ contract, onChange, canApprove = false, pendingF
     }
   }, [pendingFromObs]);  // eslint-disable-line react-hooks/exhaustive-deps
 
+  const [acting, setActing] = useState(null); // { voId, action } | null
+  const [fetchingEditId, setFetchingEditId] = useState(null);
+
   const doAction = async (vo, action, payload = {}) => {
+    if (acting) return; // guard double-click
+    setActing({ voId: vo.id, action });
     try {
       if (action === "submit") await voAPI.submit(vo.id);
       else if (action === "approve") await voAPI.approve(vo.id, payload);
@@ -2567,6 +2572,7 @@ function VariationOrdersPanel({ contract, onChange, canApprove = false, pendingF
       setActionModal(null);
       refresh();
     } catch (e) { toast.error(parseApiError(e)); }
+    finally { setActing(null); }
   };
 
   return (
@@ -2632,41 +2638,69 @@ function VariationOrdersPanel({ contract, onChange, canApprove = false, pendingF
                     <span>Dibuat: {fmtDate(vo.created_at)}</span>
                   </div>
                 </div>
-                <div className="flex gap-1 flex-wrap">
+                <div className="flex gap-1 flex-wrap items-center">
                   <button className="btn-ghost btn-xs" onClick={() => setComparingVoId(vo.id)}>
                     Lihat
                   </button>
                   {vo.status === "draft" && (
                     <>
-                      <button className="btn-ghost btn-xs" onClick={async () => {
-                        const { data } = await voAPI.get(vo.id);
-                        setEditing(data);
-                      }}>
-                        <Edit2 size={10} /> Edit
+                      <button
+                        className="btn-ghost btn-xs"
+                        disabled={!!acting || fetchingEditId === vo.id}
+                        onClick={async () => {
+                          setFetchingEditId(vo.id);
+                          try { const { data } = await voAPI.get(vo.id); setEditing(data); }
+                          catch (e) { toast.error(parseApiError(e)); }
+                          finally { setFetchingEditId(null); }
+                        }}
+                      >
+                        {fetchingEditId === vo.id ? <Spinner size={10} /> : <Edit2 size={10} />} Edit
                       </button>
-                      <button className="btn-primary btn-xs" onClick={() => doAction(vo, "submit")}>
-                        <Send size={10} /> Submit
+                      <button
+                        className="btn-primary btn-xs"
+                        disabled={!!acting}
+                        onClick={() => doAction(vo, "submit")}
+                      >
+                        {acting?.voId === vo.id && acting?.action === "submit"
+                          ? <><Spinner size={10} /> Submitting…</>
+                          : <><Send size={10} /> Submit</>}
                       </button>
                     </>
                   )}
                   {vo.status === "under_review" && canApprove && (
                     <>
-                      <button className="btn-secondary btn-xs" onClick={() => setActionModal({ vo, action: "approve" })}>
+                      <button
+                        className="btn-secondary btn-xs"
+                        disabled={!!acting}
+                        onClick={() => setActionModal({ vo, action: "approve" })}
+                      >
                         <Check size={10} /> Approve
                       </button>
-                      <button className="btn-ghost btn-xs text-amber-600" onClick={() => setActionModal({ vo, action: "return_for_revision" })}>
+                      <button
+                        className="btn-ghost btn-xs text-amber-600"
+                        disabled={!!acting}
+                        onClick={() => setActionModal({ vo, action: "return_for_revision" })}
+                      >
                         <RotateCcw size={10} /> Kembalikan
                       </button>
-                      <button className="btn-ghost btn-xs text-red-600" onClick={() => setActionModal({ vo, action: "reject" })}>
+                      <button
+                        className="btn-ghost btn-xs text-red-600"
+                        disabled={!!acting}
+                        onClick={() => setActionModal({ vo, action: "reject" })}
+                      >
                         <XIcon size={10} /> Reject
                       </button>
                     </>
                   )}
                   {(vo.status === "draft" || vo.status === "rejected") && (
-                    <button className="btn-ghost btn-xs text-red-600" onClick={() => {
-                      if (confirm("Hapus VO ini?")) doAction(vo, "delete");
-                    }}>
-                      <Trash2 size={10} />
+                    <button
+                      className="btn-ghost btn-xs text-red-600"
+                      disabled={!!acting}
+                      onClick={() => { if (confirm("Hapus VO ini?")) doAction(vo, "delete"); }}
+                    >
+                      {acting?.voId === vo.id && acting?.action === "delete"
+                        ? <Spinner size={10} />
+                        : <Trash2 size={10} />}
                     </button>
                   )}
                 </div>
@@ -4494,13 +4528,18 @@ function VOComparisonDrawer({ voId, contract, canApprove, onClose, onAction, onE
     return r;
   }, [rows, tab, filterDivisi, filterStatus, hideTetap, search]);
 
+  const [drawerActing, setDrawerActing] = useState(null); // "submit" | "approve" | "return" | "reject"
+
   const doSubmit = async () => {
+    if (drawerActing) return;
+    setDrawerActing("submit");
     try {
       await voAPI.submit(vo.id);
       toast.success("VO disubmit untuk review");
       onChanged?.();
       onClose?.();
     } catch (e) { toast.error(parseApiError(e)); }
+    finally { setDrawerActing(null); }
   };
 
   return createPortal(
@@ -4508,8 +4547,8 @@ function VOComparisonDrawer({ voId, contract, canApprove, onClose, onAction, onE
       {/* Header strip */}
       <div className="bg-white border-b border-ink-200 px-5 py-3 flex items-start gap-4">
         <button
-          onClick={onClose}
-          className="p-1.5 -ml-1 rounded hover:bg-ink-100 text-ink-600"
+          onClick={drawerActing ? undefined : onClose}
+          className={`p-1.5 -ml-1 rounded text-ink-600 ${drawerActing ? "opacity-40 cursor-not-allowed" : "hover:bg-ink-100"}`}
           title="Tutup (Esc)"
         >
           <XIcon size={18} />
@@ -4537,26 +4576,48 @@ function VOComparisonDrawer({ voId, contract, canApprove, onClose, onAction, onE
             )}
           </p>
         </div>
-        <div className="flex gap-1.5 flex-wrap">
+        <div className="flex gap-1.5 flex-wrap items-center">
           {vo?.status === "draft" && (
             <>
-              <button className="btn-ghost btn-sm" onClick={() => { onEdit?.(vo); onClose?.(); }}>
+              <button
+                className="btn-ghost btn-sm"
+                disabled={!!drawerActing}
+                onClick={() => { onEdit?.(vo); onClose?.(); }}
+              >
                 <Edit2 size={12} /> Edit
               </button>
-              <button className="btn-primary btn-sm" onClick={doSubmit}>
-                <Send size={12} /> Submit
+              <button
+                className="btn-primary btn-sm"
+                disabled={!!drawerActing}
+                onClick={doSubmit}
+              >
+                {drawerActing === "submit"
+                  ? <><Spinner size={12} /> Submitting…</>
+                  : <><Send size={12} /> Submit</>}
               </button>
             </>
           )}
           {vo?.status === "under_review" && canApprove && (
             <>
-              <button className="btn-secondary btn-sm" onClick={() => { onAction?.({ vo, action: "approve" }); onClose?.(); }}>
+              <button
+                className="btn-secondary btn-sm"
+                disabled={!!drawerActing}
+                onClick={() => { onAction?.({ vo, action: "approve" }); onClose?.(); }}
+              >
                 <Check size={12} /> Approve
               </button>
-              <button className="btn-ghost btn-sm text-amber-600" onClick={() => { onAction?.({ vo, action: "return_for_revision" }); onClose?.(); }}>
+              <button
+                className="btn-ghost btn-sm text-amber-600"
+                disabled={!!drawerActing}
+                onClick={() => { onAction?.({ vo, action: "return_for_revision" }); onClose?.(); }}
+              >
                 <RotateCcw size={12} /> Kembalikan untuk Revisi
               </button>
-              <button className="btn-ghost btn-sm text-red-600" onClick={() => { onAction?.({ vo, action: "reject" }); onClose?.(); }}>
+              <button
+                className="btn-ghost btn-sm text-red-600"
+                disabled={!!drawerActing}
+                onClick={() => { onAction?.({ vo, action: "reject" }); onClose?.(); }}
+              >
                 <XIcon size={12} /> Reject
               </button>
             </>
@@ -5080,13 +5141,14 @@ function VODetailModal({ vo, onClose }) {
 function VOActionModal({ vo, action, onClose, onConfirm }) {
   const [notes, setNotes] = useState("");
   const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
   const isApprove = action === "approve";
   const isReject = action === "reject";
   const isReturn = action === "return_for_revision";
 
-  const canConfirm = isApprove
+  const canConfirm = !saving && (isApprove
     || (isReject && reason.trim().length >= 20)
-    || (isReturn && notes.trim().length >= 10);
+    || (isReturn && notes.trim().length >= 10));
 
   const title = isApprove ? `Approve ${vo.vo_number}`
     : isReturn ? `Kembalikan untuk Revisi — ${vo.vo_number}`
@@ -5104,13 +5166,19 @@ function VOActionModal({ vo, action, onClose, onConfirm }) {
 
   const confirmLabel = isReject ? "Reject (Permanen)" : isReturn ? "Kembalikan untuk Revisi" : "Approve";
 
+  const handleConfirm = async () => {
+    setSaving(true);
+    try { await onConfirm(confirmPayload); }
+    finally { setSaving(false); }
+  };
+
   return (
-    <Modal open onClose={onClose} title={title} size="md"
+    <Modal open onClose={saving ? undefined : onClose} title={title} size="md"
       footer={
         <>
-          <button className="btn-secondary" onClick={onClose}>Batal</button>
-          <button className={confirmCls} onClick={() => onConfirm(confirmPayload)} disabled={!canConfirm}>
-            {confirmLabel}
+          <button className="btn-secondary" onClick={onClose} disabled={saving}>Batal</button>
+          <button className={confirmCls} onClick={handleConfirm} disabled={!canConfirm}>
+            {saving ? <><Spinner size={12} /> Memproses…</> : confirmLabel}
           </button>
         </>
       }
