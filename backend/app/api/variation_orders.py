@@ -82,6 +82,7 @@ def _item_to_dict(i: VariationOrderItem, *, db: Session = None) -> dict:
                 "unit_price": float(bi.unit_price or 0),
                 "total_price": float(bi.total_price or 0),
                 "full_code": bi.full_code,
+                "facility_id": str(bi.facility_id) if bi.facility_id else None,
                 "facility_code": fac.facility_code if fac else None,
                 "facility_name": fac.facility_name if fac else None,
                 "location_code": loc.location_code if loc else None,

@@ -4006,7 +4006,249 @@ function VOItemCard({ it }) {
   );
 }
 
+// VOComparisonView — komparasi BOQ aktif vs usulan VO, level fasilitas → drilldown item
+function VOComparisonView({ vo, activeBoq, loading }) {
+  const [expanded, setExpanded] = useState({}); // { facilityId: bool }
+
+  const facilities = useMemo(() => {
+    if (activeBoq === null) return null; // belum dimuat
+    const facMap = new Map();
+
+    // Seed dari active BOQ
+    for (const b of activeBoq) {
+      const fid = b.facility_id;
+      if (!fid) continue;
+      if (!facMap.has(fid)) {
+        facMap.set(fid, {
+          id: fid,
+          code: b.facility_code,
+          name: b.facility_name,
+          location_code: b.location_code,
+          location_name: b.location_name,
+          activeBoqTotal: 0,
+          activeItems: new Map(), // boq_item_id → row
+          voItems: [],
+        });
+      }
+      const f = facMap.get(fid);
+      const total = Number(b.total_price || 0);
+      f.activeBoqTotal += total;
+      f.activeItems.set(b.id, b);
+    }
+
+    // Merge VO items berdasarkan facility
+    const resolveFac = (it) => {
+      if (it.target_facility?.id) return it.target_facility;
+      if (it.target_boq?.facility_id) {
+        return {
+          id: it.target_boq.facility_id,
+          code: it.target_boq.facility_code,
+          name: it.target_boq.facility_name,
+          location_code: it.target_boq.location_code,
+          location_name: it.target_boq.location_name,
+        };
+      }
+      return null;
+    };
+    for (const it of (vo.items || [])) {
+      const fac = resolveFac(it);
+      if (!fac?.id) continue;
+      if (!facMap.has(fac.id)) {
+        facMap.set(fac.id, {
+          id: fac.id,
+          code: fac.code,
+          name: fac.name,
+          location_code: fac.location_code,
+          location_name: fac.location_name,
+          activeBoqTotal: 0,
+          activeItems: new Map(),
+          voItems: [],
+        });
+      }
+      facMap.get(fac.id).voItems.push(it);
+    }
+
+    // Hanya tampilkan fasilitas yang tersentuh VO
+    const list = [...facMap.values()]
+      .filter((f) => f.voItems.length > 0)
+      .map((f) => ({
+        ...f,
+        voTotal: f.voItems.reduce((s, it) => s + Number(it.cost_impact || 0), 0),
+      }));
+
+    list.sort((a, b) => {
+      const lc = (a.location_code || "").localeCompare(b.location_code || "");
+      if (lc !== 0) return lc;
+      return (a.code || "").localeCompare(b.code || "");
+    });
+    return list;
+  }, [activeBoq, vo.items]);
+
+  if (loading || activeBoq === null) {
+    return (
+      <div className="flex items-center justify-center py-8 text-xs text-ink-500 gap-2">
+        <Spinner size={14} /> Memuat BOQ aktif…
+      </div>
+    );
+  }
+  if (!facilities || facilities.length === 0) {
+    return (
+      <p className="text-xs text-ink-500 italic text-center py-4">
+        Tidak ada fasilitas yang tersentuh oleh VO ini.
+      </p>
+    );
+  }
+
+  // Total grand
+  const grandActive = facilities.reduce((s, f) => s + f.activeBoqTotal, 0);
+  const grandVo = facilities.reduce((s, f) => s + f.voTotal, 0);
+
+  const impactCls = (n) =>
+    n > 0 ? "text-emerald-700" : n < 0 ? "text-red-700" : "text-ink-700";
+
+  return (
+    <div>
+      <p className="text-xs font-semibold text-ink-700 mb-2">
+        Komparasi BOQ Aktif vs Usulan ({facilities.length} fasilitas tersentuh) — klik baris untuk lihat per item
+      </p>
+      <div className="border border-ink-200 rounded overflow-hidden max-h-[55vh] overflow-y-auto">
+        <table className="w-full text-xs">
+          <thead className="bg-ink-50 sticky top-0 z-10">
+            <tr className="text-left">
+              <th className="px-3 py-2 font-semibold text-ink-700">Uraian</th>
+              <th className="px-3 py-2 font-semibold text-ink-700 text-right w-44">Harga BOQ Aktif</th>
+              <th className="px-3 py-2 font-semibold text-ink-700 text-right w-44">Total Usulan Perubahan</th>
+            </tr>
+          </thead>
+          <tbody>
+            {facilities.map((f) => {
+              const isOpen = !!expanded[f.id];
+              return (
+                <React.Fragment key={f.id}>
+                  <tr
+                    className="border-t border-ink-200 bg-white hover:bg-ink-50 cursor-pointer"
+                    onClick={() => setExpanded((p) => ({ ...p, [f.id]: !p[f.id] }))}
+                  >
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-1.5">
+                        <ChevronRight
+                          size={14}
+                          className={`text-ink-500 transition-transform ${isOpen ? "rotate-90" : ""}`}
+                        />
+                        <div>
+                          <div className="font-semibold text-ink-900">{f.name || f.code}</div>
+                          <div className="text-[10px] font-mono text-ink-500">
+                            {f.location_code}/{f.code}
+                            {f.location_name ? ` · ${f.location_name}` : ""}
+                            {" · "}{f.voItems.length} usulan
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono">{fmtCurrency(f.activeBoqTotal)}</td>
+                    <td className={`px-3 py-2 text-right font-mono font-semibold ${impactCls(f.voTotal)}`}>
+                      {f.voTotal > 0 ? "+" : ""}{fmtCurrency(f.voTotal)}
+                    </td>
+                  </tr>
+                  {isOpen && (
+                    <VOComparisonItemRows fac={f} />
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+          <tfoot className="bg-ink-50 sticky bottom-0">
+            <tr className="border-t-2 border-ink-300">
+              <td className="px-3 py-2 font-semibold text-ink-800">TOTAL</td>
+              <td className="px-3 py-2 text-right font-mono font-bold">{fmtCurrency(grandActive)}</td>
+              <td className={`px-3 py-2 text-right font-mono font-bold ${impactCls(grandVo)}`}>
+                {grandVo > 0 ? "+" : ""}{fmtCurrency(grandVo)}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <p className="text-[10px] text-ink-500 mt-1.5">
+        Catatan: <i>Harga BOQ Aktif</i> = total nilai item aktif fasilitas pada revisi BOQ aktif saat ini.
+        <i> Total Usulan Perubahan</i> = jumlah Δ biaya item-item VO (positif = naik, negatif = turun).
+      </p>
+    </div>
+  );
+}
+
+// Sub-baris komparasi per item (drilldown saat fasilitas di-expand)
+function VOComparisonItemRows({ fac }) {
+  const impactCls = (n) =>
+    n > 0 ? "text-emerald-700" : n < 0 ? "text-red-700" : "text-ink-700";
+
+  const rows = fac.voItems.map((it) => {
+    const action = it.action;
+    const meta = VO_ACTION_META[action] || {};
+    let uraian = it.description || it.target_boq?.description || it.target_facility?.name || "—";
+    let activePrice = null;
+    let scopeNote = null;
+
+    if (action === "add") {
+      activePrice = null; // belum ada di BOQ
+      scopeNote = "Item baru";
+    } else if (action === "remove_facility") {
+      activePrice = Number(it.target_facility?.total_value || 0);
+      uraian = `Hapus seluruh fasilitas: ${it.target_facility?.name || fac.name}`;
+      scopeNote = `${it.target_facility?.item_count || "?"} item`;
+    } else {
+      // increase / decrease / modify_spec / remove → ada target_boq
+      activePrice = Number(it.target_boq?.total_price || 0);
+      if (!it.description && it.target_boq?.description) uraian = it.target_boq.description;
+    }
+
+    return { it, action, meta, uraian, activePrice, scopeNote };
+  });
+
+  return (
+    <>
+      {rows.map(({ it, action, uraian, activePrice, scopeNote }) => (
+        <tr key={it.id} className="border-t border-ink-100 bg-ink-50/40">
+          <td className="px-3 py-1.5 pl-9">
+            <div className="flex items-start gap-2">
+              <VOActionBadge action={action} />
+              <div className="flex-1">
+                <div className="text-ink-800">{uraian}</div>
+                {(it.target_boq?.full_code || scopeNote) && (
+                  <div className="text-[10px] font-mono text-ink-500">
+                    {it.target_boq?.full_code || ""}
+                    {it.target_boq?.full_code && scopeNote ? " · " : ""}
+                    {scopeNote || ""}
+                  </div>
+                )}
+              </div>
+            </div>
+          </td>
+          <td className="px-3 py-1.5 text-right font-mono text-ink-700">
+            {activePrice == null ? <span className="text-ink-400 italic">—</span> : fmtCurrency(activePrice)}
+          </td>
+          <td className={`px-3 py-1.5 text-right font-mono font-semibold ${impactCls(it.cost_impact)}`}>
+            {it.cost_impact > 0 ? "+" : ""}{fmtCurrency(it.cost_impact)}
+          </td>
+        </tr>
+      ))}
+    </>
+  );
+}
+
 function VODetailModal({ vo, onClose }) {
+  const [view, setView] = useState("comparison"); // "comparison" | "items"
+  const [activeBoq, setActiveBoq] = useState(null);
+  const [boqLoading, setBoqLoading] = useState(false);
+
+  useEffect(() => {
+    if (view !== "comparison" || activeBoq !== null || !vo.contract_id) return;
+    setBoqLoading(true);
+    boqAPI.listByContractFlat(vo.contract_id, false)
+      .then((r) => setActiveBoq(r.data || []))
+      .catch(() => setActiveBoq([]))
+      .finally(() => setBoqLoading(false));
+  }, [view, vo.contract_id, activeBoq]);
+
   // Summary per action
   const summary = useMemo(() => {
     const s = { add: 0, increase: 0, decrease: 0, modify_spec: 0, remove: 0, remove_facility: 0 };
@@ -4082,15 +4324,46 @@ function VODetailModal({ vo, onClose }) {
           </div>
         )}
 
-        {/* Items Before/After */}
+        {/* Tab toggle: Komparasi vs Per-Item */}
         {(vo.items?.length || 0) > 0 ? (
           <div>
-            <p className="text-xs font-semibold text-ink-700 mb-2">
-              Rincian Perubahan ({vo.items.length} item) — Sebelum vs Sesudah
-            </p>
-            <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
-              {vo.items.map((it, i) => <VOItemCard key={it.id || i} it={it} />)}
+            <div className="flex gap-1 border-b border-ink-200 mb-3">
+              <button
+                type="button"
+                onClick={() => setView("comparison")}
+                className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${
+                  view === "comparison"
+                    ? "border-brand-600 text-brand-700"
+                    : "border-transparent text-ink-500 hover:text-ink-700"
+                }`}
+              >
+                Komparasi per Fasilitas
+              </button>
+              <button
+                type="button"
+                onClick={() => setView("items")}
+                className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${
+                  view === "items"
+                    ? "border-brand-600 text-brand-700"
+                    : "border-transparent text-ink-500 hover:text-ink-700"
+                }`}
+              >
+                Per Item (Sebelum vs Sesudah)
+              </button>
             </div>
+
+            {view === "comparison" ? (
+              <VOComparisonView vo={vo} activeBoq={activeBoq} loading={boqLoading} />
+            ) : (
+              <div>
+                <p className="text-xs font-semibold text-ink-700 mb-2">
+                  Rincian Perubahan ({vo.items.length} item) — Sebelum vs Sesudah
+                </p>
+                <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
+                  {vo.items.map((it, i) => <VOItemCard key={it.id || i} it={it} />)}
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <p className="text-xs text-ink-500 italic text-center py-4">
