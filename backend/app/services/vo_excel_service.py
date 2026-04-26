@@ -47,6 +47,23 @@ HEADERS = [
 ]
 
 
+# Whitelist keyword di awal kolom catatan_vo_lain untuk membypass validasi
+# unit_price=0 saat ADD. Format: "<KEYWORD>" atau "<KEYWORD>: <alasan>"
+# (case-insensitive, whitespace boleh setelah keyword).
+ZERO_PRICE_BYPASS_KEYWORDS = ("PARENT", "INFO", "OWNER", "TITIPAN")
+
+
+def _check_zero_price_bypass(notes: str) -> bool:
+    """True jika `notes` diawali salah satu keyword whitelist (case-insensitive)."""
+    if not notes:
+        return False
+    text = notes.strip().upper()
+    for kw in ZERO_PRICE_BYPASS_KEYWORDS:
+        if text == kw or text.startswith(f"{kw}:") or text.startswith(f"{kw} "):
+            return True
+    return False
+
+
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _active_revision(db: Session, contract_id) -> Optional[BOQRevision]:
@@ -274,9 +291,22 @@ def _add_petunjuk_sheet(wb: Workbook, mode: str = "flat") -> None:
         "- Tambah baris baru (kosongkan boq_item_id) → ADD",
         "  - Untuk ADD, isi: facility_code, parent_code (opsional), description, unit, vol_baru, unit_price",
         "  - vol_efektif & vol_pending biarkan kosong",
+        "  - parent_code boleh merujuk ke 'code' baris ADD lain di sheet ini",
+        "    (chain ADD → ADD didukung; sistem otomatis urut hirarki saat apply)",
+        "",
+        "ADD DENGAN unit_price = 0 (proteksi typo, default ditolak):",
+        "Untuk item BOQ yang memang berharga 0 secara sah, isi kolom 'catatan_vo_lain'",
+        "diawali salah satu keyword berikut + opsional alasan:",
+        "  - PARENT   → item agregator/header hirarki (group, parent dari child ADD)",
+        "  - INFO     → item informatif/non-cost (referensi koordinasi)",
+        "  - OWNER    → material/jasa disediakan KKP (owner-supplied)",
+        "  - TITIPAN  → biaya ditanggung pihak lain",
+        "Contoh: 'PARENT: Pondasi tambahan blok B' / 'OWNER: Pompa air supplied KKP'",
+        "Tanpa keyword whitelist, baris dengan unit_price=0 akan ditolak.",
         "",
         "EDGE CASES:",
         "- Vol_baru < 0: tidak diizinkan, akan ditolak saat upload.",
+        "- Unit_price < 0: tidak diizinkan.",
         "- Group row (parent, is_leaf=false): biarkan vol_baru kosong; tidak ditolak.",
         "- Code tidak ditemukan saat upload: dianggap baris ADD (item baru).",
         "- VO referensi di-reject oleh PPK: VO Anda tetap valid tapi hasilnya tidak match.",
@@ -489,8 +519,17 @@ def _parse_df_rows(
             if not description:
                 errors.append(f"Baris {idx+2}: ADD perlu description.")
                 continue
-            if unit_price <= 0:
-                errors.append(f"Baris {idx+2}: ADD perlu unit_price > 0.")
+            notes_str = _safe_str(rec.get("catatan_vo_lain"))
+            if unit_price < 0:
+                errors.append(f"Baris {idx+2}: ADD unit_price tidak boleh negatif.")
+                continue
+            if unit_price == 0 and not _check_zero_price_bypass(notes_str):
+                errors.append(
+                    f"Baris {idx+2}: ADD dengan unit_price=0 wajib isi 'catatan_vo_lain' "
+                    f"diawali keyword PARENT / INFO / OWNER / TITIPAN "
+                    f"(mis. 'PARENT: header pondasi blok B'). "
+                    f"Kalau ini bukan disengaja, isi unit_price > 0."
+                )
                 continue
             # Parent lookup: coba match ke item existing di DB
             # Kalau tidak ketemu → simpan parent_code string untuk di-resolve
@@ -516,6 +555,7 @@ def _parse_df_rows(
                 "unit": unit,
                 "volume_delta": vol_baru,
                 "unit_price": unit_price,
+                "notes": notes_str or None,
             })
             continue
 
