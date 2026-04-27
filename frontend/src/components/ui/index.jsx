@@ -187,3 +187,82 @@ export function ConfirmDialog({ open, title, description, onConfirm, onCancel, d
     </Modal>
   );
 }
+
+/* ─── Marlin Redesign components (glassmorphism, token-aware) ──────────────── */
+
+/**
+ * GlassCard — surface card yang adaptif dark/light via CSS custom properties.
+ * Pakai ini untuk konten redesign; existing pages tetap pakai .card.
+ */
+export function GlassCard({ children, className = "", padded = false, ...rest }) {
+  return (
+    <div
+      className={`glass-card ${padded ? "glass-card-pad" : ""} ${className}`}
+      {...rest}
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
+ * GlassStatCard — stat card varian redesign.
+ *   accent: hex color (e.g. "#5b8bff" / "#34d399" / "#fbbf24" / "#f87171")
+ *   icon:   Lucide icon component
+ */
+export function GlassStatCard({ label, value, sub, subColor, icon: Icon, accent = "#5b8bff" }) {
+  return (
+    <div className="glass-card p-5 flex items-center gap-4">
+      {Icon && (
+        <div
+          className="w-[46px] h-[46px] flex items-center justify-center flex-shrink-0"
+          style={{
+            borderRadius: 13,
+            background: `${accent}33`,           /* ~20% alpha */
+            border: `1px solid ${accent}61`,    /* ~38% alpha */
+            color: accent,
+          }}
+        >
+          <Icon size={20} strokeWidth={2.2} />
+        </div>
+      )}
+      <div className="min-w-0 flex-1">
+        <p
+          className="uppercase"
+          style={{
+            fontSize: 10,
+            letterSpacing: "0.1em",
+            fontWeight: 700,
+            color: "var(--c-text-3)",
+            marginBottom: 4,
+          }}
+        >
+          {label}
+        </p>
+        <p
+          className="font-display truncate"
+          style={{
+            fontSize: 26,
+            fontWeight: 700,
+            color: "var(--c-text-1)",
+            lineHeight: 1.1,
+          }}
+        >
+          {value}
+        </p>
+        {sub && (
+          <p
+            className="mt-1.5 truncate"
+            style={{
+              fontSize: 11,
+              color: subColor || "var(--c-text-2)",
+            }}
+          >
+            {sub}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+

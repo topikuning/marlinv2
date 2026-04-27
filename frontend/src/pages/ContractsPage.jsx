@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
-  Plus, MapPin, ChevronRight, Trash2, Building2, Upload,
+  Plus, MapPin, Trash2, Building2, Upload,
 } from "lucide-react";
 import {
   contractsAPI, masterAPI, locationsAPI, templatesAPI, downloadBlob,
@@ -43,7 +43,7 @@ export default function ContractsPage() {
   }
 
   return (
-    <div className="p-6 max-w-screen-2xl mx-auto">
+    <div className="p-7 max-w-screen-2xl mx-auto">
       <PageHeader
         title="Kontrak"
         description="Kelola seluruh kontrak konstruksi"
@@ -74,7 +74,10 @@ export default function ContractsPage() {
           }
         />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <div
+          className="grid gap-4"
+          style={{ gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}
+        >
           {items
             .filter(
               (c) =>
@@ -83,38 +86,11 @@ export default function ContractsPage() {
                 c.contract_name.toLowerCase().includes(search.toLowerCase())
             )
             .map((c) => (
-              <div
+              <ContractCard
                 key={c.id}
+                contract={c}
                 onClick={() => navigate(`/contracts/${c.id}`)}
-                className="card p-5 hover:border-brand-400 hover:-translate-y-0.5 transition cursor-pointer"
-              >
-                <div className="flex items-start justify-between mb-3">
-                  <span className={contractStatusBadge(c.status)}>
-                    {STATUS_LABEL[c.status] || c.status}
-                  </span>
-                  <ChevronRight size={14} className="text-ink-300" />
-                </div>
-                <p className="font-semibold text-ink-900 leading-snug mb-1">
-                  {c.contract_name}
-                </p>
-                <p className="text-xs text-ink-500 font-mono mb-3 truncate">
-                  {c.contract_number}
-                </p>
-                <p className="text-xs text-ink-500 truncate">
-                  {c.company_name}
-                </p>
-                <div className="border-t border-ink-100 mt-3 pt-3 flex items-center justify-between text-xs text-ink-600">
-                  <span className="flex items-center gap-1">
-                    <MapPin size={11} /> {c.location_count} lokasi
-                  </span>
-                  <span className="font-medium">
-                    {fmtCurrency(c.current_value)}
-                  </span>
-                </div>
-                <div className="text-[10px] text-ink-400 mt-1">
-                  {fmtDate(c.start_date)} → {fmtDate(c.end_date)}
-                </div>
-              </div>
+              />
             ))}
         </div>
       )}
@@ -127,6 +103,86 @@ export default function ContractsPage() {
           load();
         }}
       />
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//   CONTRACT CARD — redesign: accent border kiri, glassmorphism, hover lift
+// ════════════════════════════════════════════════════════════════════════════
+function ContractCard({ contract: c, onClick }) {
+  return (
+    <div
+      onClick={onClick}
+      className="cursor-pointer transition-all duration-200"
+      style={{
+        background: "rgba(91,139,255,0.055)",
+        backdropFilter: "blur(20px)",
+        WebkitBackdropFilter: "blur(20px)",
+        border: "1px solid rgba(91,139,255,0.14)",
+        borderLeft: "3px solid rgba(91,139,255,0.65)",
+        borderRadius: 14,
+        padding: 20,
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = "rgba(91,139,255,0.11)";
+        e.currentTarget.style.transform = "translateY(-2px)";
+        e.currentTarget.style.boxShadow = "0 8px 32px rgba(79,124,255,0.18)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = "rgba(91,139,255,0.055)";
+        e.currentTarget.style.transform = "none";
+        e.currentTarget.style.boxShadow = "none";
+      }}
+    >
+      <div className="flex items-start justify-between mb-3">
+        <span className={contractStatusBadge(c.status)}>
+          {STATUS_LABEL[c.status] || c.status}
+        </span>
+        <span
+          className="flex items-center gap-1"
+          style={{ fontSize: 11, color: "var(--c-text-3)" }}
+        >
+          <MapPin size={11} />
+          {c.location_count} lokasi
+        </span>
+      </div>
+
+      <p
+        className="leading-snug mb-1"
+        style={{
+          fontFamily: "Lexend, sans-serif",
+          fontSize: 14,
+          fontWeight: 600,
+          color: "var(--c-text-1)",
+        }}
+      >
+        {c.contract_name}
+      </p>
+      <p
+        className="font-mono mb-2 truncate"
+        style={{ fontSize: 10, color: "var(--c-text-3)" }}
+      >
+        {c.contract_number}
+      </p>
+      <p
+        className="mb-4 truncate"
+        style={{ fontSize: 12, color: "var(--c-text-2)" }}
+      >
+        {c.company_name}
+      </p>
+
+      <div
+        className="flex items-center justify-between pt-3.5"
+        style={{ borderTop: "1px solid var(--c-divider)" }}
+      >
+        <span style={{ fontSize: 13, fontWeight: 700, color: "var(--c-text-1)" }}>
+          {fmtCurrency(c.current_value)}
+        </span>
+        <span style={{ fontSize: 11, color: "var(--c-text-3)" }}>
+          {fmtDate(c.start_date)} → {fmtDate(c.end_date)}
+        </span>
+      </div>
     </div>
   );
 }

@@ -1,21 +1,75 @@
 import { useEffect, useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  Building2, Wallet, Activity, AlertTriangle, TrendingUp,
-  CalendarX, MapPin, ChevronRight, CheckCircle,
+  Building2, Wallet, Activity, AlertTriangle,
+  MapPin, ChevronRight, CheckCircle,
 } from "lucide-react";
 import { analyticsAPI, notificationsAPI } from "@/api";
 import {
-  PageHeader, PageLoader, StatCard, SearchInput, Empty,
+  PageHeader, PageLoader, GlassCard, GlassStatCard, SearchInput, Empty,
 } from "@/components/ui";
-import {
-  fmtCurrency, fmtPct, deviationBadge, contractStatusBadge,
-} from "@/utils/format";
+import { fmtCurrency, fmtPct } from "@/utils/format";
 
 const STATUS_LABEL = {
   draft: "Draft", active: "Aktif", addendum: "Addendum",
   on_hold: "Ditahan", completed: "Selesai", terminated: "Diputus",
 };
+
+// Status badge color (token-aware) — pakai inline style supaya bekerja di
+// light & dark mode tanpa hardcode tailwind colors.
+const STATUS_BG = {
+  active:    "rgba(91,139,255,0.15)",
+  addendum:  "rgba(251,191,36,0.16)",
+  on_hold:   "rgba(248,113,113,0.14)",
+  completed: "rgba(52,211,153,0.16)",
+  terminated:"rgba(148,163,184,0.18)",
+  draft:     "rgba(148,163,184,0.18)",
+};
+const STATUS_TEXT = {
+  active: "#5b8bff", addendum: "#fbbf24", on_hold: "#f87171",
+  completed: "#34d399", terminated: "#94a3b8", draft: "#94a3b8",
+};
+
+// Deviation color helper
+function deviationColor(d) {
+  if (d == null) return "var(--c-text-2)";
+  if (d >= -3) return "#34d399";
+  if (d >= -8) return "#fbbf24";
+  return "#f87171";
+}
+
+// Tiny helper components — token-aware progress bar + table cells
+function ProgressBar({ value, color }) {
+  const pct = Math.max(0, Math.min(100, Number(value) || 0));
+  return (
+    <div
+      className="h-1.5 rounded-full overflow-hidden"
+      style={{ background: "var(--c-progress-track)" }}
+    >
+      <div
+        className="h-full rounded-full transition-[width] duration-500"
+        style={{
+          width: `${pct}%`,
+          background: color || "#5b8bff",
+        }}
+      />
+    </div>
+  );
+}
+
+function StatusBadge({ status }) {
+  return (
+    <span
+      className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold"
+      style={{
+        background: STATUS_BG[status] || STATUS_BG.draft,
+        color: STATUS_TEXT[status] || STATUS_TEXT.draft,
+      }}
+    >
+      {STATUS_LABEL[status] || status}
+    </span>
+  );
+}
 
 export default function DashboardPage() {
   const [stats, setStats] = useState(null);
@@ -63,57 +117,79 @@ export default function DashboardPage() {
   if (loading) return <PageLoader />;
 
   return (
-    <div className="p-6 max-w-screen-2xl mx-auto">
+    <div className="p-7 max-w-screen-2xl mx-auto">
       <PageHeader
         title="Dashboard"
         description="Ringkasan kondisi seluruh kontrak secara real-time"
       />
 
+      {/* Stat cards — glass + accent icon box */}
       {stats && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-          <StatCard
+        <div
+          className="grid gap-4 mb-7"
+          style={{ gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))" }}
+        >
+          <GlassStatCard
             label="Total Kontrak"
             value={stats.total_contracts}
             sub={`${stats.total_locations} lokasi · ${stats.total_facilities} fasilitas`}
             icon={Building2}
+            accent="#5b8bff"
           />
-          <StatCard
-            label="Nilai Kontrak"
+          <GlassStatCard
+            label="Total Nilai"
             value={fmtCurrency(stats.total_value)}
             sub="Akumulasi semua kontrak"
             icon={Wallet}
-            iconBg="bg-emerald-50"
+            accent="#34d399"
           />
-          <StatCard
+          <GlassStatCard
             label="Progress Rata-rata"
             value={fmtPct(stats.avg_progress)}
             sub={`${stats.contracts_on_track} on-track · ${stats.contracts_warning} waspada`}
             icon={Activity}
-            iconBg="bg-brand-50"
+            accent="#22d3ee"
           />
-          <StatCard
+          <GlassStatCard
             label="Early Warning"
             value={stats.active_warnings}
             sub={`${stats.contracts_critical} kritis · ${stats.missing_daily_reports + stats.missing_weekly_reports} lap. telat`}
             icon={AlertTriangle}
-            iconBg="bg-red-50"
-            subColor={stats.active_warnings > 0 ? "text-red-600" : undefined}
+            accent="#f87171"
+            subColor={stats.active_warnings > 0 ? "#f87171" : undefined}
           />
         </div>
       )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
+      {/* Main grid: contracts table (3-col) + warnings panel (1-col) */}
+      <div className="grid grid-cols-1 xl:grid-cols-4 gap-5 items-start">
         {/* Contracts Table */}
-        <div className="xl:col-span-3 card">
-          <div className="px-5 py-4 border-b border-ink-200 flex items-center justify-between flex-wrap gap-3">
-            <h2 className="text-sm font-display font-semibold text-ink-800">
+        <GlassCard className="xl:col-span-3 overflow-hidden">
+          <div
+            className="px-5 py-4 flex items-center justify-between flex-wrap gap-3"
+            style={{ borderBottom: "1px solid var(--c-divider)" }}
+          >
+            <h2
+              className="font-display"
+              style={{
+                fontWeight: 700,
+                fontSize: 14,
+                color: "var(--c-text-1)",
+              }}
+            >
               Daftar Kontrak
             </h2>
             <div className="flex items-center gap-2">
               <select
                 value={filterStatus}
                 onChange={(e) => setFilterStatus(e.target.value)}
-                className="input py-1.5 text-xs w-auto"
+                className="text-xs rounded-lg outline-none cursor-pointer transition-colors"
+                style={{
+                  background: "var(--c-input-bg)",
+                  border: "1px solid var(--c-border)",
+                  color: "var(--c-text-2)",
+                  padding: "6px 10px",
+                }}
               >
                 <option value="all">Semua Status</option>
                 <option value="on_track">On Track</option>
@@ -139,14 +215,21 @@ export default function DashboardPage() {
               <table className="w-full">
                 <thead>
                   <tr>
-                    <th className="table-th">Kontrak</th>
-                    <th className="table-th">Lokasi</th>
-                    <th className="table-th">Progress</th>
-                    <th className="table-th">Deviasi</th>
-                    <th className="table-th">SPI</th>
-                    <th className="table-th">Minggu</th>
-                    <th className="table-th">Status</th>
-                    <th className="table-th"></th>
+                    {["Kontrak", "Lokasi", "Progress", "Deviasi", "SPI", "Minggu", "Status", ""].map((h) => (
+                      <th
+                        key={h}
+                        className="text-left px-4 py-3 uppercase tracking-wider"
+                        style={{
+                          fontSize: 10,
+                          fontWeight: 700,
+                          color: "var(--c-text-3)",
+                          letterSpacing: "0.08em",
+                          borderBottom: "1px solid var(--c-divider)",
+                        }}
+                      >
+                        {h}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
@@ -154,68 +237,127 @@ export default function DashboardPage() {
                     <tr
                       key={c.id}
                       onClick={() => navigate(`/contracts/${c.id}`)}
-                      className="hover:bg-brand-50/40 cursor-pointer transition"
+                      className="cursor-pointer transition-colors"
+                      style={{ borderBottom: "1px solid var(--c-divider-lite)" }}
+                      onMouseEnter={(e) =>
+                        (e.currentTarget.style.background = "var(--c-row-hover)")
+                      }
+                      onMouseLeave={(e) =>
+                        (e.currentTarget.style.background = "transparent")
+                      }
                     >
-                      <td className="table-td max-w-xs">
-                        <p className="font-medium text-ink-900 truncate">
+                      <td className="px-4 py-3 max-w-xs">
+                        <p
+                          className="truncate"
+                          style={{
+                            fontSize: 13,
+                            fontWeight: 600,
+                            color: "var(--c-text-1)",
+                          }}
+                        >
                           {c.contract_name}
                         </p>
-                        <p className="text-xs text-ink-500 font-mono truncate">
+                        <p
+                          className="truncate font-mono mt-0.5"
+                          style={{ fontSize: 10, color: "var(--c-text-3)" }}
+                        >
                           {c.contract_number}
                         </p>
-                        <p className="text-xs text-ink-400 truncate">
+                        <p
+                          className="truncate mt-0.5"
+                          style={{ fontSize: 11, color: "var(--c-text-2)" }}
+                        >
                           {c.company_name}
                         </p>
                       </td>
-                      <td className="table-td">
-                        <span className="flex items-center gap-1 text-xs">
-                          <MapPin size={11} className="text-ink-400" />
+                      <td className="px-4 py-3">
+                        <span
+                          className="flex items-center gap-1"
+                          style={{ fontSize: 12, color: "var(--c-text-2)" }}
+                        >
+                          <MapPin size={11} style={{ color: "var(--c-text-3)" }} />
                           {c.location_count}
                         </span>
-                        <span className="text-xs text-ink-400">
+                        <span
+                          className="block mt-0.5"
+                          style={{ fontSize: 10, color: "var(--c-text-3)" }}
+                        >
                           {c.city || "—"}
                         </span>
                       </td>
-                      <td className="table-td">
-                        <div className="flex items-center gap-2">
-                          <div className="flex-1 min-w-[60px] h-1.5 bg-ink-100 rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-brand-500 rounded-full"
-                              style={{
-                                width: `${Math.min(c.actual_cumulative, 100)}%`,
-                              }}
-                            />
-                          </div>
-                          <span className="text-xs font-medium text-ink-700 whitespace-nowrap">
+                      <td className="px-4 py-3 min-w-[140px]">
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <span
+                            style={{
+                              fontSize: 12,
+                              fontWeight: 700,
+                              color: "var(--c-text-1)",
+                              minWidth: 38,
+                            }}
+                          >
                             {fmtPct(c.actual_cumulative, 1)}
                           </span>
+                          <span style={{ fontSize: 10, color: "var(--c-text-3)" }}>
+                            / {fmtPct(c.planned_cumulative, 1)}
+                          </span>
                         </div>
-                        <p className="text-[10px] text-ink-400 mt-1">
-                          Rencana: {fmtPct(c.planned_cumulative, 1)}
-                        </p>
+                        <ProgressBar
+                          value={c.actual_cumulative}
+                          color={
+                            c.actual_cumulative >= 70
+                              ? "#34d399"
+                              : c.actual_cumulative >= 40
+                              ? "#5b8bff"
+                              : "#fbbf24"
+                          }
+                        />
                       </td>
-                      <td className="table-td">
-                        <span className={deviationBadge(c.deviation_status)}>
+                      <td className="px-4 py-3">
+                        <span
+                          style={{
+                            fontSize: 13,
+                            fontWeight: 700,
+                            color: deviationColor(c.deviation),
+                          }}
+                        >
                           {c.deviation > 0 ? "+" : ""}
                           {fmtPct(c.deviation, 2)}
                         </span>
                       </td>
-                      <td className="table-td text-xs font-mono">
-                        {c.spi ? c.spi.toFixed(2) : "—"}
-                      </td>
-                      <td className="table-td text-xs">
-                        M-{c.current_week}/{c.total_weeks}
-                        {c.has_active_warning && (
-                          <AlertTriangle size={11} className="inline ml-1 text-red-500" />
-                        )}
-                      </td>
-                      <td className="table-td">
-                        <span className={contractStatusBadge(c.status)}>
-                          {STATUS_LABEL[c.status] || c.status}
+                      <td className="px-4 py-3">
+                        <span
+                          className="font-mono"
+                          style={{
+                            fontSize: 13,
+                            fontWeight: 700,
+                            color: c.spi >= 1
+                              ? "#34d399"
+                              : c.spi >= 0.9
+                              ? "#fbbf24"
+                              : "#f87171",
+                          }}
+                        >
+                          {c.spi ? c.spi.toFixed(2) : "—"}
                         </span>
                       </td>
-                      <td className="table-td">
-                        <ChevronRight size={14} className="text-ink-300" />
+                      <td
+                        className="px-4 py-3"
+                        style={{ fontSize: 12, color: "var(--c-text-2)" }}
+                      >
+                        M-{c.current_week}/{c.total_weeks}
+                        {c.has_active_warning && (
+                          <AlertTriangle
+                            size={11}
+                            className="inline ml-1"
+                            style={{ color: "#f87171" }}
+                          />
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <StatusBadge status={c.status} />
+                      </td>
+                      <td className="px-4 py-3">
+                        <ChevronRight size={14} style={{ color: "var(--c-text-3)" }} />
                       </td>
                     </tr>
                   ))}
@@ -223,17 +365,30 @@ export default function DashboardPage() {
               </table>
             </div>
           )}
-        </div>
+        </GlassCard>
 
         {/* Warnings panel */}
-        <div className="card overflow-hidden">
-          <div className="px-5 py-4 border-b border-ink-200 flex items-center justify-between">
-            <h2 className="text-sm font-display font-semibold text-ink-800 flex items-center gap-2">
-              <AlertTriangle size={14} className="text-red-500" /> Early Warning
+        <GlassCard className="overflow-hidden">
+          <div
+            className="px-5 py-4 flex items-center justify-between"
+            style={{ borderBottom: "1px solid var(--c-divider)" }}
+          >
+            <h2
+              className="flex items-center gap-2"
+              style={{
+                fontFamily: "Lexend, sans-serif",
+                fontWeight: 700,
+                fontSize: 14,
+                color: "var(--c-text-1)",
+              }}
+            >
+              <AlertTriangle size={14} style={{ color: "#f87171" }} />
+              Early Warning
             </h2>
             <button
               onClick={() => navigate("/warnings")}
-              className="text-xs text-brand-600 hover:underline"
+              className="text-xs hover:underline"
+              style={{ color: "#5b8bff" }}
             >
               Semua
             </button>
@@ -241,35 +396,56 @@ export default function DashboardPage() {
           <div className="p-3 space-y-2 max-h-[500px] overflow-y-auto">
             {warnings.length === 0 ? (
               <div className="text-center py-10">
-                <CheckCircle size={26} className="text-emerald-400 mx-auto mb-2" />
-                <p className="text-xs text-ink-500">Tidak ada peringatan</p>
+                <CheckCircle
+                  size={26}
+                  className="mx-auto mb-2"
+                  style={{ color: "#34d399" }}
+                />
+                <p className="text-xs" style={{ color: "var(--c-text-2)" }}>
+                  Tidak ada peringatan
+                </p>
               </div>
             ) : (
-              warnings.slice(0, 10).map((w) => (
-                <div
-                  key={w.id}
-                  onClick={() => navigate(`/contracts/${w.contract_id}`)}
-                  className={`p-3 rounded-lg border text-xs cursor-pointer hover:-translate-y-0.5 transition ${
-                    w.severity === "critical"
-                      ? "bg-red-50 border-red-200"
-                      : "bg-amber-50 border-amber-200"
-                  }`}
-                >
-                  <p
-                    className={`font-semibold mb-1 font-mono ${
-                      w.severity === "critical"
-                        ? "text-red-700"
-                        : "text-amber-700"
-                    }`}
+              warnings.slice(0, 10).map((w) => {
+                const critical = w.severity === "critical";
+                return (
+                  <div
+                    key={w.id}
+                    onClick={() => navigate(`/contracts/${w.contract_id}`)}
+                    className="px-3 py-2.5 rounded-[10px] cursor-pointer transition-opacity"
+                    style={{
+                      background: critical
+                        ? "rgba(248,113,113,0.07)"
+                        : "rgba(251,191,36,0.06)",
+                      border: critical
+                        ? "1px solid rgba(248,113,113,0.2)"
+                        : "1px solid rgba(251,191,36,0.15)",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.75")}
+                    onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
                   >
-                    {w.contract_number}
-                  </p>
-                  <p className="text-ink-700 leading-snug">{w.message}</p>
-                </div>
-              ))
+                    <p
+                      className="font-mono mb-1"
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 700,
+                        color: critical ? "#f87171" : "#fbbf24",
+                      }}
+                    >
+                      {w.contract_number}
+                    </p>
+                    <p
+                      className="leading-snug"
+                      style={{ fontSize: 12, color: "var(--c-text-2)" }}
+                    >
+                      {w.message}
+                    </p>
+                  </div>
+                );
+              })
             )}
           </div>
-        </div>
+        </GlassCard>
       </div>
     </div>
   );
