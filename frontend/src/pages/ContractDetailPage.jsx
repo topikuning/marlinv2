@@ -4050,7 +4050,7 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
                     <td className="table-td text-right">
                       <input
                         type="number"
-                        step="0.0001"
+                        step="0.00001"
                         min="0"
                         className={`input py-0.5 text-xs font-mono w-24 text-right ${r.invalid ? "border-red-400 bg-red-50" : ""}`}
                         value={r.new_volume}
@@ -4067,7 +4067,7 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
                       {allowPriceEdit ? (
                         <input
                           type="number"
-                          step="0.01"
+                          step="0.00001"
                           min="0"
                           className="input py-0.5 text-xs font-mono w-28 text-right"
                           value={r.unit_price}
@@ -4144,7 +4144,7 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
                     <td className="table-td text-right">
                       <input
                         type="number"
-                        step="0.0001"
+                        step="0.00001"
                         min="0"
                         className="input py-0.5 text-xs font-mono w-24 text-right"
                         value={r.volume_delta}
@@ -4157,7 +4157,7 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
                     <td className="table-td text-right">
                       <input
                         type="number"
-                        step="0.01"
+                        step="0.00001"
                         min="0"
                         className="input py-0.5 text-xs font-mono w-28 text-right"
                         value={r.unit_price}

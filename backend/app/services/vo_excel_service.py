@@ -234,12 +234,12 @@ def _write_facility_rows(
             it.original_code or "",
             parent_code_str,
             it.description, it.unit or "",
-            float(_q2(vol_awal)),
-            float(_q2(pending_vol)),
-            float(_q2(pending_cost)),
-            float(_q2(vol_efektif)),
-            float(_q2(vol_baru)),
-            float(_q2(unit_price)),
+            float(_q5(vol_awal)),
+            float(_q5(pending_vol)),
+            float(_q5(pending_cost)),
+            float(_q5(vol_efektif)),
+            float(_q5(vol_baru)),
+            float(_q5(unit_price)),
             combined_notes,
         ])
 
@@ -553,41 +553,41 @@ def _parse_df_rows(
                 "new_item_code": code or None,
                 "description": description,
                 "unit": unit,
-                "volume_delta": float(_q2(vol_baru)),
-                "unit_price": float(_q2(unit_price)),
+                "volume_delta": float(_q5(vol_baru)),
+                "unit_price": float(_q5(unit_price)),
                 "notes": notes_str or None,
             })
             continue
 
-        # Aturan sistem: volume & unit_price quantized ke 2 dp. Vol_baru di
+        # Aturan sistem: volume & unit_price quantized ke 5 dp. Vol_baru di
         # Excel = volume aktif di DB persis (no float noise).
         sum_vol_now, _, _ = _pending_for_item(db, boq_item.id, exclude_vo_id=exclude_vo_id)
-        vol_baru_d = _q2(vol_baru)
-        vol_awal_d = _q2(boq_item.volume or 0)
-        vol_efektif_now_d = _q2(vol_awal_d + sum_vol_now)
+        vol_baru_d = _q5(vol_baru)
+        vol_awal_d = _q5(boq_item.volume or 0)
+        vol_efektif_now_d = _q5(vol_awal_d + sum_vol_now)
 
         vol_efektif_excel_d = _safe_decimal(rec.get("vol_efektif"))
         if vol_efektif_excel_d is not None:
-            vol_efektif_excel_d = _q2(vol_efektif_excel_d)
+            vol_efektif_excel_d = _q5(vol_efektif_excel_d)
         # Note: pakai `is not None`, BUKAN truthy — vol_efektif=0 itu nilai sah
         # untuk item baru atau item yang sudah di-cancel oleh VO lain.
         vol_efektif_used_d = (
             vol_efektif_excel_d if vol_efektif_excel_d is not None else vol_efektif_now_d
         )
-        if vol_efektif_excel_d is not None and abs(vol_efektif_excel_d - vol_efektif_now_d) > _TWOPLACES:
+        if vol_efektif_excel_d is not None and abs(vol_efektif_excel_d - vol_efektif_now_d) > _FIVEPLACES:
             warnings.append(
                 f"Baris {idx+2} ({fac_code}/{code}): vol_efektif berubah sejak export "
                 f"({vol_efektif_excel_d} → {vol_efektif_now_d}). Disarankan re-export."
             )
 
-        delta_d = _q2(vol_baru_d - vol_efektif_used_d)
-        if delta_d == Decimal("0.00"):
+        delta_d = _q5(vol_baru_d - vol_efektif_used_d)
+        if delta_d == Decimal("0.00000"):
             continue  # no change
         delta = float(delta_d)
         vol_awal = float(vol_awal_d)
-        unit_price_d = _q2(boq_item.unit_price or 0)
+        unit_price_d = _q5(boq_item.unit_price or 0)
 
-        if vol_baru_d == Decimal("0.00") and vol_awal_d > 0:
+        if vol_baru_d == Decimal("0.00000") and vol_awal_d > 0:
             # REMOVE — delta = -vol_awal (kembalikan dari rev aktif)
             items_out.append({
                 "action": "remove",
@@ -738,12 +738,12 @@ def _safe_float(v) -> float:
         return 0.0
 
 
-_TWOPLACES = Decimal("0.01")
+_FIVEPLACES = Decimal("0.00001")
 
 
-def _q2(v) -> Decimal:
-    """Quantize to 2 decimal places (ROUND_HALF_UP). Aturan sistem: volume &
-    harga satuan SELALU 2 dp, supaya vol_baru di Excel sama persis dengan
+def _q5(v) -> Decimal:
+    """Quantize to 5 decimal places (ROUND_HALF_UP). Aturan sistem: volume &
+    harga satuan SELALU 5 dp, supaya vol_baru di Excel sama persis dengan
     volume aktif di DB tanpa float-noise.
 
     Defensive vs garbage input: None, NaN, Infinity, atau string non-numeric
@@ -751,17 +751,17 @@ def _q2(v) -> Decimal:
     dari pandas, dan Decimal.quantize meledak di NaN/Inf)."""
     from decimal import InvalidOperation
     if v is None:
-        return Decimal("0.00")
+        return Decimal("0.00000")
     if isinstance(v, float) and (v != v or v in (float("inf"), float("-inf"))):
-        return Decimal("0.00")
+        return Decimal("0.00000")
     if not isinstance(v, Decimal):
         try:
             v = Decimal(str(v))
         except (TypeError, ValueError, InvalidOperation):
-            return Decimal("0.00")
+            return Decimal("0.00000")
     if v.is_nan() or v.is_infinite():
-        return Decimal("0.00")
-    return v.quantize(_TWOPLACES, rounding=ROUND_HALF_UP)
+        return Decimal("0.00000")
+    return v.quantize(_FIVEPLACES, rounding=ROUND_HALF_UP)
 
 
 def _safe_decimal(v) -> Optional[Decimal]:

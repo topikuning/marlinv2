@@ -13,26 +13,26 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional
 
 
-_TWOPLACES = Decimal("0.01")
+_FIVEPLACES = Decimal("0.00001")
 
 
-def _q2(v) -> Decimal:
-    """Quantize ke 2 dp (ROUND_HALF_UP). Aturan presisi sistem: volume &
-    unit_price disimpan & dihitung dengan 2 dp eksak. Defensive vs garbage
+def _q5(v) -> Decimal:
+    """Quantize ke 5 dp (ROUND_HALF_UP). Aturan presisi sistem: volume &
+    unit_price disimpan & dihitung dengan 5 dp eksak. Defensive vs garbage
     input (None/NaN/Inf/non-numeric) → Decimal('0.00')."""
     from decimal import InvalidOperation
     if v is None:
-        return Decimal("0.00")
+        return Decimal("0.00000")
     if isinstance(v, float) and (v != v or v in (float("inf"), float("-inf"))):
-        return Decimal("0.00")
+        return Decimal("0.00000")
     if not isinstance(v, Decimal):
         try:
             v = Decimal(str(v))
         except (TypeError, ValueError, InvalidOperation):
-            return Decimal("0.00")
+            return Decimal("0.00000")
     if v.is_nan() or v.is_infinite():
-        return Decimal("0.00")
-    return v.quantize(_TWOPLACES, rounding=ROUND_HALF_UP)
+        return Decimal("0.00000")
+    return v.quantize(_FIVEPLACES, rounding=ROUND_HALF_UP)
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query, UploadFile, File
 from sqlalchemy.orm import Session
@@ -229,8 +229,8 @@ def _recompute_cost_impact(db: Session, vo: VariationOrder) -> None:
             # Fasilitas baru tanpa items = 0; items ADD ditangani terpisah
             expected = Decimal("0")
         else:
-            delta = _q2(it.volume_delta or 0)
-            price = _q2(it.unit_price or 0)
+            delta = _q5(it.volume_delta or 0)
+            price = _q5(it.unit_price or 0)
             expected = delta * price
         # Normalisasi — setiap item cost_impact harus sinkron dengan
         # volume_delta × unit_price (kalau tidak, integrity rusak).
@@ -311,9 +311,9 @@ def _apply_items_from_payload(vo: VariationOrder, items_input, db: Session):
             cost_impact_val = Decimal("0")
             desc_override = it.description
         else:
-            # Aturan presisi sistem: volume & unit_price wajib 2 dp.
-            vol_q = _q2(it.volume_delta or 0)
-            price_q = _q2(it.unit_price or 0)
+            # Aturan presisi sistem: volume & unit_price wajib 5 dp.
+            vol_q = _q5(it.volume_delta or 0)
+            price_q = _q5(it.unit_price or 0)
             cost_impact_val = vol_q * price_q
             desc_override = it.description
 
@@ -334,8 +334,8 @@ def _apply_items_from_payload(vo: VariationOrder, items_input, db: Session):
             master_work_code=it.master_work_code,
             description=desc_override,
             unit=it.unit,
-            volume_delta=Decimal("0.00") if action in zero_actions else _q2(it.volume_delta or 0),
-            unit_price=Decimal("0.00") if action in zero_actions else _q2(it.unit_price or 0),
+            volume_delta=Decimal("0.00000") if action in zero_actions else _q5(it.volume_delta or 0),
+            unit_price=Decimal("0.00000") if action in zero_actions else _q5(it.unit_price or 0),
             cost_impact=cost_impact_val,
             old_description=old_desc,
             old_unit=old_unit,

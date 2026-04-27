@@ -69,23 +69,23 @@ def _ensure_columns():
                 pass
 
 
-def _ensure_quantized_2dp():
-    """One-time normalize legacy data to 2-decimal-place precision.
-    Aturan sistem: volume & unit_price selalu 2 dp. Data yang ter-import
+def _ensure_quantized_5dp():
+    """One-time normalize legacy data to 5-decimal-place precision.
+    Aturan sistem: volume & unit_price selalu 5 dp. Data yang ter-import
     sebelum aturan ini berlaku bisa punya presisi 4-6 dp, menyebabkan
-    display (rounded 2 dp) tidak match dengan vol×price hasil sistem.
-    Idempotent — quantize lagi nilai yang sudah 2 dp adalah no-op.
+    display (rounded 5 dp) tidak match dengan vol×price hasil sistem.
+    Idempotent — quantize lagi nilai yang sudah 5 dp adalah no-op.
     """
     from sqlalchemy import text
     statements = [
         # BOQ items
-        "UPDATE boq_items SET volume = ROUND(volume, 2) WHERE volume IS NOT NULL AND volume <> ROUND(volume, 2)",
-        "UPDATE boq_items SET unit_price = ROUND(unit_price, 2) WHERE unit_price IS NOT NULL AND unit_price <> ROUND(unit_price, 2)",
-        "UPDATE boq_items SET total_price = ROUND(volume * unit_price, 2) WHERE volume IS NOT NULL AND unit_price IS NOT NULL AND total_price <> ROUND(volume * unit_price, 2)",
+        "UPDATE boq_items SET volume = ROUND(volume, 5) WHERE volume IS NOT NULL AND volume <> ROUND(volume, 5)",
+        "UPDATE boq_items SET unit_price = ROUND(unit_price, 5) WHERE unit_price IS NOT NULL AND unit_price <> ROUND(unit_price, 5)",
+        "UPDATE boq_items SET total_price = ROUND(volume * unit_price, 5) WHERE volume IS NOT NULL AND unit_price IS NOT NULL AND total_price <> ROUND(volume * unit_price, 5)",
         # VO items
-        "UPDATE variation_order_items SET volume_delta = ROUND(volume_delta, 2) WHERE volume_delta IS NOT NULL AND volume_delta <> ROUND(volume_delta, 2)",
-        "UPDATE variation_order_items SET unit_price = ROUND(unit_price, 2) WHERE unit_price IS NOT NULL AND unit_price <> ROUND(unit_price, 2)",
-        "UPDATE variation_order_items SET cost_impact = ROUND(cost_impact, 2) WHERE cost_impact IS NOT NULL AND cost_impact <> ROUND(cost_impact, 2)",
+        "UPDATE variation_order_items SET volume_delta = ROUND(volume_delta, 5) WHERE volume_delta IS NOT NULL AND volume_delta <> ROUND(volume_delta, 5)",
+        "UPDATE variation_order_items SET unit_price = ROUND(unit_price, 5) WHERE unit_price IS NOT NULL AND unit_price <> ROUND(unit_price, 5)",
+        "UPDATE variation_order_items SET cost_impact = ROUND(cost_impact, 5) WHERE cost_impact IS NOT NULL AND cost_impact <> ROUND(cost_impact, 5)",
     ]
     with engine.begin() as conn:
         for stmt in statements:
@@ -102,7 +102,7 @@ async def lifespan(app: FastAPI):
         os.makedirs(os.path.join(settings.UPLOAD_DIR, sub), exist_ok=True)
     _ensure_enum_values()
     _ensure_columns()
-    _ensure_quantized_2dp()
+    _ensure_quantized_5dp()
     if settings.SCHEDULER_ENABLED:
         start_scheduler()
     yield

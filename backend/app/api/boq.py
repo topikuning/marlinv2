@@ -5,26 +5,26 @@ from decimal import Decimal, ROUND_HALF_UP
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Query
 
 
-_TWOPLACES_BOQ = Decimal("0.01")
+_FIVEPLACES_BOQ = Decimal("0.00001")
 
 
-def _q2_boq(v) -> Decimal:
-    """Quantize ke 2 dp (ROUND_HALF_UP). Aturan presisi sistem: volume,
-    unit_price, total_price BOQ disimpan dengan 2 dp eksak. Defensive vs
+def _q5_boq(v) -> Decimal:
+    """Quantize ke 5 dp (ROUND_HALF_UP). Aturan presisi sistem: volume,
+    unit_price, total_price BOQ disimpan dengan 5 dp eksak. Defensive vs
     garbage input (None/NaN/Inf/non-numeric) → Decimal('0.00')."""
     from decimal import InvalidOperation
     if v is None:
-        return Decimal("0.00")
+        return Decimal("0.00000")
     if isinstance(v, float) and (v != v or v in (float("inf"), float("-inf"))):
-        return Decimal("0.00")
+        return Decimal("0.00000")
     if not isinstance(v, Decimal):
         try:
             v = Decimal(str(v))
         except (TypeError, ValueError, InvalidOperation):
-            return Decimal("0.00")
+            return Decimal("0.00000")
     if v.is_nan() or v.is_infinite():
-        return Decimal("0.00")
-    return v.quantize(_TWOPLACES_BOQ, rounding=ROUND_HALF_UP)
+        return Decimal("0.00000")
+    return v.quantize(_FIVEPLACES_BOQ, rounding=ROUND_HALF_UP)
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -68,12 +68,12 @@ router = APIRouter(prefix="/boq", tags=["boq"])
 
 
 def _boq_to_dict(b: BOQItem) -> dict:
-    # Aturan presisi sistem: volume, unit_price, total_price selalu 2 dp.
+    # Aturan presisi sistem: volume, unit_price, total_price selalu 5 dp.
     # Quantize di output juga (bukan hanya saat input) supaya data legacy yang
-    # tersimpan dengan presisi lebih tinggi tampil 2 dp dan vol×price = total.
-    vol = _q2_boq(b.volume or 0)
-    price = _q2_boq(b.unit_price or 0)
-    total = _q2_boq(b.total_price or 0)
+    # tersimpan dengan presisi lebih tinggi tampil 5 dp dan vol×price = total.
+    vol = _q5_boq(b.volume or 0)
+    price = _q5_boq(b.unit_price or 0)
+    total = _q5_boq(b.total_price or 0)
     return {
         "id": str(b.id),
         "facility_id": str(b.facility_id),
@@ -319,10 +319,10 @@ def create_boq_item(
 ):
     rev = _resolve_writable_revision_for_facility(db, str(data.facility_id))
 
-    # Volume/unit_price/total_price sudah di-quantize 2 dp oleh Pydantic validator.
+    # Volume/unit_price/total_price sudah di-quantize 5 dp oleh Pydantic validator.
     # Hitung total_price = volume × unit_price kalau user tidak isi manual.
     if (not data.total_price or data.total_price == 0) and data.volume and data.unit_price:
-        data.total_price = _q2_boq(data.volume * data.unit_price)
+        data.total_price = _q5_boq(data.volume * data.unit_price)
 
     payload = data.model_dump()
     # Never trust a client-supplied revision id here — the resolver decides.
@@ -366,7 +366,7 @@ def bulk_create(
         rev = touched_revisions[str(d.facility_id)]
 
         if (not d.total_price or d.total_price == 0) and d.volume and d.unit_price:
-            d.total_price = _q2_boq(d.volume * d.unit_price)
+            d.total_price = _q5_boq(d.volume * d.unit_price)
         payload = d.model_dump()
         payload.pop("boq_revision_id", None)
         item = BOQItem(boq_revision_id=rev.id, **payload)
@@ -466,9 +466,9 @@ def update_boq_item(
             setattr(item, field, val)
 
     # Auto re-derive total_price jika volume/unit_price diubah dan user tidak
-    # mengirim total_price baru. Pakai _q2_boq supaya hasilnya tetap 2 dp.
+    # mengirim total_price baru. Pakai _q5_boq supaya hasilnya tetap 5 dp.
     if vol_or_price_changed and "total_price" not in dump:
-        item.total_price = _q2_boq((item.volume or 0) * (item.unit_price or 0))
+        item.total_price = _q5_boq((item.volume or 0) * (item.unit_price or 0))
 
     db.flush()
     if parent_changed and item.boq_revision_id:
@@ -749,14 +749,14 @@ async def import_excel(
             created_items: list = []
             for order_idx, it in enumerate(fac_data["items"]):
 
-                # Aturan presisi sistem: volume & unit_price 2 dp eksak.
+                # Aturan presisi sistem: volume & unit_price 5 dp eksak.
                 # total_price = volume × unit_price (Decimal, exact).
-                volume_q = _q2_boq(it.get("volume") or 0)
-                price_q = _q2_boq(it.get("unit_price") or 0)
-                total_q = _q2_boq(it.get("total_price") or 0)
-                if total_q == Decimal("0.00") and volume_q and price_q:
+                volume_q = _q5_boq(it.get("volume") or 0)
+                price_q = _q5_boq(it.get("unit_price") or 0)
+                total_q = _q5_boq(it.get("total_price") or 0)
+                if total_q == Decimal("0.00000") and volume_q and price_q:
                     total_q = (volume_q * price_q).quantize(
-                        Decimal("0.01"), rounding=ROUND_HALF_UP
+                        Decimal("0.00001"), rounding=ROUND_HALF_UP
                     )
 
                 new_item = BOQItem(

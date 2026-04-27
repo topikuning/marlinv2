@@ -35,20 +35,20 @@ export function fmtNum(n, dec = 0) {
 }
 
 /**
- * fmtVolume — format volume konsisten dengan tipe DB Numeric(18,4).
- * Smart decimal: trailing zeros dipotong supaya "10" tidak tampil "10,0000".
- * Tapi tetap presisi up to 4 digit kalau ada fraction.
- *   10       → "10"
- *   10.5     → "10,5"
- *   10.55    → "10,55"
- *   10.5555  → "10,5555"
- *   10.55555 → "10,5556"  (rounded to 4 decimals)
+ * fmtVolume — format volume konsisten dengan aturan presisi sistem 5 dp.
+ * Smart decimal: trailing zeros dipotong supaya "10" tidak tampil "10,00000".
+ * Tapi tetap presisi up to 5 digit kalau ada fraction.
+ *   10        → "10"
+ *   10.5      → "10,5"
+ *   10.55     → "10,55"
+ *   10.55555  → "10,55555"
+ *   10.555555 → "10,55556"  (rounded to 5 decimals)
  */
 export function fmtVolume(n) {
   if (n === null || n === undefined || isNaN(n)) return "—";
   return Number(n).toLocaleString("id-ID", {
     minimumFractionDigits: 0,
-    maximumFractionDigits: 4,
+    maximumFractionDigits: 5,
   });
 }
 

@@ -22,25 +22,25 @@ from typing import List, Optional, Dict
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 
-_TWOPLACES = Decimal("0.01")
+_FIVEPLACES = Decimal("0.00001")
 
 
-def _q2(v):
-    """Quantize ke 2 dp (ROUND_HALF_UP). Lihat aturan presisi sistem di
+def _q5(v):
+    """Quantize ke 5 dp (ROUND_HALF_UP). Lihat aturan presisi sistem di
     backend/app/schemas/schemas.py."""
     from decimal import InvalidOperation
     if v is None:
-        return Decimal("0.00")
+        return Decimal("0.00000")
     if isinstance(v, float) and (v != v or v in (float("inf"), float("-inf"))):
-        return Decimal("0.00")
+        return Decimal("0.00000")
     if not isinstance(v, Decimal):
         try:
             v = Decimal(str(v))
         except (TypeError, ValueError, InvalidOperation):
-            return Decimal("0.00")
+            return Decimal("0.00000")
     if v.is_nan() or v.is_infinite():
-        return Decimal("0.00")
-    return v.quantize(_TWOPLACES, rounding=ROUND_HALF_UP)
+        return Decimal("0.00000")
+    return v.quantize(_FIVEPLACES, rounding=ROUND_HALF_UP)
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -138,11 +138,11 @@ def recalc_revision_totals(db: Session, rev: BOQRevision) -> None:
         )
         .all()
     )
-    # Pakai _q2 supaya total_value selalu 2 dp eksak — sumber data legacy
+    # Pakai _q5 supaya total_value selalu 5 dp eksak — sumber data legacy
     # mungkin masih punya presisi lebih tinggi.
-    grand = sum((_q2(l.total_price or 0) for l in leaves), Decimal("0.00"))
+    grand = sum((_q5(l.total_price or 0) for l in leaves), Decimal("0.00000"))
     for l in leaves:
-        tp = _q2(l.total_price or 0)
+        tp = _q5(l.total_price or 0)
         l.weight_pct = (tp / grand) if grand > 0 else Decimal("0")
         db.add(l)
 
@@ -237,9 +237,9 @@ def clone_revision_for_addendum(
             display_order=old.display_order,
             description=old.description,
             unit=old.unit,
-            volume=_q2(old.volume),
-            unit_price=_q2(old.unit_price),
-            total_price=_q2(old.total_price),
+            volume=_q5(old.volume),
+            unit_price=_q5(old.unit_price),
+            total_price=_q5(old.total_price),
             weight_pct=old.weight_pct,
             planned_start_week=old.planned_start_week,
             planned_duration_weeks=old.planned_duration_weeks,

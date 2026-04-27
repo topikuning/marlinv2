@@ -14,29 +14,29 @@ from app.models.models import (
 # ─── Generic ─────────────────────────────────────────────────────────────────
 
 # Aturan presisi sistem: volume, unit_price, total_price, volume_delta,
-# cost_impact SELALU 2 dp eksak. Apa pun yang masuk via API (ketikan user,
-# Excel parser, kalkulasi frontend) di-quantize ke 2 dp. Validator ini dipakai
+# cost_impact SELALU 5 dp eksak. Apa pun yang masuk via API (ketikan user,
+# Excel parser, kalkulasi frontend) di-quantize ke 5 dp. Validator ini dipakai
 # berulang di schema BOQItemCreate/Update, VOItemInput, dst.
-_TWOPLACES = Decimal("0.01")
+_FIVEPLACES = Decimal("0.00001")
 
 
-def _quantize_2dp(v: Any) -> Optional[Decimal]:
-    """Quantize input ke 2 dp (ROUND_HALF_UP). Defensive vs garbage input
-    (None/NaN/Inf/non-numeric) → None (atau Decimal('0.00') untuk default).
+def _quantize_5dp(v: Any) -> Optional[Decimal]:
+    """Quantize input ke 5 dp (ROUND_HALF_UP). Defensive vs garbage input
+    (None/NaN/Inf/non-numeric) → None (atau Decimal('0.00000') untuk default).
     Return None untuk None input agar Optional[Decimal] field bisa tetap None
     (dipakai sama "field tidak di-set")."""
     if v is None:
         return None
     if isinstance(v, float) and (v != v or v in (float("inf"), float("-inf"))):
-        return Decimal("0.00")
+        return Decimal("0.00000")
     if not isinstance(v, Decimal):
         try:
             v = Decimal(str(v))
         except (TypeError, ValueError, InvalidOperation):
-            return Decimal("0.00")
+            return Decimal("0.00000")
     if v.is_nan() or v.is_infinite():
-        return Decimal("0.00")
-    return v.quantize(_TWOPLACES, rounding=ROUND_HALF_UP)
+        return Decimal("0.00000")
+    return v.quantize(_FIVEPLACES, rounding=ROUND_HALF_UP)
 
 
 class ORMBase(BaseModel):
@@ -327,9 +327,9 @@ class BOQItemCreate(BaseModel):
 
     @field_validator("volume", "unit_price", "total_price", mode="before")
     @classmethod
-    def _q2_required(cls, v):
-        q = _quantize_2dp(v)
-        return q if q is not None else Decimal("0.00")
+    def _q5_required(cls, v):
+        q = _quantize_5dp(v)
+        return q if q is not None else Decimal("0.00000")
 
 
 class BOQItemUpdate(BaseModel):
@@ -350,8 +350,8 @@ class BOQItemUpdate(BaseModel):
 
     @field_validator("volume", "unit_price", "total_price", mode="before")
     @classmethod
-    def _q2_optional(cls, v):
-        return _quantize_2dp(v)
+    def _q5_optional(cls, v):
+        return _quantize_5dp(v)
 
 
 class BOQItemOut(ORMBase):
@@ -499,9 +499,9 @@ class ProgressItemInput(BaseModel):
 
     @field_validator("volume_this_week", "volume_cumulative", mode="before")
     @classmethod
-    def _q2(cls, v):
-        q = _quantize_2dp(v)
-        return q if q is not None else Decimal("0.00")
+    def _q5(cls, v):
+        q = _quantize_5dp(v)
+        return q if q is not None else Decimal("0.00000")
 
 
 class WeeklyReportCreate(BaseModel):
@@ -705,9 +705,9 @@ class VOItemInput(BaseModel):
 
     @field_validator("volume_delta", "unit_price", mode="before")
     @classmethod
-    def _q2(cls, v):
-        q = _quantize_2dp(v)
-        return q if q is not None else Decimal("0.00")
+    def _q5(cls, v):
+        q = _quantize_5dp(v)
+        return q if q is not None else Decimal("0.00000")
 
 
 class VariationOrderCreate(BaseModel):
