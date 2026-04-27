@@ -744,30 +744,46 @@ _TWOPLACES = Decimal("0.01")
 def _q2(v) -> Decimal:
     """Quantize to 2 decimal places (ROUND_HALF_UP). Aturan sistem: volume &
     harga satuan SELALU 2 dp, supaya vol_baru di Excel sama persis dengan
-    volume aktif di DB tanpa float-noise."""
+    volume aktif di DB tanpa float-noise.
+
+    Defensive vs garbage input: None, NaN, Infinity, atau string non-numeric
+    semua jadi Decimal('0.00') (Excel cell kosong sering masuk sebagai NaN
+    dari pandas, dan Decimal.quantize meledak di NaN/Inf)."""
+    from decimal import InvalidOperation
     if v is None:
         return Decimal("0.00")
+    if isinstance(v, float) and (v != v or v in (float("inf"), float("-inf"))):
+        return Decimal("0.00")
     if not isinstance(v, Decimal):
-        v = Decimal(str(v))
+        try:
+            v = Decimal(str(v))
+        except (TypeError, ValueError, InvalidOperation):
+            return Decimal("0.00")
+    if v.is_nan() or v.is_infinite():
+        return Decimal("0.00")
     return v.quantize(_TWOPLACES, rounding=ROUND_HALF_UP)
 
 
 def _safe_decimal(v) -> Optional[Decimal]:
     """Convert Excel cell value to Decimal preserving the user-typed precision.
-    Returns None when the cell is missing/empty/NaN (vs. 0 which is a real value).
-    Goes via str() so float values use Python's shortest round-trip representation
-    (e.g. 33.36 not 33.35999999999999943155847532...).
+    Returns None when the cell is missing/empty/NaN/Inf (vs. 0 which is a
+    real value). Goes via str() so float values use Python's shortest
+    round-trip representation (e.g. 33.36 not 33.35999999999999943155847532...).
     """
     from decimal import InvalidOperation
     if v is None:
         return None
-    if isinstance(v, float) and pd.isna(v):
-        return None
+    if isinstance(v, float):
+        if pd.isna(v) or v in (float("inf"), float("-inf")):
+            return None
     if isinstance(v, str):
         v = v.strip()
         if not v:
             return None
     try:
-        return Decimal(str(v))
+        d = Decimal(str(v))
     except (TypeError, ValueError, InvalidOperation):
         return None
+    if d.is_nan() or d.is_infinite():
+        return None
+    return d

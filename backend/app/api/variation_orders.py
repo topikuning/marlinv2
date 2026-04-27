@@ -18,11 +18,20 @@ _TWOPLACES = Decimal("0.01")
 
 def _q2(v) -> Decimal:
     """Quantize ke 2 dp (ROUND_HALF_UP). Aturan presisi sistem: volume &
-    unit_price disimpan & dihitung dengan 2 dp eksak."""
+    unit_price disimpan & dihitung dengan 2 dp eksak. Defensive vs garbage
+    input (None/NaN/Inf/non-numeric) → Decimal('0.00')."""
+    from decimal import InvalidOperation
     if v is None:
         return Decimal("0.00")
+    if isinstance(v, float) and (v != v or v in (float("inf"), float("-inf"))):
+        return Decimal("0.00")
     if not isinstance(v, Decimal):
-        v = Decimal(str(v))
+        try:
+            v = Decimal(str(v))
+        except (TypeError, ValueError, InvalidOperation):
+            return Decimal("0.00")
+    if v.is_nan() or v.is_infinite():
+        return Decimal("0.00")
     return v.quantize(_TWOPLACES, rounding=ROUND_HALF_UP)
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query, UploadFile, File
