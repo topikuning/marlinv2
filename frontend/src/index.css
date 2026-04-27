@@ -253,6 +253,123 @@
   }
 }
 
+/* ─── body.dark global overrides ────────────────────────────────────────────
+   Existing pages (Weekly, Daily, Payments, dll) pakai utility class lama
+   (.card, .input, .table-th, dst) yang hardcoded warna terang. Override
+   di sini supaya ketika body.dark aktif, class-class lama otomatis
+   ikut adaptif tanpa harus rewrite tiap page. */
+body.dark .card {
+  background: var(--c-surface);
+  backdrop-filter: var(--c-surface-filter);
+  -webkit-backdrop-filter: var(--c-surface-filter);
+  border-color: var(--c-border);
+  color: var(--c-text-1);
+}
+body.dark .input,
+body.dark .select,
+body.dark .textarea {
+  background: var(--c-input-bg);
+  border-color: var(--c-input-border);
+  color: var(--c-text-1);
+}
+body.dark .input::placeholder,
+body.dark .select::placeholder,
+body.dark .textarea::placeholder {
+  color: var(--c-text-3);
+}
+body.dark .input:focus,
+body.dark .select:focus,
+body.dark .textarea:focus {
+  border-color: rgba(91, 139, 255, 0.6);
+  box-shadow: 0 0 0 3px rgba(91, 139, 255, 0.15);
+}
+body.dark .input:disabled,
+body.dark .select:disabled,
+body.dark .textarea:disabled {
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--c-text-3);
+}
+body.dark .label {
+  color: var(--c-text-2);
+}
+body.dark .page-title {
+  color: var(--c-text-1);
+}
+body.dark .page-sub {
+  color: var(--c-text-2);
+}
+body.dark .btn-secondary {
+  background: var(--c-surface);
+  border-color: var(--c-border);
+  color: var(--c-text-1);
+}
+body.dark .btn-secondary:hover {
+  background: rgba(91, 139, 255, 0.08);
+  border-color: rgba(91, 139, 255, 0.4);
+}
+body.dark .btn-ghost {
+  color: var(--c-text-2);
+}
+body.dark .btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--c-text-1);
+}
+body.dark .table-th {
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--c-text-3);
+  border-bottom-color: var(--c-divider);
+}
+body.dark .table-td {
+  color: var(--c-text-1);
+  border-bottom-color: var(--c-divider-lite);
+}
+body.dark .kpi-label {
+  color: var(--c-text-3);
+}
+body.dark .kpi-value {
+  color: var(--c-text-1);
+}
+
+/* Bg utility overrides untuk class tailwind raw yang banyak dipakai
+   sebagai surface tetap (mis. modal, card kustom). Hanya yang berdampak
+   ke dark mode — biarkan light mode utuh. */
+body.dark .bg-white {
+  background-color: var(--c-surface) !important;
+}
+body.dark .border-ink-200,
+body.dark .border-ink-200\/70,
+body.dark .border-ink-100 {
+  border-color: var(--c-divider) !important;
+}
+body.dark .text-ink-900 {
+  color: var(--c-text-1) !important;
+}
+body.dark .text-ink-800,
+body.dark .text-ink-700 {
+  color: var(--c-text-1) !important;
+}
+body.dark .text-ink-600,
+body.dark .text-ink-500 {
+  color: var(--c-text-2) !important;
+}
+body.dark .text-ink-400,
+body.dark .text-ink-300 {
+  color: var(--c-text-3) !important;
+}
+body.dark .bg-ink-50 {
+  background-color: rgba(255, 255, 255, 0.03) !important;
+}
+body.dark .bg-ink-100 {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+}
+body.dark .hover\:bg-ink-50:hover,
+body.dark .hover\:bg-ink-100:hover {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+}
+body.dark .hover\:bg-brand-50\/40:hover {
+  background-color: rgba(91, 139, 255, 0.08) !important;
+}
+
 /* ─── AG Grid theming (light + dark) ─────────────────────────────────────── */
 .ag-theme-quartz {
   --ag-border-color: #e5e7eb;

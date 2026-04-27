@@ -56,8 +56,17 @@ export function PageHeader({ title, description, actions }) {
   return (
     <div className="flex items-start justify-between gap-4 mb-6 flex-wrap">
       <div>
-        <h1 className="page-title">{title}</h1>
-        {description && <p className="page-sub">{description}</p>}
+        <h1
+          className="font-display tracking-tight text-xl md:text-2xl font-semibold"
+          style={{ color: "var(--c-text-1)" }}
+        >
+          {title}
+        </h1>
+        {description && (
+          <p className="text-sm mt-0.5" style={{ color: "var(--c-text-2)" }}>
+            {description}
+          </p>
+        )}
       </div>
       {actions && <div className="flex items-center gap-2">{actions}</div>}
     </div>
@@ -68,13 +77,24 @@ export function Empty({ icon: Icon, title, description, action }) {
   return (
     <div className="text-center py-16">
       {Icon && (
-        <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-ink-100 text-ink-400 mb-4">
+        <div
+          className="inline-flex items-center justify-center w-14 h-14 rounded-2xl mb-4"
+          style={{
+            background: "var(--c-surface)",
+            border: "1px solid var(--c-border)",
+            color: "var(--c-text-3)",
+          }}
+        >
           <Icon size={24} />
         </div>
       )}
-      <p className="text-ink-700 font-medium">{title}</p>
+      <p className="font-medium" style={{ color: "var(--c-text-1)" }}>
+        {title}
+      </p>
       {description && (
-        <p className="text-sm text-ink-500 mt-1">{description}</p>
+        <p className="text-sm mt-1" style={{ color: "var(--c-text-2)" }}>
+          {description}
+        </p>
       )}
       {action && <div className="mt-4">{action}</div>}
     </div>
@@ -87,7 +107,10 @@ export function Spinner({ size = 18 }) {
 
 export function PageLoader() {
   return (
-    <div className="flex items-center justify-center py-20 text-ink-400">
+    <div
+      className="flex items-center justify-center py-20"
+      style={{ color: "var(--c-text-3)" }}
+    >
       <Spinner size={28} />
     </div>
   );
@@ -98,13 +121,27 @@ export function SearchInput({ value, onChange, placeholder = "Cari..." }) {
     <div className="relative">
       <Search
         size={14}
-        className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400"
+        className="absolute left-3 top-1/2 -translate-y-1/2"
+        style={{ color: "var(--c-text-3)" }}
       />
       <input
         value={value || ""}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="input pl-8 py-1.5 w-60 text-xs"
+        className="pl-8 pr-3 py-1.5 w-60 text-xs rounded-lg outline-none transition-colors"
+        style={{
+          background: "var(--c-input-bg)",
+          border: "1px solid var(--c-input-border)",
+          color: "var(--c-text-1)",
+        }}
+        onFocus={(e) => {
+          e.currentTarget.style.borderColor = "rgba(91,139,255,0.6)";
+          e.currentTarget.style.boxShadow = "0 0 0 3px rgba(91,139,255,0.15)";
+        }}
+        onBlur={(e) => {
+          e.currentTarget.style.borderColor = "var(--c-input-border)";
+          e.currentTarget.style.boxShadow = "none";
+        }}
       />
     </div>
   );
