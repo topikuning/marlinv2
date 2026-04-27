@@ -35,7 +35,7 @@ export default function AppShell({ children }) {
 
   const Sidebar = ({ mobile }) => (
     <aside
-      className={`${mobile ? "w-72" : "w-64"} bg-ink-900 text-ink-300 flex flex-col h-full`}
+      className={`${mobile ? "w-72" : "w-64"} bg-gradient-to-b from-ink-950 via-ink-900 to-ink-900 text-ink-300 flex flex-col h-full`}
     >
       <div className="h-16 flex items-center gap-2.5 px-5 border-b border-white/5 flex-shrink-0">
         <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center shadow-lg">
@@ -95,7 +95,7 @@ export default function AppShell({ children }) {
         )}
       </nav>
 
-      <div className="border-t border-white/5 p-3">
+      <div className="border-t border-white/5 p-3 bg-black/10">
         <div className="flex items-center gap-3 px-2 py-2">
           <div className="w-8 h-8 rounded-full bg-brand-600/30 flex items-center justify-center flex-shrink-0">
             <User size={14} className="text-brand-300" />
@@ -121,7 +121,7 @@ export default function AppShell({ children }) {
   );
 
   return (
-    <div className="flex h-screen overflow-hidden bg-ink-50">
+    <div className="flex h-screen overflow-hidden bg-gradient-to-br from-ink-50 via-slate-50 to-brand-50/20">
       <div className="hidden md:flex flex-shrink-0">
         <Sidebar />
       </div>
@@ -137,7 +137,7 @@ export default function AppShell({ children }) {
         </div>
       )}
       <div className="flex-1 flex flex-col overflow-hidden">
-        <header className="h-16 bg-white border-b border-ink-200 flex items-center px-4 md:px-6 gap-4 flex-shrink-0">
+        <header className="h-16 bg-white/80 backdrop-blur border-b border-ink-200 flex items-center px-4 md:px-6 gap-4 flex-shrink-0">
           <button
             onClick={() => setMobileOpen(true)}
             className="md:hidden p-2 rounded-lg hover:bg-ink-100 text-ink-500"
@@ -164,7 +164,7 @@ export default function AppShell({ children }) {
           </div>
         </header>
         <main className="flex-1 overflow-y-auto">
-          <div className="page-enter">{children}</div>
+          <div className="page-enter pb-8">{children}</div>
         </main>
       </div>
     </div>

@@ -1,5 +1,5 @@
-import { X, ChevronDown, Search, Loader2 } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { X, Search, Loader2, SlidersHorizontal } from "lucide-react";
+import { useEffect } from "react";
 
 export function Modal({ open, onClose, title, children, size = "md", footer }) {
   useEffect(() => {
@@ -185,5 +185,76 @@ export function ConfirmDialog({ open, title, description, onConfirm, onCancel, d
     >
       <p className="text-sm text-ink-600">{description}</p>
     </Modal>
+  );
+}
+
+export function DataPanel({ title, subtitle, right, children }) {
+  return (
+    <section className="card overflow-hidden">
+      {(title || right) && (
+        <div className="px-4 md:px-5 py-3 border-b border-ink-200 bg-white/95 backdrop-blur-sm flex flex-wrap items-start justify-between gap-3">
+          <div>
+            {title && <h3 className="font-semibold text-ink-900">{title}</h3>}
+            {subtitle && <p className="text-xs text-ink-500 mt-0.5">{subtitle}</p>}
+          </div>
+          {right && <div className="flex items-center gap-2">{right}</div>}
+        </div>
+      )}
+      {children}
+    </section>
+  );
+}
+
+export function TableToolbar({
+  search,
+  onSearch,
+  searchPlaceholder = "Cari data...",
+  left,
+  right,
+}) {
+  return (
+    <div className="px-4 md:px-5 py-3 border-b border-ink-200 bg-ink-50/80 flex flex-wrap items-center gap-2.5">
+      <SearchInput
+        value={search || ""}
+        onChange={onSearch}
+        placeholder={searchPlaceholder}
+      />
+      {left}
+      <div className="ml-auto flex items-center gap-2">{right}</div>
+    </div>
+  );
+}
+
+export function DataTableWrap({ children }) {
+  return (
+    <div className="overflow-auto max-h-[65vh]">
+      {children}
+    </div>
+  );
+}
+
+export function DensityToggle({ value = "normal", onChange }) {
+  const opts = [
+    { id: "compact", label: "Ringkas" },
+    { id: "normal", label: "Normal" },
+  ];
+  return (
+    <div className="inline-flex items-center gap-1 rounded-lg border border-ink-200 bg-white p-1">
+      <SlidersHorizontal size={13} className="text-ink-400 ml-1" />
+      {opts.map((opt) => (
+        <button
+          key={opt.id}
+          type="button"
+          className={`px-2 py-1 text-xs rounded-md transition ${
+            value === opt.id
+              ? "bg-brand-600 text-white"
+              : "text-ink-600 hover:bg-ink-100"
+          }`}
+          onClick={() => onChange?.(opt.id)}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
   );
 }

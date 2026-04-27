@@ -6,7 +6,7 @@ import {
 import { usersAPI, rbacAPI, contractsAPI } from "@/api";
 import {
   PageHeader, PageLoader, Modal, Empty, Spinner,
-  ConfirmDialog, SearchInput,
+  ConfirmDialog, TableToolbar, DataPanel, DataTableWrap, DensityToggle,
 } from "@/components/ui";
 import { fmtDate, parseApiError } from "@/utils/format";
 
@@ -19,6 +19,7 @@ export default function UsersPage() {
   const [editing, setEditing] = useState(null);
   const [resetting, setResetting] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
+  const [density, setDensity] = useState("normal");
 
   useEffect(() => {
     Promise.all([
@@ -77,7 +78,6 @@ export default function UsersPage() {
         description="Kelola akun pengguna sistem"
         actions={
           <>
-            <SearchInput value={search} onChange={setSearch} />
             <button className="btn-primary" onClick={() => setEditing({})}>
               <Plus size={14} /> User Baru
             </button>
@@ -89,89 +89,100 @@ export default function UsersPage() {
       ) : filtered.length === 0 ? (
         <Empty icon={UsersIcon} title="Belum ada user" />
       ) : (
-        <div className="card overflow-hidden">
-          <table className="w-full">
-            <thead>
-              <tr>
-                <th className="table-th">User</th>
-                <th className="table-th">Role</th>
-                <th className="table-th">Kontrak</th>
-                <th className="table-th">Last Login</th>
-                <th className="table-th">Status</th>
-                <th className="table-th"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((u) => (
-                <tr key={u.id}>
-                  <td className="table-td">
-                    <p className="font-medium flex items-center gap-2">
-                      {u.full_name}
-                      {u.auto_provisioned && (
-                        <span className="badge-gray text-[10px]" title="Dibuat otomatis dari PPK/Perusahaan">
-                          Auto
-                        </span>
-                      )}
-                      {u.must_change_password && (
-                        <span className="badge-yellow text-[10px]" title="Harus ganti password saat login">
-                          Ganti PW
-                        </span>
-                      )}
-                    </p>
-                    <p className="text-xs text-ink-500">
-                      {u.email} · @{u.username}
-                    </p>
-                  </td>
-                  <td className="table-td">
-                    <span className="badge-blue">{u.role?.name || u.role_name || "—"}</span>
-                  </td>
-                  <td className="table-td text-xs">
-                    {u.assigned_contract_ids?.length
-                      ? `${u.assigned_contract_ids.length} kontrak`
-                      : "Semua"}
-                  </td>
-                  <td className="table-td text-xs">
-                    {u.last_login_at ? fmtDate(u.last_login_at) : "—"}
-                  </td>
-                  <td className="table-td">
-                    {u.is_active ? (
-                      <span className="badge-green">
-                        <UserCheck size={10} /> Aktif
-                      </span>
-                    ) : (
-                      <span className="badge-gray">
-                        <UserX size={10} /> Non-aktif
-                      </span>
-                    )}
-                  </td>
-                  <td className="table-td">
-                    <div className="flex gap-1">
-                      <button
-                        className="btn-ghost btn-xs"
-                        onClick={() => setEditing(u)}
-                      >
-                        <Edit2 size={11} />
-                      </button>
-                      <button
-                        className="btn-ghost btn-xs"
-                        onClick={() => setResetting(u)}
-                        title="Reset password"
-                      >
-                        <KeyRound size={11} />
-                      </button>
-                      <button
-                        className="btn-ghost btn-xs text-red-600"
-                        onClick={() => setConfirmDel(u)}
-                      >
-                        <Trash2 size={11} />
-                      </button>
-                    </div>
-                  </td>
+        <DataPanel
+          title="Daftar Pengguna"
+          subtitle={`${filtered.length} user ditampilkan`}
+          right={<DensityToggle value={density} onChange={setDensity} />}
+        >
+          <TableToolbar
+            search={search}
+            onSearch={setSearch}
+            searchPlaceholder="Cari nama, email, username, role..."
+          />
+          <DataTableWrap>
+            <table className="w-full">
+              <thead>
+                <tr>
+                  <th className="table-th">User</th>
+                  <th className="table-th">Role</th>
+                  <th className="table-th">Kontrak</th>
+                  <th className="table-th">Last Login</th>
+                  <th className="table-th">Status</th>
+                  <th className="table-th text-right">Aksi</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {filtered.map((u) => (
+                  <tr key={u.id} className="table-row-hover">
+                    <td className={density === "compact" ? "table-td-compact" : "table-td"}>
+                      <p className="font-medium flex items-center gap-2">
+                        {u.full_name}
+                        {u.auto_provisioned && (
+                          <span className="badge-gray text-[10px]" title="Dibuat otomatis dari PPK/Perusahaan">
+                            Auto
+                          </span>
+                        )}
+                        {u.must_change_password && (
+                          <span className="badge-yellow text-[10px]" title="Harus ganti password saat login">
+                            Ganti PW
+                          </span>
+                        )}
+                      </p>
+                      <p className="text-xs text-ink-500">
+                        {u.email} · @{u.username}
+                      </p>
+                    </td>
+                    <td className={density === "compact" ? "table-td-compact" : "table-td"}>
+                      <span className="badge-blue">{u.role?.name || u.role_name || "—"}</span>
+                    </td>
+                    <td className={density === "compact" ? "table-td-compact text-xs" : "table-td text-xs"}>
+                      {u.assigned_contract_ids?.length
+                        ? `${u.assigned_contract_ids.length} kontrak`
+                        : "Semua"}
+                    </td>
+                    <td className={density === "compact" ? "table-td-compact text-xs" : "table-td text-xs"}>
+                      {u.last_login_at ? fmtDate(u.last_login_at) : "—"}
+                    </td>
+                    <td className={density === "compact" ? "table-td-compact" : "table-td"}>
+                      {u.is_active ? (
+                        <span className="badge-green">
+                          <UserCheck size={10} /> Aktif
+                        </span>
+                      ) : (
+                        <span className="badge-gray">
+                          <UserX size={10} /> Non-aktif
+                        </span>
+                      )}
+                    </td>
+                    <td className={density === "compact" ? "table-td-compact" : "table-td"}>
+                      <div className="flex gap-1 justify-end">
+                        <button
+                          className="btn-ghost btn-xs"
+                          onClick={() => setEditing(u)}
+                        >
+                          <Edit2 size={11} />
+                        </button>
+                        <button
+                          className="btn-ghost btn-xs"
+                          onClick={() => setResetting(u)}
+                          title="Reset password"
+                        >
+                          <KeyRound size={11} />
+                        </button>
+                        <button
+                          className="btn-ghost btn-xs text-red-600"
+                          onClick={() => setConfirmDel(u)}
+                        >
+                          <Trash2 size={11} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </DataTableWrap>
+        </DataPanel>
       )}
 
       {editing !== null && (

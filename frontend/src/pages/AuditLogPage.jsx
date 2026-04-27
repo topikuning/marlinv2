@@ -3,7 +3,7 @@ import toast from "react-hot-toast";
 import { History, Filter, ChevronDown, ChevronRight as ChevRight } from "lucide-react";
 import { auditAPI } from "@/api";
 import {
-  PageHeader, PageLoader, Empty, SearchInput, Modal,
+  PageHeader, PageLoader, Empty, Modal, DataPanel, TableToolbar, DataTableWrap, DensityToggle,
 } from "@/components/ui";
 import { parseApiError } from "@/utils/format";
 
@@ -49,6 +49,7 @@ export default function AuditLogPage() {
   const [dateTo, setDateTo] = useState("");
   const [facets, setFacets] = useState({ actions: [], entity_types: [] });
   const [detail, setDetail] = useState(null);
+  const [density, setDensity] = useState("normal");
 
   useEffect(() => {
     auditAPI.facets().then(({ data }) => setFacets(data)).catch(() => {});
@@ -95,9 +96,10 @@ export default function AuditLogPage() {
       <div className="card p-4 mb-4">
         <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
           <div className="md:col-span-2">
-            <SearchInput
+            <input
+              className="input"
               value={q}
-              onChange={setQ}
+              onChange={(e) => setQ(e.target.value)}
               placeholder="Cari nama user, email, atau entity id..."
             />
           </div>
@@ -142,8 +144,22 @@ export default function AuditLogPage() {
       ) : items.length === 0 ? (
         <Empty icon={History} title="Tidak ada audit log" description="Belum ada aktivitas yang cocok dengan filter ini." />
       ) : (
-        <div className="card overflow-hidden">
-          <div className="overflow-x-auto">
+        <DataPanel
+          title="Tabel Audit"
+          subtitle={`${total} entri total`}
+          right={<DensityToggle value={density} onChange={setDensity} />}
+        >
+          <TableToolbar
+            search={q}
+            onSearch={setQ}
+            searchPlaceholder="Quick search audit log..."
+            right={(
+              <button className="btn-secondary btn-xs" onClick={() => { setPage(1); load(); }}>
+                Refresh
+              </button>
+            )}
+          />
+          <DataTableWrap>
             <table className="w-full">
               <thead>
                 <tr>
@@ -158,29 +174,29 @@ export default function AuditLogPage() {
               </thead>
               <tbody>
                 {items.map((r) => (
-                  <tr key={r.id} className="hover:bg-ink-50">
-                    <td className="table-td font-mono text-[11px] whitespace-nowrap">
+                  <tr key={r.id} className="table-row-hover">
+                    <td className={density === "compact" ? "table-td-compact font-mono text-[11px] whitespace-nowrap" : "table-td font-mono text-[11px] whitespace-nowrap"}>
                       {fmtDateTime(r.created_at)}
                     </td>
-                    <td className="table-td text-xs">
+                    <td className={density === "compact" ? "table-td-compact text-xs" : "table-td text-xs"}>
                       {r.user_name || "—"}
                       {r.user_email && (
                         <span className="text-ink-400 block text-[10px]">{r.user_email}</span>
                       )}
                     </td>
-                    <td className="table-td">
+                    <td className={density === "compact" ? "table-td-compact" : "table-td"}>
                       <span className={`text-[10px] px-2 py-0.5 rounded border font-mono ${ACTION_BADGE[r.action] || "bg-ink-100 text-ink-700 border-ink-200"}`}>
                         {r.action}
                       </span>
                     </td>
-                    <td className="table-td text-xs">{r.entity_type}</td>
-                    <td className="table-td font-mono text-[10px] text-ink-500 max-w-[180px] truncate" title={r.entity_id}>
+                    <td className={density === "compact" ? "table-td-compact text-xs" : "table-td text-xs"}>{r.entity_type}</td>
+                    <td className={density === "compact" ? "table-td-compact font-mono text-[10px] text-ink-500 max-w-[180px] truncate" : "table-td font-mono text-[10px] text-ink-500 max-w-[180px] truncate"} title={r.entity_id}>
                       {r.entity_id || "—"}
                     </td>
-                    <td className="table-td text-[10px] text-ink-400 font-mono">
+                    <td className={density === "compact" ? "table-td-compact text-[10px] text-ink-400 font-mono" : "table-td text-[10px] text-ink-400 font-mono"}>
                       {r.ip_address || "—"}
                     </td>
-                    <td className="table-td text-right">
+                    <td className={density === "compact" ? "table-td-compact text-right" : "table-td text-right"}>
                       {r.changes && Object.keys(r.changes).length > 0 && (
                         <button
                           className="btn-ghost btn-xs"
@@ -194,8 +210,8 @@ export default function AuditLogPage() {
                 ))}
               </tbody>
             </table>
-          </div>
-        </div>
+          </DataTableWrap>
+        </DataPanel>
       )}
 
       {/* Pagination */}

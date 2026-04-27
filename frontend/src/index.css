@@ -93,10 +93,13 @@
   }
   .table-th {
     @apply px-4 py-3 text-left text-[11px] uppercase tracking-wider font-semibold text-ink-500
-           bg-ink-50 border-b border-ink-200;
+           bg-ink-50 border-b border-ink-200 sticky top-0 z-10 backdrop-blur-sm;
   }
   .table-td {
     @apply px-4 py-3 text-sm text-ink-700 border-b border-ink-100;
+  }
+  .table-td-compact {
+    @apply px-4 py-2 text-xs text-ink-700 border-b border-ink-100;
   }
   .kpi-label {
     @apply text-xs font-medium text-ink-500 uppercase tracking-wide;
@@ -134,6 +137,10 @@
   font-size: 11px;
   letter-spacing: 0.02em;
   text-transform: uppercase;
+}
+
+.table-row-hover {
+  @apply hover:bg-brand-50/40 transition-colors;
 }
 
 /* Scrollbar */
