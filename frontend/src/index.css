@@ -5,11 +5,79 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ─── Design tokens (dark default per Marlin Redesign handoff) ──────────────
+   Light mode = body.light override. Sidebar + header SELALU pakai token
+   ini. Page content existing yang masih hardcode bg-white/text-ink-* tetap
+   bekerja sampai di-redesign satu per satu. */
 @layer base {
   :root {
     color-scheme: light;
     --grid-border: #e5e7eb;
+
+    /* Surface (glass) */
+    --c-surface:        rgba(255, 255, 255, 0.055);
+    --c-surface-filter: blur(24px);
+    --c-border:         rgba(255, 255, 255, 0.09);
+    --c-shadow:         none;
+    --c-modal-bg:       rgba(8, 15, 32, 0.97);
+
+    /* Text */
+    --c-text-1: rgba(255, 255, 255, 0.95);
+    --c-text-2: rgba(255, 255, 255, 0.55);
+    --c-text-3: rgba(255, 255, 255, 0.32);
+
+    /* Header & dividers */
+    --c-header-bg:    rgba(5, 10, 24, 0.72);
+    --c-divider:      rgba(255, 255, 255, 0.07);
+    --c-divider-lite: rgba(255, 255, 255, 0.04);
+
+    /* Inputs */
+    --c-input-bg:     rgba(255, 255, 255, 0.06);
+    --c-input-border: rgba(255, 255, 255, 0.11);
+
+    /* Misc */
+    --c-row-hover:      rgba(255, 255, 255, 0.04);
+    --c-progress-track: rgba(255, 255, 255, 0.08);
+
+    /* Sidebar (always dark) */
+    --c-sidebar-bg: rgba(5, 10, 24, 0.88);
+    --c-app-bg-1:   #060d1e;
+    --c-app-bg-2:   #0a1530;
+
+    /* Brand gradient (electric blue) */
+    --brand-gradient: linear-gradient(135deg, #5b8bff 0%, #2d54e0 100%);
   }
+
+  body.light {
+    color-scheme: light;
+    --c-surface:        rgba(255, 255, 255, 0.94);
+    --c-surface-filter: blur(0px);
+    --c-border:         rgba(0, 0, 0, 0.08);
+    --c-shadow:         0 2px 16px rgba(0, 0, 0, 0.08);
+    --c-modal-bg:       #ffffff;
+
+    --c-text-1: #0d1117;
+    --c-text-2: #475569;
+    --c-text-3: #94a3b8;
+
+    --c-header-bg:    rgba(255, 255, 255, 0.88);
+    --c-divider:      rgba(0, 0, 0, 0.07);
+    --c-divider-lite: rgba(0, 0, 0, 0.04);
+
+    --c-input-bg:     rgba(0, 0, 0, 0.03);
+    --c-input-border: rgba(0, 0, 0, 0.12);
+
+    --c-row-hover:      rgba(0, 0, 0, 0.03);
+    --c-progress-track: rgba(0, 0, 0, 0.08);
+
+    --c-app-bg-1: #f1f5f9;
+    --c-app-bg-2: #e2e8f0;
+  }
+
+  body.dark {
+    color-scheme: dark;
+  }
+
   html,
   body,
   #root {
@@ -18,6 +86,16 @@
   body {
     @apply bg-ink-50 text-ink-900 font-sans antialiased;
     font-feature-settings: "cv11", "ss01";
+  }
+  /* Saat dark mode aktif, body bg jadi gradient gelap (sidebar + header
+     glass akan blend di atasnya). Existing pages tetap menggunakan
+     class hardcode mereka di dalam main content area. */
+  body.dark {
+    background:
+      radial-gradient(circle at 15% 12%, rgba(91, 139, 255, 0.18) 0%, transparent 45%),
+      radial-gradient(circle at 85% 88%, rgba(110, 231, 247, 0.10) 0%, transparent 45%),
+      linear-gradient(180deg, #060d1e 0%, #0a1530 100%);
+    color: var(--c-text-1);
   }
   h1,
   h2,
@@ -28,6 +106,7 @@
 }
 
 @layer components {
+  /* ─── Existing classes kept (existing pages depend on them) ───────────── */
   .card {
     @apply bg-white border border-ink-200/70 rounded-xl shadow-soft;
   }
@@ -114,9 +193,67 @@
   .menu-group-label {
     @apply text-[10px] uppercase tracking-wider font-semibold text-ink-500 px-3 mt-5 mb-1.5;
   }
+
+  /* ─── New: design-system v2 (glassmorphism premium) ──────────────────── */
+  /* GlassCard — token-based, beradaptasi dark/light via CSS vars */
+  .glass-card {
+    background: var(--c-surface);
+    backdrop-filter: var(--c-surface-filter);
+    -webkit-backdrop-filter: var(--c-surface-filter);
+    border: 1px solid var(--c-border);
+    box-shadow: var(--c-shadow);
+    border-radius: 16px;
+  }
+  .glass-card-pad {
+    @apply p-5;
+  }
+  /* Brand button dengan gradient + glow (untuk redesign components) */
+  .btn-brand {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-semibold text-white transition
+           disabled:opacity-50 disabled:cursor-not-allowed;
+    background: var(--brand-gradient);
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(91, 139, 255, 0.35);
+  }
+  .btn-brand:hover {
+    box-shadow: 0 6px 24px rgba(91, 139, 255, 0.5);
+  }
+  /* Surface button (glass over body bg) */
+  .btn-surface {
+    background: var(--c-surface);
+    border: 1px solid var(--c-border);
+    color: var(--c-text-1);
+    @apply inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl text-sm font-medium transition;
+    backdrop-filter: var(--c-surface-filter);
+    -webkit-backdrop-filter: var(--c-surface-filter);
+  }
+  .btn-surface:hover {
+    border-color: rgba(91, 139, 255, 0.4);
+  }
+  /* Token-based text utilities */
+  .text-token-1 {
+    color: var(--c-text-1);
+  }
+  .text-token-2 {
+    color: var(--c-text-2);
+  }
+  .text-token-3 {
+    color: var(--c-text-3);
+  }
+  /* Token-based input (utk redesign forms) */
+  .input-token {
+    background: var(--c-input-bg);
+    border: 1px solid var(--c-input-border);
+    color: var(--c-text-1);
+    @apply w-full px-3 py-2 rounded-xl text-sm focus:outline-none transition;
+  }
+  .input-token:focus {
+    border-color: rgba(91, 139, 255, 0.6);
+    box-shadow: 0 0 0 3px rgba(91, 139, 255, 0.15);
+  }
 }
 
-/* AG Grid custom theming */
+/* ─── AG Grid theming (light + dark) ─────────────────────────────────────── */
 .ag-theme-quartz {
   --ag-border-color: #e5e7eb;
   --ag-header-background-color: #f8fafc;
@@ -124,7 +261,7 @@
   --ag-odd-row-background-color: #fafbfc;
   --ag-row-hover-color: #eff6ff;
   --ag-selected-row-background-color: #dbeafe;
-  --ag-font-family: Inter, system-ui, sans-serif;
+  --ag-font-family: "Plus Jakarta Sans", Inter, system-ui, sans-serif;
   --ag-font-size: 13px;
   --ag-cell-horizontal-padding: 12px;
   --ag-grid-size: 6px;
@@ -135,8 +272,29 @@
   letter-spacing: 0.02em;
   text-transform: uppercase;
 }
+/* Dark variant — match sidebar/header glass */
+.ag-theme-quartz-dark {
+  --ag-background-color: transparent;
+  --ag-foreground-color: rgba(255, 255, 255, 0.88);
+  --ag-header-background-color: rgba(255, 255, 255, 0.06);
+  --ag-header-foreground-color: rgba(255, 255, 255, 0.55);
+  --ag-odd-row-background-color: rgba(255, 255, 255, 0.015);
+  --ag-row-hover-color: rgba(91, 139, 255, 0.08);
+  --ag-selected-row-background-color: rgba(91, 139, 255, 0.18);
+  --ag-border-color: rgba(255, 255, 255, 0.08);
+  --ag-font-family: "Plus Jakarta Sans", Inter, system-ui, sans-serif;
+  --ag-font-size: 13px;
+  --ag-cell-horizontal-padding: 12px;
+  --ag-grid-size: 6px;
+}
+.ag-theme-quartz-dark .ag-header-cell-text {
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
 
-/* Scrollbar */
+/* Scrollbar (token-aware) */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -151,8 +309,14 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
 }
+body.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+}
+body.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
 
-/* Page animation */
+/* Page animation (existing class kept) + new keyframes from tailwind config */
 .page-enter {
   animation: pageEnter 0.25s ease-out;
 }

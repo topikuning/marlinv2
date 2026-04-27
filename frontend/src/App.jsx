@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useAuthStore } from "@/store/auth";
+import { useThemeStore } from "@/store/theme";
 import { PageLoader } from "@/components/ui";
 import AppShell from "@/components/layout/AppShell";
 import LoginPage from "@/pages/LoginPage";
@@ -31,7 +32,9 @@ function ProtectedRoute({ children }) {
 
 export default function App() {
   const { init, loading } = useAuthStore();
+  const initTheme = useThemeStore((s) => s.init);
   useEffect(() => {
+    initTheme();
     init();
   }, []);
 
