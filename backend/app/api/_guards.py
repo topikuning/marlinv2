@@ -103,3 +103,39 @@ def assert_scope_editable_by_facility(
     if status in SCOPE_EDITABLE_STATUSES or _is_unlocked(unlock_until):
         return
     _raise_locked(number, status, entity=entity)
+
+
+def resolve_active_addendum_id(db: Session, contract_id: str) -> Optional[str]:
+    """
+    Resolusi addendum yang sedang aktif (sedang dibangun) untuk kontrak.
+
+    Dipakai oleh facilities/locations create endpoints supaya kolom
+    addendum_id ter-isi otomatis saat scope diubah dalam ADDENDUM mode —
+    audit trail eksplisit "fasilitas/lokasi ini ditambahkan via adendum X".
+
+    Returns None bila kontrak masih DRAFT (baseline V0) atau tidak dalam
+    mode ADDENDUM. Strateginya: cari ContractAddendum terbaru yang BELUM
+    ditandatangani; kalau tidak ada, ambil yang signed_at paling baru
+    (window ADDENDUM masih terbuka sampai BOQ revisinya di-approve).
+    """
+    from app.models.models import ContractAddendum
+    # Prefer addendum DRAFT (baru dibuat, belum signed) — itu konteks aktif paling jelas
+    pending = (
+        db.query(ContractAddendum)
+        .filter(
+            ContractAddendum.contract_id == contract_id,
+            ContractAddendum.signed_at.is_(None),
+        )
+        .order_by(ContractAddendum.created_at.desc())
+        .first()
+    )
+    if pending:
+        return str(pending.id)
+    # Fallback: addendum tersigned terakhir (window ADDENDUM masih terbuka)
+    latest = (
+        db.query(ContractAddendum)
+        .filter(ContractAddendum.contract_id == contract_id)
+        .order_by(ContractAddendum.signed_at.desc().nullslast())
+        .first()
+    )
+    return str(latest.id) if latest else None

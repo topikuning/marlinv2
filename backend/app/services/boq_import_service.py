@@ -238,7 +238,12 @@ def _parse_facility_sheet(sheet_name: str, df: pd.DataFrame) -> Optional[Dict[st
     if not items:
         return None
 
-    total_value = sum(it["total_price"] for it in items if it["is_leaf"])
+    # Decimal sum supaya preview total konsisten dengan total storage 5 dp
+    from decimal import Decimal as _D
+    total_value = float(sum(
+        (_D(str(it["total_price"] or 0)) for it in items if it["is_leaf"]),
+        _D("0"),
+    ))
 
     # derive facility_code from sheet name
     m = re.match(r"^(\d+)", sheet_name)

@@ -95,6 +95,32 @@ def _assign_contract_to_user(db: Session, user: User, contract_id: str) -> bool:
 
 
 def _contract_to_detail(c: Contract, db: Session) -> dict:
+    # Deteksi fasilitas yang dihapus via REMOVE_FACILITY di revisi BOQ aktif.
+    # Kriteria: facility punya item di revisi aktif tapi seluruhnya is_active=False.
+    from app.models.models import BOQRevision
+    active_rev = (
+        db.query(BOQRevision)
+        .filter(BOQRevision.contract_id == c.id, BOQRevision.is_active == True)  # noqa: E712
+        .first()
+    )
+    removed_facility_ids: set = set()
+    if active_rev:
+        all_in_rev = {
+            str(r.facility_id)
+            for r in db.query(BOQItem.facility_id)
+            .filter(BOQItem.boq_revision_id == active_rev.id)
+            .distinct()
+            .all()
+        }
+        still_active = {
+            str(r.facility_id)
+            for r in db.query(BOQItem.facility_id)
+            .filter(BOQItem.boq_revision_id == active_rev.id, BOQItem.is_active == True)  # noqa: E712
+            .distinct()
+            .all()
+        }
+        removed_facility_ids = all_in_rev - still_active
+
     locations = []
     for loc in c.locations:
         loc_d = {
@@ -109,6 +135,7 @@ def _contract_to_detail(c: Contract, db: Session) -> dict:
             "latitude": float(loc.latitude) if loc.latitude else None,
             "longitude": float(loc.longitude) if loc.longitude else None,
             "is_active": loc.is_active,
+            "addendum_id": str(loc.addendum_id) if loc.addendum_id else None,
             "facilities": [
                 {
                     "id": str(f.id),
@@ -119,6 +146,8 @@ def _contract_to_detail(c: Contract, db: Session) -> dict:
                     "display_order": f.display_order,
                     "total_value": float(f.total_value or 0),
                     "is_active": f.is_active,
+                    "is_removed_in_active_rev": str(f.id) in removed_facility_ids,
+                    "addendum_id": str(f.addendum_id) if f.addendum_id else None,
                 }
                 for f in sorted(loc.facilities, key=lambda x: x.display_order)
             ],
@@ -1011,79 +1040,234 @@ def _apply_vo_items_to_revision(db: Session, new_rev, bundled_vos):
       - REMOVE: set is_active=False pada item hasil clone
     Revisi baru sudah berisi clone dari revisi lama (via clone_revision_for_addendum);
     kita tinggal patch sesuai VO items.
+
+    ADD chain support: item ADD bisa menjadi parent item ADD lain di VO yang sama.
+    Resolusi dilakukan multi-pass (topological order) menggunakan parent_code string.
     """
-    from app.models.models import VOItemAction, BOQItem
+    from app.models.models import VOItemAction, BOQItem, Facility
     from app.services.boq_revision_service import recalc_revision_totals
 
-    # Build map: source_item_id (revisi lama) → cloned item id (revisi baru)
-    cloned_items = {
-        str(it.source_item_id): it
-        for it in db.query(BOQItem).filter(BOQItem.boq_revision_id == new_rev.id).all()
-        if it.source_item_id
-    }
-
+    # ── PASS-0: ADD_FACILITY — buat Facility baru dulu ────────────────────────
+    # Harus pertama supaya kalau VO lain di addendum yang sama referensi
+    # facility baru ini lewat facility_id, sudah ada di DB.
+    contract_id = new_rev.contract_id
     for vo in bundled_vos:
         for vi in vo.items:
+            if vi.action != VOItemAction.ADD_FACILITY:
+                continue
+            if not vi.location_id or not vi.new_facility_code:
+                continue
+            # Idempotency: skip kalau code sudah ada di lokasi tsb
+            existing = db.query(Facility).filter(
+                Facility.location_id == vi.location_id,
+                Facility.facility_code == vi.new_facility_code,
+            ).first()
+            if existing:
+                continue
+            new_fac = Facility(
+                location_id=vi.location_id,
+                facility_code=vi.new_facility_code,
+                facility_name=vi.description,
+                display_order=0,
+                addendum_id=new_rev.addendum_id,  # traceability
+            )
+            db.add(new_fac)
+    db.flush()
+
+    # Build map: new_facility_code → Facility.id untuk facilities yang baru saja
+    # dibuat di PASS-0. Dipakai di ADD processing untuk resolve ADD items yang
+    # target-nya adalah fasilitas yang dibuat dalam VO yang sama.
+    pending_fac_map: dict = {}
+    for vo in bundled_vos:
+        for vi in vo.items:
+            if vi.action == VOItemAction.ADD_FACILITY and vi.new_facility_code:
+                fac = db.query(Facility).filter(
+                    Facility.location_id == vi.location_id,
+                    Facility.facility_code == vi.new_facility_code,
+                ).first()
+                if fac:
+                    pending_fac_map[vi.new_facility_code] = fac.id
+
+    # Build map: source_item_id (revisi lama) → cloned item (revisi baru)
+    all_cloned = db.query(BOQItem).filter(BOQItem.boq_revision_id == new_rev.id).all()
+    cloned_items = {
+        str(it.source_item_id): it for it in all_cloned if it.source_item_id
+    }
+    # Build map: (facility_id_str, original_code) → cloned item
+    # Dipakai untuk resolve parent_code ke item existing di revisi baru
+    cloned_by_fac_code = {
+        (str(it.facility_id), str(it.original_code)): it
+        for it in all_cloned if it.original_code
+    }
+
+    # Pisahkan ADD dari non-ADD (skip ADD_FACILITY karena sudah diproses pass-0)
+    add_vis = []
+    non_add_vis = []
+    for vo in bundled_vos:
+        for vi in vo.items:
+            if vi.action == VOItemAction.ADD_FACILITY:
+                continue  # Sudah diproses di pass-0
             if vi.action == VOItemAction.ADD:
-                # Resolve parent_id: kalau VO punya parent_boq_item_id, mapping
-                # ke item clone di revisi baru. Kalau tidak ada → root level.
-                parent_clone = None
-                parent_level = 0
-                if vi.parent_boq_item_id:
-                    parent_clone = cloned_items.get(str(vi.parent_boq_item_id))
-                    if parent_clone:
-                        parent_level = (parent_clone.level or 0) + 1
-                        # Parent yang dapat anak baru bukan leaf lagi
-                        parent_clone.is_leaf = False
-                new_item = BOQItem(
-                    boq_revision_id=new_rev.id,
-                    facility_id=vi.facility_id,
-                    parent_id=parent_clone.id if parent_clone else None,
-                    level=parent_level,
-                    master_work_code=vi.master_work_code,
-                    description=vi.description,
-                    unit=vi.unit,
-                    volume=vi.volume_delta,
-                    unit_price=vi.unit_price,
-                    total_price=vi.cost_impact,
-                    is_active=True,
-                    is_leaf=True,
-                    is_addendum_item=True,
-                    change_type="added",
-                )
-                db.add(new_item)
-            elif vi.action in (VOItemAction.INCREASE, VOItemAction.DECREASE):
-                target = cloned_items.get(str(vi.boq_item_id))
-                if target:
-                    from decimal import Decimal
-                    delta = Decimal(vi.volume_delta or 0)
-                    target.volume = (target.volume or Decimal("0")) + delta
-                    target.total_price = target.volume * (target.unit_price or Decimal("0"))
-                    target.change_type = "modified"
-            elif vi.action == VOItemAction.MODIFY_SPEC:
-                target = cloned_items.get(str(vi.boq_item_id))
-                if target:
-                    target.description = vi.description or target.description
-                    if vi.unit:
-                        target.unit = vi.unit
-                    target.change_type = "modified"
-            elif vi.action == VOItemAction.REMOVE:
-                target = cloned_items.get(str(vi.boq_item_id))
-                if target:
-                    target.is_active = False
-                    target.change_type = "removed"
-                    # Cascade: anak-anak juga non-aktif
-                    _cascade_remove_children(db, new_rev.id, target.id)
-            elif vi.action == VOItemAction.REMOVE_FACILITY:
-                # Hilangkan seluruh fasilitas — set is_active=False pada semua
-                # item BOQ di fasilitas ini (di revisi baru).
-                items_in_fac = db.query(BOQItem).filter(
-                    BOQItem.boq_revision_id == new_rev.id,
-                    BOQItem.facility_id == vi.facility_id,
-                ).all()
-                for it in items_in_fac:
-                    it.is_active = False
-                    it.change_type = "removed"
+                add_vis.append(vi)
+            else:
+                non_add_vis.append(vi)
+
+    # ── Non-ADD items ─────────────────────────────────────────────────────────
+    from decimal import Decimal, ROUND_HALF_UP
+    _Q5 = Decimal("0.00001")
+
+    def _q5(x):
+        if x is None:
+            return Decimal("0.00000")
+        if not isinstance(x, Decimal):
+            x = Decimal(str(x))
+        if x.is_nan() or x.is_infinite():
+            return Decimal("0.00000")
+        return x.quantize(_Q5, rounding=ROUND_HALF_UP)
+
+    for vi in non_add_vis:
+        if vi.action in (VOItemAction.INCREASE, VOItemAction.DECREASE):
+            target = cloned_items.get(str(vi.boq_item_id))
+            if target:
+                # Aturan presisi sistem: hasil apply VO MUST 5 dp eksak,
+                # supaya vol_baru di Excel == volume aktif di DB persis.
+                # Quantize SEBELUM dan SETELAH operasi untuk menormalkan
+                # data legacy yang mungkin tersimpan >2dp.
+                delta = _q5(vi.volume_delta or 0)
+                cur_vol = _q5(target.volume or 0)
+                cur_price = _q5(target.unit_price or 0)
+                target.volume = _q5(cur_vol + delta)
+                target.unit_price = cur_price
+                target.total_price = _q5(target.volume * cur_price)
+                target.change_type = "modified"
+        elif vi.action == VOItemAction.MODIFY_SPEC:
+            target = cloned_items.get(str(vi.boq_item_id))
+            if target:
+                target.description = vi.description or target.description
+                if vi.unit:
+                    target.unit = vi.unit
+                target.change_type = "modified"
+        elif vi.action == VOItemAction.REMOVE:
+            target = cloned_items.get(str(vi.boq_item_id))
+            if target:
+                target.is_active = False
+                target.change_type = "removed"
+                # Cascade: anak-anak juga non-aktif
+                _cascade_remove_children(db, new_rev.id, target.id)
+        elif vi.action == VOItemAction.REMOVE_FACILITY:
+            # Hilangkan seluruh fasilitas — set is_active=False pada semua
+            # item BOQ di fasilitas ini (di revisi baru).
+            items_in_fac = db.query(BOQItem).filter(
+                BOQItem.boq_revision_id == new_rev.id,
+                BOQItem.facility_id == vi.facility_id,
+            ).all()
+            for it in items_in_fac:
+                it.is_active = False
+                it.change_type = "removed"
+
+    # ── ADD items: multi-pass untuk resolve parent chain (ADD → ADD) ──────────
+    # Resolve facility_id untuk ADD items yang target-nya fasilitas pending
+    # (facility_id None, new_facility_code diisi → dibuat di PASS-0 atas).
+    resolved_fac_ids: dict = {}
+    for vi in add_vis:
+        if vi.facility_id:
+            resolved_fac_ids[vi.id] = vi.facility_id
+        elif vi.new_facility_code:
+            resolved = pending_fac_map.get(vi.new_facility_code)
+            if resolved:
+                resolved_fac_ids[vi.id] = resolved
+            # else: tidak bisa di-resolve → akan di-skip di loop bawah
+
+    def _fac_id(vi):
+        return resolved_fac_ids.get(vi.id)
+
+    # new_items_by_code: (facility_id_str, new_item_code) → BOQItem baru
+    new_items_by_code: dict = {}
+
+    unresolved = [vi for vi in add_vis if _fac_id(vi)]  # drop unresolvable
+    for _ in range(6):  # BOQ max 4 level, margin 2 untuk safety
+        if not unresolved:
+            break
+        still_unresolved = []
+        created_this_pass = []
+
+        for vi in unresolved:
+            fac_id = _fac_id(vi)
+            fac_id_str = str(fac_id) if fac_id else None
+            parent_clone = None
+
+            if vi.parent_boq_item_id:
+                # Parent = item existing di revisi lama, sudah di-clone ke revisi baru
+                parent_clone = cloned_items.get(str(vi.parent_boq_item_id))
+            elif vi.parent_code and fac_id_str:
+                # 1. Coba item existing di revisi baru (dari revisi lama)
+                parent_clone = cloned_by_fac_code.get((fac_id_str, vi.parent_code))
+                if not parent_clone:
+                    # 2. Coba item ADD baru yang sudah dibuat di pass sebelumnya
+                    parent_clone = new_items_by_code.get((fac_id_str, vi.parent_code))
+                if not parent_clone:
+                    # Parent belum ada — tunda ke pass berikutnya
+                    still_unresolved.append(vi)
+                    continue
+
+            parent_level = (parent_clone.level or 0) + 1 if parent_clone else 0
+            if parent_clone:
+                parent_clone.is_leaf = False
+
+            _vol = _q5(vi.volume_delta)
+            _price = _q5(vi.unit_price)
+            new_item = BOQItem(
+                boq_revision_id=new_rev.id,
+                facility_id=fac_id,
+                parent_id=parent_clone.id if parent_clone else None,
+                original_code=vi.new_item_code or None,
+                level=parent_level,
+                master_work_code=vi.master_work_code,
+                description=vi.description,
+                unit=vi.unit,
+                volume=_vol,
+                unit_price=_price,
+                total_price=_q5(_vol * _price),
+                is_active=True,
+                is_leaf=True,
+                is_addendum_item=True,
+                change_type="added",
+            )
+            db.add(new_item)
+            created_this_pass.append((vi, new_item))
+
+        if created_this_pass:
+            db.flush()  # agar ID tersedia untuk child di pass berikutnya
+            for vi, new_item in created_this_pass:
+                fac_id = _fac_id(vi)
+                if vi.new_item_code and fac_id:
+                    new_items_by_code[(str(fac_id), vi.new_item_code)] = new_item
+
+        unresolved = still_unresolved
+
+    # Sisa yang tidak bisa di-resolve (data tidak valid/circular) → buat sebagai root
+    for vi in unresolved:
+        _vol = _q5(vi.volume_delta)
+        _price = _q5(vi.unit_price)
+        new_item = BOQItem(
+            boq_revision_id=new_rev.id,
+            facility_id=_fac_id(vi),
+            parent_id=None,
+            original_code=vi.new_item_code or None,
+            level=0,
+            master_work_code=vi.master_work_code,
+            description=vi.description,
+            unit=vi.unit,
+            volume=_vol,
+            unit_price=_price,
+            total_price=_q5(_vol * _price),
+            is_active=True,
+            is_leaf=True,
+            is_addendum_item=True,
+            change_type="added",
+        )
+        db.add(new_item)
+
     db.flush()
     recalc_revision_totals(db, new_rev)
 

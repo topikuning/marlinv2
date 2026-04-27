@@ -355,6 +355,14 @@ export default function ContractDetailPage() {
                     <div>
                       <p className="font-mono text-xs text-brand-600 mb-1">
                         {loc.location_code}
+                        {loc.addendum_id && (
+                          <span
+                            className="ml-2 text-[9px] px-1 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200 font-mono"
+                            title="Lokasi ini ditambahkan via Adendum"
+                          >
+                            📎 Adendum
+                          </span>
+                        )}
                       </p>
                       <p className="font-semibold text-ink-900">{loc.name}</p>
                       <p className="text-xs text-ink-500 flex items-center gap-1 mt-0.5">
@@ -416,7 +424,24 @@ export default function ContractDetailPage() {
 
                   {loc.facilities?.length > 0 && (
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-3 pt-3 border-t border-ink-100">
-                      {loc.facilities.map((f) => (
+                      {loc.facilities.map((f) =>
+                        f.is_removed_in_active_rev ? (
+                          <div
+                            key={f.id}
+                            className="flex items-center gap-2 px-3 py-2 bg-red-50 rounded-lg border border-red-200 opacity-60"
+                            title="Fasilitas ini dihapus via Adendum (REMOVE_FACILITY)"
+                          >
+                            <XIcon size={12} className="text-red-400 flex-shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-medium text-ink-500 truncate line-through">
+                                {f.facility_name}
+                              </p>
+                              <p className="text-[10px] text-red-400 font-mono">
+                                {f.facility_code} · <span className="italic">Dihapus via Adendum</span>
+                              </p>
+                            </div>
+                          </div>
+                        ) : (
                         <div
                           key={f.id}
                           className="group flex items-center gap-2 px-3 py-2 bg-ink-50 hover:bg-brand-50 rounded-lg border border-ink-200 hover:border-brand-300 transition"
@@ -433,6 +458,14 @@ export default function ContractDetailPage() {
                           >
                             <p className="text-xs font-medium text-ink-800 truncate">
                               {f.facility_name}
+                              {f.addendum_id && (
+                                <span
+                                  className="ml-1 text-[9px] px-1 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200 font-mono"
+                                  title="Fasilitas ini ditambahkan via Adendum"
+                                >
+                                  📎 Adendum
+                                </span>
+                              )}
                             </p>
                             <p className="text-[10px] text-ink-400 font-mono">
                               {f.facility_code} · {fmtNum(f.total_value)}
@@ -455,7 +488,8 @@ export default function ContractDetailPage() {
                             </button>
                           )}
                         </div>
-                      ))}
+                        )
+                      )}
                     </div>
                   )}
                 </div>
@@ -2510,6 +2544,7 @@ function VariationOrdersPanel({ contract, onChange, canApprove = false, pendingF
   const [prefillFromObs, setPrefillFromObs] = useState(null);
   const [editing, setEditing] = useState(null); // full VO data saat edit
   const [detail, setDetail] = useState(null);
+  const [comparingVoId, setComparingVoId] = useState(null);
   const [actionModal, setActionModal] = useState(null);
 
   const refresh = () => {
@@ -2530,16 +2565,30 @@ function VariationOrdersPanel({ contract, onChange, canApprove = false, pendingF
     }
   }, [pendingFromObs]);  // eslint-disable-line react-hooks/exhaustive-deps
 
+  const [acting, setActing] = useState(null); // { voId, action } | null
+  const [fetchingEditId, setFetchingEditId] = useState(null);
+
   const doAction = async (vo, action, payload = {}) => {
+    if (acting) return; // guard double-click
+    setActing({ voId: vo.id, action });
     try {
       if (action === "submit") await voAPI.submit(vo.id);
       else if (action === "approve") await voAPI.approve(vo.id, payload);
       else if (action === "reject") await voAPI.reject(vo.id, payload);
+      else if (action === "return_for_revision") await voAPI.review(vo.id, payload);
       else if (action === "delete") await voAPI.remove(vo.id);
-      toast.success(`VO ${action} sukses`);
+      const label = {
+        submit: "disubmit untuk review",
+        approve: "disetujui",
+        reject: "ditolak",
+        return_for_revision: "dikembalikan untuk revisi",
+        delete: "dihapus",
+      }[action] || action;
+      toast.success(`VO ${label}`);
       setActionModal(null);
       refresh();
     } catch (e) { toast.error(parseApiError(e)); }
+    finally { setActing(null); }
   };
 
   return (
@@ -2588,6 +2637,15 @@ function VariationOrdersPanel({ contract, onChange, canApprove = false, pendingF
                     )}
                   </div>
                   <p className="font-medium text-ink-900 mt-1">{vo.title}</p>
+                  {vo.status === "draft" && vo.review_notes && (
+                    <div className="mt-1.5 flex items-start gap-1.5 text-[11px] bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                      <RotateCcw size={11} className="text-amber-600 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <span className="font-semibold text-amber-800">Dikembalikan untuk revisi · </span>
+                        <span className="text-amber-700">{vo.review_notes}</span>
+                      </div>
+                    </div>
+                  )}
                   <p className="text-xs text-ink-500 mt-0.5 line-clamp-2">{vo.technical_justification}</p>
                   <div className="flex items-center gap-3 text-[11px] text-ink-500 mt-1.5">
                     <span>Dampak: <span className={`font-semibold ${vo.cost_impact >= 0 ? "text-ink-800" : "text-red-700"}`}>
@@ -2596,41 +2654,69 @@ function VariationOrdersPanel({ contract, onChange, canApprove = false, pendingF
                     <span>Dibuat: {fmtDate(vo.created_at)}</span>
                   </div>
                 </div>
-                <div className="flex gap-1 flex-wrap">
-                  <button className="btn-ghost btn-xs" onClick={async () => {
-                    try {
-                      const { data } = await voAPI.get(vo.id);
-                      setDetail(data);
-                    } catch (e) { toast.error(parseApiError(e)); }
-                  }}>Lihat</button>
+                <div className="flex gap-1 flex-wrap items-center">
+                  <button className="btn-ghost btn-xs" onClick={() => setComparingVoId(vo.id)}>
+                    Lihat
+                  </button>
                   {vo.status === "draft" && (
                     <>
-                      <button className="btn-ghost btn-xs" onClick={async () => {
-                        const { data } = await voAPI.get(vo.id);
-                        setEditing(data);
-                      }}>
-                        <Edit2 size={10} /> Edit
+                      <button
+                        className="btn-ghost btn-xs"
+                        disabled={!!acting || fetchingEditId === vo.id}
+                        onClick={async () => {
+                          setFetchingEditId(vo.id);
+                          try { const { data } = await voAPI.get(vo.id); setEditing(data); }
+                          catch (e) { toast.error(parseApiError(e)); }
+                          finally { setFetchingEditId(null); }
+                        }}
+                      >
+                        {fetchingEditId === vo.id ? <Spinner size={10} /> : <Edit2 size={10} />} Edit
                       </button>
-                      <button className="btn-primary btn-xs" onClick={() => doAction(vo, "submit")}>
-                        <Send size={10} /> Submit
+                      <button
+                        className="btn-primary btn-xs"
+                        disabled={!!acting}
+                        onClick={() => doAction(vo, "submit")}
+                      >
+                        {acting?.voId === vo.id && acting?.action === "submit"
+                          ? <><Spinner size={10} /> Submitting…</>
+                          : <><Send size={10} /> Submit</>}
                       </button>
                     </>
                   )}
                   {vo.status === "under_review" && canApprove && (
                     <>
-                      <button className="btn-secondary btn-xs" onClick={() => setActionModal({ vo, action: "approve" })}>
+                      <button
+                        className="btn-secondary btn-xs"
+                        disabled={!!acting}
+                        onClick={() => setActionModal({ vo, action: "approve" })}
+                      >
                         <Check size={10} /> Approve
                       </button>
-                      <button className="btn-ghost btn-xs text-red-600" onClick={() => setActionModal({ vo, action: "reject" })}>
+                      <button
+                        className="btn-ghost btn-xs text-amber-600"
+                        disabled={!!acting}
+                        onClick={() => setActionModal({ vo, action: "return_for_revision" })}
+                      >
+                        <RotateCcw size={10} /> Kembalikan
+                      </button>
+                      <button
+                        className="btn-ghost btn-xs text-red-600"
+                        disabled={!!acting}
+                        onClick={() => setActionModal({ vo, action: "reject" })}
+                      >
                         <XIcon size={10} /> Reject
                       </button>
                     </>
                   )}
                   {(vo.status === "draft" || vo.status === "rejected") && (
-                    <button className="btn-ghost btn-xs text-red-600" onClick={() => {
-                      if (confirm("Hapus VO ini?")) doAction(vo, "delete");
-                    }}>
-                      <Trash2 size={10} />
+                    <button
+                      className="btn-ghost btn-xs text-red-600"
+                      disabled={!!acting}
+                      onClick={() => { if (confirm("Hapus VO ini?")) doAction(vo, "delete"); }}
+                    >
+                      {acting?.voId === vo.id && acting?.action === "delete"
+                        ? <Spinner size={10} />
+                        : <Trash2 size={10} />}
                     </button>
                   )}
                 </div>
@@ -2657,6 +2743,17 @@ function VariationOrdersPanel({ contract, onChange, canApprove = false, pendingF
         />
       )}
       {detail && <VODetailModal vo={detail} onClose={() => setDetail(null)} />}
+      {comparingVoId && (
+        <VOComparisonDrawer
+          voId={comparingVoId}
+          contract={contract}
+          canApprove={canApprove}
+          onClose={() => setComparingVoId(null)}
+          onAction={(act) => setActionModal(act)}
+          onEdit={(voData) => setEditing(voData)}
+          onChanged={refresh}
+        />
+      )}
       {actionModal && (
         <VOActionModal vo={actionModal.vo} action={actionModal.action}
           onClose={() => setActionModal(null)}
@@ -2677,15 +2774,41 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
           technical_justification: initial.technical_justification || "",
           quantity_calculation: initial.quantity_calculation || "",
           source_observation_id: initial.source_observation_id || null,
-          items: (initial.items || []).map((it) => ({
+          items: (() => {
+            const kw = ["PARENT", "INFO", "OWNER", "TITIPAN"];
+            const isBypass = (it) => {
+              const n = (it.notes || "").trim().toUpperCase();
+              return kw.some((k) => n === k || n.startsWith(k + ":") || n.startsWith(k + " "));
+            };
+            const all = initial.items || [];
+            const corrupt = all.filter(
+              (it) => it.action === "add" && !(Number(it.volume_delta) > 0) && !isBypass(it)
+            );
+            if (corrupt.length) {
+              setTimeout(() => toast.warning(
+                `${corrupt.length} item ADD dengan volume 0 dihapus otomatis (data tidak valid). Tambahkan ulang jika diperlukan.`
+              ), 300);
+            }
+            return all.filter((it) => {
+              if (it.action !== "add") return true;
+              if (Number(it.volume_delta) > 0) return true;
+              return isBypass(it);
+            });
+          })().map((it) => ({
             action: it.action,
             boq_item_id: it.boq_item_id || null,
-            facility_id: it.facility_id || null,
+            facility_id: (it.action === "add" && !it.facility_id && it.new_facility_code)
+              ? `PENDING:${it.new_facility_code}`
+              : (it.facility_id || null),
             parent_boq_item_id: it.parent_boq_item_id || null,
+            parent_code: it.parent_code || null,
+            new_item_code: it.new_item_code || null,
+            location_id: it.location_id || null,
+            new_facility_code: it.new_facility_code || null,
             master_work_code: it.master_work_code || null,
             description: it.description || "",
             unit: it.unit || "",
-            volume_delta: it.volume_delta != null ? String(it.volume_delta) : "",
+            volume_delta: it.volume_delta != null && it.volume_delta !== 0 ? String(it.volume_delta) : "",
             unit_price: it.unit_price != null ? String(it.unit_price) : "",
             notes: it.notes || "",
           })),
@@ -2701,40 +2824,87 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
         }
   );
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [collapseMeta, setCollapseMeta] = useState(false);
+  const initialFormRef = useRef(form);
+
+  const attemptClose = () => {
+    if (saving) return;
+    if (dirty && !confirm("Perubahan belum disimpan. Tutup tanpa menyimpan?")) return;
+    onClose?.();
+  };
+
+  // Track dirty state
+  useEffect(() => {
+    setDirty(JSON.stringify(form) !== JSON.stringify(initialFormRef.current));
+  }, [form]);
+
+  // Lock body scroll + ESC to close (with dirty guard)
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e) => { if (e.key === "Escape") attemptClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dirty, saving]);
 
   const submit = async () => {
     if (form.technical_justification.length < 50) return toast.error("Justifikasi teknis minimal 50 karakter");
     if (!form.items.length) return toast.error("Edit minimal 1 item perubahan di grid");
-    // Validasi field wajib per action + nilai
     for (const [idx, it] of form.items.entries()) {
+      // ADD_FACILITY punya validasi sendiri (location_id + new_facility_code + description)
+      if (it.action === "add_facility") {
+        if (!it.location_id) return toast.error(`Fasilitas Baru #${idx + 1}: lokasi wajib dipilih`);
+        if (!(it.new_facility_code || "").trim()) return toast.error(`Fasilitas Baru #${idx + 1}: kode fasilitas wajib`);
+        if (!(it.description || "").trim()) return toast.error(`Fasilitas Baru #${idx + 1}: nama fasilitas wajib`);
+        continue;
+      }
       const needFac = it.action === "add" || it.action === "remove_facility";
       const needBoq = !needFac;
-      if (needBoq && !it.boq_item_id) {
-        return toast.error(`Item ${idx + 1}: boq_item_id hilang`);
-      }
-      if (needFac && !it.facility_id) {
-        return toast.error(`Item ${idx + 1}: facility_id hilang`);
-      }
+      if (needBoq && !it.boq_item_id) return toast.error(`Item ${idx + 1}: boq_item_id hilang`);
+      if (needFac && !it.facility_id) return toast.error(`Item ${idx + 1}: facility_id hilang`);
       if (it.action === "add") {
+        const itemLabel = it.description?.trim() ? `"${it.description.trim()}"` : `#${idx + 1}`;
+        const ZERO_PRICE_BYPASS = ["PARENT", "INFO", "OWNER", "TITIPAN"];
+        const notesStr = (it.notes || "").trim();
+        const hasBypass = ZERO_PRICE_BYPASS.some((kw) => notesStr.toUpperCase().startsWith(kw));
         if (!it.description?.trim()) return toast.error(`Item baru #${idx + 1}: deskripsi wajib`);
-        if (parseFloat(it.volume_delta) <= 0) return toast.error(`Item baru #${idx + 1}: volume harus > 0`);
-        if (parseFloat(it.unit_price) <= 0) return toast.error(`Item baru #${idx + 1}: harga satuan harus > 0`);
+        const _vol = parseFloat(it.volume_delta);
+        if (!(_vol > 0) && !hasBypass) return toast.error(`Item baru ${itemLabel}: volume harus > 0 (nilai: ${it.volume_delta || "kosong"})`);
+        if (parseFloat(it.unit_price) <= 0 && !hasBypass) {
+          const reason = notesStr
+            ? `catatan saat ini: "${notesStr.slice(0, 40)}${notesStr.length > 40 ? "…" : ""}" (tidak diawali keyword)`
+            : "catatan kosong";
+          return toast.error(
+            `Item baru ${itemLabel}: harga satuan = 0 — ${reason}. Awali catatan dengan PARENT / INFO / OWNER / TITIPAN, atau isi harga > 0.`
+          );
+        }
       }
     }
     setSaving(true);
     try {
-      // Normalisasi payload:
-      // - volume_delta / unit_price parseFloat supaya decimal dikirim benar
-      // - UUID kosong ("") harus dikirim null, kalau tidak Pydantic UUID reject
       const payload = {
         ...form,
-        items: form.items.map((it) => ({
-          ...it,
-          boq_item_id: it.boq_item_id || null,
-          facility_id: it.facility_id || null,
-          volume_delta: parseFloat(it.volume_delta) || 0,
-          unit_price: parseFloat(it.unit_price) || 0,
-        })),
+        items: form.items.map((it) => {
+          const base = {
+            ...it,
+            boq_item_id: it.boq_item_id || null,
+            facility_id: it.facility_id || null,
+            volume_delta: parseFloat(it.volume_delta) || 0,
+            unit_price: parseFloat(it.unit_price) || 0,
+          };
+          // ADD items targeting a pending (same-VO) facility use PENDING:CODE as
+          // the virtual facility_id in form state. Convert back for the backend.
+          if (it.action === "add" && (it.facility_id || "").startsWith("PENDING:")) {
+            base.facility_id = null;
+            base.new_facility_code = it.facility_id.slice("PENDING:".length);
+          }
+          return base;
+        }),
       };
       if (isEdit) {
         await voAPI.update(initial.id, payload);
@@ -2743,72 +2913,181 @@ function VOCreateModal({ contract, initial, prefillFromObs, onClose, onSuccess }
         await voAPI.create(contract.id, payload);
         toast.success("VO tersimpan sebagai DRAFT");
       }
+      setDirty(false);
       onSuccess?.();
     } catch (e) { toast.error(parseApiError(e)); }
     finally { setSaving(false); }
   };
 
-  return (
-    <Modal open onClose={onClose} title={isEdit ? `Edit ${initial.vo_number}` : "VO Baru · DRAFT"} size="xl" footer={
-      <>
-        <button className="btn-secondary" onClick={onClose}>Batal</button>
-        <button className="btn-primary" onClick={submit} disabled={saving}>
-          {saving && <Spinner size={12} />} {isEdit ? "Simpan Perubahan" : "Simpan sebagai DRAFT"}
+  const justificationLen = form.technical_justification.length;
+  const justificationOk = justificationLen >= 50;
+  const itemCount = form.items.length;
+  const totalImpact = form.items.reduce((s, it) => {
+    if (it.action === "remove_facility") return s; // dihitung backend
+    const v = parseFloat(it.volume_delta) || 0;
+    const p = parseFloat(it.unit_price) || 0;
+    return s + v * p;
+  }, 0);
+
+  const titleStr = isEdit
+    ? `Edit ${initial.vo_number}`
+    : prefillFromObs
+    ? `VO Baru · Tindak Lanjut ${prefillFromObs.type === "mc_0" ? "MC-0" : "MC"}`
+    : "VO Baru · DRAFT";
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex flex-col bg-ink-50">
+      {/* Sticky header */}
+      <div className="bg-white border-b border-ink-200 px-5 py-3 flex items-center gap-4">
+        <button
+          onClick={attemptClose}
+          disabled={saving}
+          className={`p-1.5 -ml-1 rounded text-ink-600 ${saving ? "opacity-40 cursor-not-allowed" : "hover:bg-ink-100"}`}
+          title="Tutup (Esc)"
+        >
+          <XIcon size={18} />
         </button>
-      </>
-    }>
-      <div className="space-y-3 text-sm">
-        {prefillFromObs && !isEdit && (
-          <div className="p-2.5 rounded-md bg-brand-50 border border-brand-200 text-xs text-brand-800 flex items-start gap-2">
-            <span className="font-bold flex-shrink-0">↖</span>
-            <div className="flex-1">
-              <p className="font-semibold">
-                Dari {prefillFromObs.type === "mc_0" ? "MC-0" : "MC Lanjutan"}: {prefillFromObs.title}
-              </p>
-              <p className="text-[11px] mt-0.5 text-brand-700">
-                VO ini akan otomatis ter-link ke observasi tanggal {fmtDate(prefillFromObs.observation_date)}.
-                Judul & justifikasi sudah di-pre-fill dari temuan — silakan edit sesuai kebutuhan, lalu tambah item perubahan BOQ.
-              </p>
-            </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-base font-semibold text-ink-900 truncate">{titleStr}</h2>
+            {isEdit && initial?.status && (
+              <span className={`text-[10px] px-2 py-0.5 rounded border font-medium ${VO_STATUS_BADGE[initial.status]}`}>
+                {VO_STATUS_LABEL[initial.status] || initial.status}
+              </span>
+            )}
+            {dirty && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200 font-medium">
+                ● Belum disimpan
+              </span>
+            )}
           </div>
-        )}
-        <div>
-          <label className="label">Judul *</label>
-          <input className="input" value={form.title} maxLength={200}
-            onChange={(e) => setForm({ ...form, title: e.target.value })}
-            placeholder="Contoh: Penambahan revetmen segmen timur akibat abrasi" />
-        </div>
-        <div>
-          <label className="label">Justifikasi Teknis * (min 50 karakter)</label>
-          <textarea className="input" rows={4} value={form.technical_justification}
-            onChange={(e) => setForm({ ...form, technical_justification: e.target.value })}
-            placeholder="Jelaskan latar belakang teknis perubahan ini..." />
           <p className="text-[11px] text-ink-500 mt-0.5">
-            {form.technical_justification.length} / 50 karakter minimum
+            {contract?.contract_number ? <>Kontrak {contract.contract_number} · </> : null}
+            {itemCount} item perubahan
+            {totalImpact !== 0 && (
+              <> · Estimasi Δ biaya: <span className={`font-semibold ${totalImpact > 0 ? "text-emerald-700" : "text-red-700"}`}>
+                {totalImpact > 0 ? "+" : ""}{fmtCurrency(totalImpact, false)}
+              </span></>
+            )}
           </p>
         </div>
-        <div>
-          <label className="label">Perhitungan Volume (opsional)</label>
-          <textarea className="input" rows={2} value={form.quantity_calculation}
-            onChange={(e) => setForm({ ...form, quantity_calculation: e.target.value })} />
-        </div>
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <label className="label mb-0">Item Perubahan BOQ</label>
-            <p className="text-[11px] text-ink-500">
-              Pilih fasilitas → edit Vol Baru langsung di tabel. Action auto-detected dari perubahan volume.
-            </p>
-          </div>
-          <VOItemsGrid
-            contract={contract}
-            items={form.items}
-            onChange={(newItems) => setForm({ ...form, items: newItems })}
-            isAdmin={role === "superadmin" || role === "admin_pusat"}
-            voId={isEdit ? initial.id : null}
-          />
+        <div className="flex gap-1.5 items-center">
+          <button className="btn-secondary btn-sm" onClick={attemptClose} disabled={saving}>
+            Batal
+          </button>
+          <button className="btn-primary btn-sm" onClick={submit} disabled={saving}>
+            {saving
+              ? <><Spinner size={12} /> Menyimpan…</>
+              : isEdit ? "Simpan Perubahan" : "Simpan sebagai DRAFT"}
+          </button>
         </div>
       </div>
-    </Modal>
+
+      {/* Body */}
+      <div className="flex-1 overflow-auto">
+        <div className="max-w-[1600px] mx-auto p-5 space-y-4">
+          {prefillFromObs && !isEdit && (
+            <div className="p-3 rounded-md bg-brand-50 border border-brand-200 text-xs text-brand-800 flex items-start gap-2">
+              <span className="font-bold flex-shrink-0">↖</span>
+              <div className="flex-1">
+                <p className="font-semibold">
+                  Dari {prefillFromObs.type === "mc_0" ? "MC-0" : "MC Lanjutan"}: {prefillFromObs.title}
+                </p>
+                <p className="text-[11px] mt-0.5 text-brand-700">
+                  VO ini akan otomatis ter-link ke observasi tanggal {fmtDate(prefillFromObs.observation_date)}.
+                  Judul & justifikasi sudah di-pre-fill — silakan edit lalu tambah item perubahan BOQ.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {isEdit && initial?.review_notes && (
+            <div className="p-3 bg-amber-50 border border-amber-300 rounded-md text-xs flex items-start gap-2">
+              <RotateCcw size={14} className="text-amber-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold text-amber-800">Dikembalikan untuk Revisi</p>
+                <p className="text-amber-700 whitespace-pre-line mt-0.5">{initial.review_notes}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Meta section: collapsible */}
+          <div className="bg-white border border-ink-200 rounded-lg overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setCollapseMeta((v) => !v)}
+              className="w-full px-4 py-2.5 flex items-center justify-between bg-ink-50 hover:bg-ink-100 border-b border-ink-200"
+            >
+              <span className="text-xs font-semibold text-ink-700 flex items-center gap-2">
+                <ChevronRight size={14} className={`text-ink-500 transition-transform ${collapseMeta ? "" : "rotate-90"}`} />
+                Informasi Umum & Justifikasi
+                {!justificationOk && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">
+                    Justifikasi {justificationLen}/50
+                  </span>
+                )}
+                {!form.title.trim() && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">
+                    Judul kosong
+                  </span>
+                )}
+              </span>
+              <span className="text-[10px] text-ink-500">
+                {collapseMeta ? "Klik untuk tampilkan" : "Klik untuk sembunyikan"}
+              </span>
+            </button>
+            {!collapseMeta && (
+              <div className="p-4 grid grid-cols-1 lg:grid-cols-3 gap-3 text-sm">
+                <div className="lg:col-span-3">
+                  <label className="label">Judul *</label>
+                  <input className="input" value={form.title} maxLength={200}
+                    onChange={(e) => setForm({ ...form, title: e.target.value })}
+                    placeholder="Contoh: Penambahan revetmen segmen timur akibat abrasi" />
+                </div>
+                <div className="lg:col-span-2">
+                  <label className="label">Justifikasi Teknis * (min 50 karakter)</label>
+                  <textarea className="input" rows={3} value={form.technical_justification}
+                    onChange={(e) => setForm({ ...form, technical_justification: e.target.value })}
+                    placeholder="Jelaskan latar belakang teknis perubahan ini..." />
+                  <p className={`text-[11px] mt-0.5 ${justificationOk ? "text-emerald-600" : "text-red-600"}`}>
+                    {justificationLen} / 50 karakter {justificationOk ? "✓" : "minimum"}
+                  </p>
+                </div>
+                <div>
+                  <label className="label">Perhitungan Volume (opsional)</label>
+                  <textarea className="input" rows={3} value={form.quantity_calculation}
+                    onChange={(e) => setForm({ ...form, quantity_calculation: e.target.value })}
+                    placeholder="Detail rumus / dasar perhitungan..." />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Items grid */}
+          <div className="bg-white border border-ink-200 rounded-lg p-4">
+            <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+              <div>
+                <h3 className="text-sm font-semibold text-ink-800">Item Perubahan BOQ</h3>
+                <p className="text-[11px] text-ink-500">
+                  Pilih fasilitas → edit Vol Baru langsung di tabel. Action auto-detected dari perubahan volume.
+                </p>
+              </div>
+              <div className="text-[11px] text-ink-600">
+                {itemCount > 0 ? <><b>{itemCount}</b> item</> : <span className="text-red-600">Belum ada item — wajib min 1</span>}
+              </div>
+            </div>
+            <VOItemsGrid
+              contract={contract}
+              items={form.items}
+              onChange={(newItems) => setForm({ ...form, items: newItems })}
+              isAdmin={role === "superadmin" || role === "admin_pusat"}
+              voId={isEdit ? initial.id : null}
+            />
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 }
 
@@ -2975,7 +3254,10 @@ function FacilityPicker({ facilities, value, onChange }) {
       >
         {selected ? (
           <span className="truncate">
-            <span className="text-ink-500 font-mono mr-1">[{selected.location_code}] {selected.facility_code}</span>
+            {selected._isPending
+              ? <span className="text-amber-600 font-mono mr-1">🆕 {selected.facility_code}</span>
+              : <span className="text-ink-500 font-mono mr-1">[{selected.location_code}] {selected.facility_code}</span>
+            }
             {selected.facility_name}
           </span>
         ) : (
@@ -3007,13 +3289,23 @@ function FacilityPicker({ facilities, value, onChange }) {
                 }`}
                 onClick={() => { onChange(f.id); setOpen(false); setSearch(""); }}
               >
-                <div className="font-mono text-[10px] text-ink-500">
-                  [{f.location_code}] {f.facility_code}
-                </div>
-                <div>
-                  {f.facility_name}
-                  {f.total_value ? <span className="text-[10px] text-ink-500 ml-1">— {fmtCurrency(f.total_value)}</span> : null}
-                </div>
+                {f._isPending ? (
+                  <div className="flex items-center gap-1">
+                    <span className="text-[9px] px-1 py-0.5 rounded bg-amber-100 text-amber-700 font-semibold">BARU</span>
+                    <span className="font-mono text-[10px] text-amber-700">{f.facility_code}</span>
+                    <span className="text-[10px] text-amber-800">{f.facility_name}</span>
+                  </div>
+                ) : (
+                  <>
+                    <div className="font-mono text-[10px] text-ink-500">
+                      [{f.location_code}] {f.facility_code}
+                    </div>
+                    <div>
+                      {f.facility_name}
+                      {f.total_value ? <span className="text-[10px] text-ink-500 ml-1">— {fmtCurrency(f.total_value)}</span> : null}
+                    </div>
+                  </>
+                )}
               </button>
             ))}
             {filtered.length > 200 && (
@@ -3030,6 +3322,178 @@ function FacilityPicker({ facilities, value, onChange }) {
 
 
 // ════════════════════════════════════════════════════════════════════════════
+// AddFacilitySection — bagian terpisah untuk action ADD_FACILITY
+// (tambah fasilitas baru di lokasi existing). Tidak terikat ke facility picker
+// utama karena action ini menambah Facility, bukan mengubah BOQ items.
+// Setelah ADD_FACILITY ditambahkan di sini, fasilitas baru langsung muncul di
+// picker BOQ Items section (dengan badge "BARU") dan bisa langsung diisi item BOQ
+// dalam VO yang sama, atau juga boleh dibiarkan kosong dulu dan diisi lewat VO lain.
+// ════════════════════════════════════════════════════════════════════════════
+function AddFacilitySection({ items, onChange, locations }) {
+  const [open, setOpen] = useState(false);
+  const addFacItems = items
+    .map((it, i) => ({ ...it, _idx: i }))
+    .filter((it) => it.action === "add_facility");
+
+  const addRow = () => {
+    onChange([
+      ...items,
+      {
+        action: "add_facility",
+        boq_item_id: null,
+        facility_id: null,
+        location_id: locations[0]?.id || null,
+        new_facility_code: "",
+        description: "",
+        unit: "",
+        volume_delta: 0,
+        unit_price: 0,
+        notes: "",
+      },
+    ]);
+    setOpen(true);
+  };
+
+  const updateRow = (idx, key, val) => {
+    onChange(items.map((it, i) => (i === idx ? { ...it, [key]: val } : it)));
+  };
+
+  const removeRow = (idx) => {
+    onChange(items.filter((_, i) => i !== idx));
+  };
+
+  const totalNew = addFacItems.length;
+
+  return (
+    <div className="border border-emerald-200 rounded-lg overflow-hidden bg-emerald-50/30">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-50"
+      >
+        <span className="flex items-center gap-1.5">
+          <ChevronRight size={13} className={`transition-transform ${open ? "rotate-90" : ""}`} />
+          🏗 Fasilitas Baru (ADD_FACILITY)
+          {totalNew > 0 && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200">
+              {totalNew} usulan
+            </span>
+          )}
+        </span>
+        <span className="text-[10px] text-emerald-700 font-normal">
+          Setelah ditambahkan, fasilitas baru langsung bisa diisi BOQ item di section bawah
+        </span>
+      </button>
+
+      {open && (
+        <div className="p-3 border-t border-emerald-200 bg-white">
+          {addFacItems.length === 0 ? (
+            <p className="text-xs text-ink-500 italic mb-2">
+              Belum ada usulan fasilitas baru. Klik "+ Fasilitas Baru" untuk menambahkan.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-ink-50">
+                  <tr className="text-left">
+                    <th className="px-2 py-1.5 font-semibold text-ink-700 w-48">Lokasi *</th>
+                    <th className="px-2 py-1.5 font-semibold text-ink-700 w-32">Kode Fasilitas *</th>
+                    <th className="px-2 py-1.5 font-semibold text-ink-700">Nama Fasilitas *</th>
+                    <th className="px-2 py-1.5 font-semibold text-ink-700 w-44">Catatan</th>
+                    <th className="px-2 py-1.5 w-10"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {addFacItems.map((r) => {
+                    const loc = locations.find((l) => l.id === r.location_id);
+                    const codeOk = (r.new_facility_code || "").trim().length > 0;
+                    const nameOk = (r.description || "").trim().length > 0;
+                    const locOk = !!r.location_id;
+                    return (
+                      <tr key={r._idx} className="border-t border-ink-100">
+                        <td className="px-2 py-1">
+                          <select
+                            className={`input py-0.5 text-xs w-full ${!locOk ? "border-red-300" : ""}`}
+                            value={r.location_id || ""}
+                            onChange={(e) => updateRow(r._idx, "location_id", e.target.value || null)}
+                          >
+                            <option value="">— pilih lokasi —</option>
+                            {locations.map((l) => (
+                              <option key={l.id} value={l.id}>
+                                {l.location_code} — {l.name}
+                              </option>
+                            ))}
+                          </select>
+                          {loc && (
+                            <p className="text-[9px] font-mono text-ink-500 mt-0.5">
+                              {(loc.facilities || []).length} fasilitas existing
+                            </p>
+                          )}
+                        </td>
+                        <td className="px-2 py-1">
+                          <input
+                            className={`input py-0.5 text-xs w-full font-mono ${!codeOk ? "border-red-300" : ""}`}
+                            value={r.new_facility_code || ""}
+                            onChange={(e) => updateRow(r._idx, "new_facility_code", e.target.value)}
+                            placeholder="mis. 7.NewBlock"
+                            maxLength={50}
+                          />
+                        </td>
+                        <td className="px-2 py-1">
+                          <input
+                            className={`input py-0.5 text-xs w-full ${!nameOk ? "border-red-300" : ""}`}
+                            value={r.description || ""}
+                            onChange={(e) => updateRow(r._idx, "description", e.target.value)}
+                            placeholder="mis. Gudang Beku Blok B"
+                            maxLength={500}
+                          />
+                        </td>
+                        <td className="px-2 py-1">
+                          <input
+                            className="input py-0.5 text-xs w-full"
+                            value={r.notes || ""}
+                            onChange={(e) => updateRow(r._idx, "notes", e.target.value)}
+                            placeholder="opsional"
+                          />
+                        </td>
+                        <td className="px-2 py-1 text-center">
+                          <button
+                            type="button"
+                            className="text-red-600 hover:text-red-800"
+                            onClick={() => removeRow(r._idx)}
+                            title="Hapus baris"
+                          >
+                            <Trash2 size={11} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <button
+              type="button"
+              className="btn-ghost btn-xs text-emerald-700"
+              onClick={addRow}
+              disabled={locations.length === 0}
+            >
+              <Plus size={11} /> Fasilitas Baru
+            </button>
+            <p className="text-[10px] text-ink-500">
+              💡 Cost impact = 0 (fasilitas kosong saat dibuat). Setelah adendum disetujui, buat VO baru untuk tambah ADD item ke fasilitas ini.
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // VOItemsGrid — grid editor untuk item VO per fasilitas.
 // User edit Vol Baru langsung; action (INCREASE/DECREASE/REMOVE/ADD) di-infer
 // dari selisih ke Vol Awal. Harga Satuan read-only by default (kontrak →
@@ -3037,7 +3501,9 @@ function FacilityPicker({ facilities, value, onChange }) {
 // ════════════════════════════════════════════════════════════════════════════
 function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }) {
   const [showExcelPicker, setShowExcelPicker] = useState(null); // 'export' | 'import' | null
-  const allFacilities = useMemo(() =>
+  const [showNewFacForm, setShowNewFacForm] = useState(false);
+  const [newFac, setNewFac] = useState({ location_id: "", code: "", name: "" });
+  const existingFacilities = useMemo(() =>
     (contract.locations || []).flatMap((l) =>
       (l.facilities || []).map((f) => ({
         ...f,
@@ -3045,6 +3511,23 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
         location_name: l.name,
       }))
     ), [contract.locations]
+  );
+  // Virtual facilities defined by ADD_FACILITY items in the same VO (not in DB yet)
+  const virtualFacilities = useMemo(() =>
+    items
+      .filter((it) => it.action === "add_facility" && (it.new_facility_code || "").trim())
+      .map((it) => ({
+        id: `PENDING:${it.new_facility_code.trim()}`,
+        facility_code: it.new_facility_code.trim(),
+        facility_name: it.description || `Fasilitas Baru (${it.new_facility_code.trim()})`,
+        location_id: it.location_id,
+        _isPending: true,
+      })),
+    [items]
+  );
+  const allFacilities = useMemo(
+    () => [...existingFacilities, ...virtualFacilities],
+    [existingFacilities, virtualFacilities]
   );
   const [facilityId, setFacilityId] = useState(allFacilities[0]?.id || "");
   const [boqItems, setBoqItems] = useState([]);
@@ -3056,6 +3539,11 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
 
   useEffect(() => {
     if (!facilityId) return;
+    // Pending (same-VO ADD_FACILITY) facilities don't exist in DB yet — skip fetch
+    if (facilityId.startsWith("PENDING:")) {
+      setBoqItems([]);
+      return;
+    }
     if (boqCache[facilityId]) {
       setBoqItems(boqCache[facilityId]);
       return;
@@ -3246,6 +3734,7 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
         unit: "",
         volume_delta: "",
         unit_price: "",
+        notes: "",
       },
     ]);
   };
@@ -3290,7 +3779,38 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
   const totalDelta = items.reduce((sum, it) => sum + (parseFloat(it.cost_impact) || (parseFloat(it.volume_delta || 0) * parseFloat(it.unit_price || 0))), 0);
   const hasInvalid = rows.some((r) => r.invalid);
 
-  if (!allFacilities.length) {
+  const confirmNewFacility = () => {
+    const code = newFac.code.trim();
+    const name = newFac.name.trim();
+    if (!newFac.location_id) return toast.error("Pilih lokasi terlebih dahulu.");
+    if (!code) return toast.error("Kode fasilitas wajib diisi.");
+    if (!name) return toast.error("Nama fasilitas wajib diisi.");
+    const pendingId = `PENDING:${code}`;
+    if (allFacilities.some((f) => f.facility_code === code)) {
+      return toast.error(`Kode fasilitas "${code}" sudah ada di kontrak atau VO ini.`);
+    }
+    onChange([
+      ...items,
+      {
+        action: "add_facility",
+        boq_item_id: null,
+        facility_id: null,
+        location_id: newFac.location_id,
+        new_facility_code: code,
+        description: name,
+        unit: "",
+        volume_delta: 0,
+        unit_price: 0,
+        notes: "",
+      },
+    ]);
+    setFacilityId(pendingId);
+    setShowNewFacForm(false);
+    setNewFac({ location_id: "", code: "", name: "" });
+    toast.success(`Fasilitas "${code} — ${name}" ditambahkan. Isi item BOQ-nya di bawah.`);
+  };
+
+  if (!allFacilities.length && !showNewFacForm) {
     return (
       <div className="p-3 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
         Kontrak ini belum punya fasilitas. Tambah lokasi & fasilitas dulu sebelum membuat VO.
@@ -3303,40 +3823,58 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
       {/* Toolbar */}
       <div className="flex items-center gap-2 flex-wrap p-2 bg-ink-50 rounded border border-ink-200">
         <label className="text-xs font-medium text-ink-700">Fasilitas:</label>
-        <FacilityPicker
-          facilities={allFacilities}
-          value={facilityId}
-          onChange={setFacilityId}
-        />
-        {!facilityRemoved && (
+        {allFacilities.length > 0 && (
+          <FacilityPicker
+            facilities={allFacilities}
+            value={facilityId}
+            onChange={setFacilityId}
+          />
+        )}
+        <button
+          type="button"
+          className={`btn-ghost btn-xs text-emerald-700 border border-emerald-300 ${showNewFacForm ? "bg-emerald-50" : ""}`}
+          onClick={() => {
+            setShowNewFacForm((v) => !v);
+            if (!showNewFacForm) setNewFac({ location_id: (contract.locations || [])[0]?.id || "", code: "", name: "" });
+          }}
+          title="Tambahkan fasilitas baru ke dalam VO ini"
+        >
+          🏗 Fasilitas Baru
+        </button>
+        {!facilityRemoved && allFacilities.length > 0 && (
           <>
             <button type="button" className="btn-ghost btn-xs" onClick={addNewItem}>
               <Plus size={11} /> Item Baru
             </button>
-            <button
-              type="button"
-              className="btn-ghost btn-xs text-red-600"
-              onClick={removeFacility}
-              title="Tandai seluruh fasilitas untuk dihapus"
-            >
-              <Trash2 size={11} /> Hapus Fasilitas
-            </button>
-            <button
-              type="button"
-              className="btn-ghost btn-xs"
-              onClick={() => setShowExcelPicker("export")}
-              title="Download snapshot BOQ untuk edit massal di Excel"
-            >
-              <Download size={11} /> Export Excel
-            </button>
-            <button
-              type="button"
-              className="btn-ghost btn-xs"
-              onClick={() => setShowExcelPicker("import")}
-              title="Upload Excel hasil edit untuk apply perubahan massal"
-            >
-              <Upload size={11} /> Import Excel
-            </button>
+            {/* Buttons below only apply to existing (non-pending) facilities */}
+            {!facility?._isPending && (
+              <>
+                <button
+                  type="button"
+                  className="btn-ghost btn-xs text-red-600"
+                  onClick={removeFacility}
+                  title="Tandai seluruh fasilitas untuk dihapus"
+                >
+                  <Trash2 size={11} /> Hapus Fasilitas
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost btn-xs"
+                  onClick={() => setShowExcelPicker("export")}
+                  title="Download snapshot BOQ untuk edit massal di Excel"
+                >
+                  <Download size={11} /> Export Excel
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost btn-xs"
+                  onClick={() => setShowExcelPicker("import")}
+                  title="Upload Excel hasil edit untuk apply perubahan massal"
+                >
+                  <Upload size={11} /> Import Excel
+                </button>
+              </>
+            )}
           </>
         )}
         {isAdmin && !facilityRemoved && (
@@ -3350,6 +3888,58 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
           </label>
         )}
       </div>
+
+      {/* Inline form — tambah fasilitas baru ke VO */}
+      {showNewFacForm && (
+        <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-lg space-y-2">
+          <p className="text-xs font-semibold text-emerald-800">🏗 Tambah Fasilitas Baru ke VO</p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div>
+              <label className="text-[10px] text-ink-600 font-medium block mb-0.5">Lokasi *</label>
+              <select
+                className="input py-0.5 text-xs w-full"
+                value={newFac.location_id}
+                onChange={(e) => setNewFac({ ...newFac, location_id: e.target.value })}
+              >
+                <option value="">— pilih —</option>
+                {(contract.locations || []).map((l) => (
+                  <option key={l.id} value={l.id}>{l.location_code} — {l.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] text-ink-600 font-medium block mb-0.5">Kode Fasilitas *</label>
+              <input
+                className="input py-0.5 text-xs w-full font-mono"
+                placeholder="mis. 7.NewBlok"
+                maxLength={50}
+                value={newFac.code}
+                onChange={(e) => setNewFac({ ...newFac, code: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-ink-600 font-medium block mb-0.5">Nama Fasilitas *</label>
+              <input
+                className="input py-0.5 text-xs w-full"
+                placeholder="mis. Gudang Pendingin Blok Baru"
+                value={newFac.name}
+                onChange={(e) => setNewFac({ ...newFac, name: e.target.value })}
+              />
+            </div>
+          </div>
+          <p className="text-[10px] text-emerald-700">
+            Setelah dikonfirmasi, fasilitas langsung aktif di picker di atas — isi item BOQ-nya di bawah.
+          </p>
+          <div className="flex gap-2">
+            <button type="button" className="btn-primary btn-xs" onClick={confirmNewFacility}>
+              ✓ Konfirmasi &amp; Mulai Isi BOQ
+            </button>
+            <button type="button" className="btn-secondary btn-xs" onClick={() => setShowNewFacForm(false)}>
+              Batal
+            </button>
+          </div>
+        </div>
+      )}
 
       {facilityRemoved ? (
         <div className="p-3 rounded bg-red-50 border border-red-200 text-xs text-red-800 flex items-start gap-2">
@@ -3369,6 +3959,11 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
             </button>
           </div>
         </div>
+      ) : facility?._isPending && addRows.length === 0 ? (
+        <div className="p-3 rounded bg-amber-50 border border-amber-200 text-xs text-amber-800">
+          🏗 Fasilitas baru <b>{facility.facility_code} — {facility.facility_name}</b> belum punya item BOQ.
+          Klik <b>+ Item Baru</b> untuk menambah; nilai dan rincian item akan ikut tampil di rekap & detail VO.
+        </div>
       ) : loadingBoq ? (
         <p className="text-xs text-ink-500 p-3">Memuat BOQ fasilitas...</p>
       ) : rows.length === 0 && addRows.length === 0 ? (
@@ -3377,6 +3972,13 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
         </div>
       ) : (
         <>
+          {/* Banner for pending facility with items */}
+          {facility?._isPending && (
+            <div className="px-2 py-1.5 bg-emerald-50 border border-emerald-200 rounded text-[10px] text-emerald-800">
+              🏗 Fasilitas baru <b>{facility.facility_code} — {facility.facility_name}</b> dibuat dalam VO ini.
+              Item yang ditambahkan di bawah ikut menjadi bagian VO ini dan tampil di detail/rekap.
+            </div>
+          )}
           {/* Search filter */}
           <div className="flex items-center gap-2 px-1">
             <Search size={13} className="text-ink-400" />
@@ -3409,6 +4011,7 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
                 <th className="table-th text-right w-32">Harga {allowPriceEdit ? "*" : "(RO)"}</th>
                 <th className="table-th text-right w-28">Δ Nilai</th>
                 <th className="table-th text-center w-24">Status</th>
+                <th className="table-th text-left w-44">Catatan</th>
                 <th className="table-th text-center w-16"></th>
               </tr>
             </thead>
@@ -3422,7 +4025,7 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
                       <td className="table-td font-mono text-[10px] text-ink-600">
                         <span style={{ paddingLeft: `${indent}px` }}>📁 {r.original_code}</span>
                       </td>
-                      <td className="table-td font-semibold text-ink-700" colSpan={8}>
+                      <td className="table-td font-semibold text-ink-700" colSpan={9}>
                         {r.description}
                       </td>
                       <td className="table-td"></td>
@@ -3447,7 +4050,7 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
                     <td className="table-td text-right">
                       <input
                         type="number"
-                        step="0.0001"
+                        step="0.00001"
                         min="0"
                         className={`input py-0.5 text-xs font-mono w-24 text-right ${r.invalid ? "border-red-400 bg-red-50" : ""}`}
                         value={r.new_volume}
@@ -3464,7 +4067,7 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
                       {allowPriceEdit ? (
                         <input
                           type="number"
-                          step="0.01"
+                          step="0.00001"
                           min="0"
                           className="input py-0.5 text-xs font-mono w-28 text-right"
                           value={r.unit_price}
@@ -3481,6 +4084,10 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
                     </td>
                     <td className="table-td text-center">
                       {r.action ? <VOActionBadge action={r.action} /> : <span className="text-ink-400 text-[10px]">tetap</span>}
+                    </td>
+                    <td className="table-td text-[10px] text-ink-500">
+                      {/* INC/DEC/MOD/REM tidak punya kolom catatan langsung */}
+                      —
                     </td>
                     <td className="table-td text-center">
                       {r.action && (
@@ -3537,7 +4144,7 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
                     <td className="table-td text-right">
                       <input
                         type="number"
-                        step="0.0001"
+                        step="0.00001"
                         min="0"
                         className="input py-0.5 text-xs font-mono w-24 text-right"
                         value={r.volume_delta}
@@ -3550,7 +4157,7 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
                     <td className="table-td text-right">
                       <input
                         type="number"
-                        step="0.01"
+                        step="0.00001"
                         min="0"
                         className="input py-0.5 text-xs font-mono w-28 text-right"
                         value={r.unit_price}
@@ -3563,6 +4170,28 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
                     </td>
                     <td className="table-td text-center">
                       <VOActionBadge action="add" />
+                    </td>
+                    <td className="table-td">
+                      <input
+                        className="input py-0.5 text-[10px] w-full"
+                        value={r.notes || ""}
+                        onChange={(e) => updateAddRow(r._idx, "notes", e.target.value)}
+                        placeholder={newPrice === 0 ? "PARENT/INFO/OWNER/TITIPAN…" : "Catatan opsional"}
+                        title={newPrice === 0
+                          ? "Kalau harga 0, awali catatan dengan PARENT, INFO, OWNER, atau TITIPAN supaya validasi bypass"
+                          : "Catatan tambahan untuk item ini"}
+                      />
+                      {newPrice === 0 && (() => {
+                        const ZERO_PRICE_BYPASS = ["PARENT", "INFO", "OWNER", "TITIPAN"];
+                        const hasBypass = ZERO_PRICE_BYPASS.some((kw) =>
+                          (r.notes || "").trim().toUpperCase().startsWith(kw)
+                        );
+                        return hasBypass ? (
+                          <p className="text-[9px] text-emerald-700 mt-0.5">✓ bypass aktif</p>
+                        ) : (
+                          <p className="text-[9px] text-amber-700 mt-0.5">⚠ harga 0 — wajib keyword</p>
+                        );
+                      })()}
                     </td>
                     <td className="table-td text-center">
                       <button
@@ -3639,6 +4268,7 @@ function VOItemsGrid({ contract, items, onChange, isAdmin = false, voId = null }
 function VOExcelDialog({ mode, contract, allFacilities, currentFacilityId, voId, items, onClose, onImported }) {
   const [scope, setScope] = useState("current"); // 'current' | 'all' | 'multi'
   const [selectedFacIds, setSelectedFacIds] = useState([currentFacilityId].filter(Boolean));
+  const [sheetMode, setSheetMode] = useState("flat"); // 'flat' | 'per_facility'
   const [busy, setBusy] = useState(false);
   const [parseResult, setParseResult] = useState(null);
   const fileInputRef = useRef(null);
@@ -3649,10 +4279,13 @@ function VOExcelDialog({ mode, contract, allFacilities, currentFacilityId, voId,
     ? null  // backend resolves: null = all facilities
     : selectedFacIds;
 
+  // per_facility hanya relevan saat scope all/multi (>1 fasilitas)
+  const showSheetModeOption = scope === "all" || scope === "multi";
+
   const doExport = async () => {
     setBusy(true);
     try {
-      const params = { vo_id: voId || undefined };
+      const params = { vo_id: voId || undefined, mode: showSheetModeOption ? sheetMode : "flat" };
       if (facIdsForRequest && facIdsForRequest.length > 0) {
         params.facility_ids = facIdsForRequest.join(",");
       }
@@ -3747,6 +4380,29 @@ function VOExcelDialog({ mode, contract, allFacilities, currentFacilityId, voId,
               </div>
             )}
           </div>
+
+          {showSheetModeOption && (
+            <div>
+              <p className="text-ink-700 mb-1">Format sheet:</p>
+              <div className="space-y-1">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="radio" checked={sheetMode === "flat"} onChange={() => setSheetMode("flat")} />
+                  <span>Satu sheet (semua fasilitas digabung)</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="radio" checked={sheetMode === "per_facility"} onChange={() => setSheetMode("per_facility")} />
+                  <span>Sheet terpisah per fasilitas <span className="text-ink-400 text-[11px]">(+ sheet REKAP)</span></span>
+                </label>
+              </div>
+              {sheetMode === "per_facility" && (
+                <p className="mt-1 text-[11px] text-indigo-600">
+                  Import akan auto-detect format ini — sheet <code className="bg-indigo-50 px-1 rounded">FAC_*</code> dibaca semua sekaligus.
+                  Anda bisa hapus sheet fasilitas yang tidak perlu diedit sebelum upload.
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="p-2 bg-ink-50 rounded text-[11px] text-ink-700">
             <p className="font-medium">Yang akan ada di file:</p>
             <ul className="list-disc list-inside mt-1 space-y-0.5">
@@ -3819,6 +4475,7 @@ const VO_ACTION_META = {
   modify_spec: { label: "~ Ubah Spek", color: "blue", sign: "" },
   remove: { label: "✕ Hapus Item", color: "red", sign: "−" },
   remove_facility: { label: "✕✕ Hapus Fasilitas", color: "red", sign: "−" },
+  add_facility: { label: "+🏗 Tambah Fasilitas", color: "emerald", sign: "+" },
 };
 
 function VOActionBadge({ action }) {
@@ -3957,7 +4614,1017 @@ function VOItemCard({ it }) {
   );
 }
 
+// VOComparisonView — komparasi BOQ aktif vs usulan VO, level fasilitas → drilldown item
+function VOComparisonView({ vo, activeBoq, loading }) {
+  const [expanded, setExpanded] = useState({}); // { facilityId: bool }
+
+  const facilities = useMemo(() => {
+    if (activeBoq === null) return null; // belum dimuat
+    const facMap = new Map();
+
+    // Seed dari active BOQ
+    for (const b of activeBoq) {
+      const fid = b.facility_id;
+      if (!fid) continue;
+      if (!facMap.has(fid)) {
+        facMap.set(fid, {
+          id: fid,
+          code: b.facility_code,
+          name: b.facility_name,
+          location_code: b.location_code,
+          location_name: b.location_name,
+          activeBoqTotal: 0,
+          activeItems: new Map(), // boq_item_id → row
+          voItems: [],
+        });
+      }
+      const f = facMap.get(fid);
+      const total = Number(b.total_price || 0);
+      f.activeBoqTotal += total;
+      f.activeItems.set(b.id, b);
+    }
+
+    // Merge VO items berdasarkan facility
+    const resolveFac = (it) => {
+      if (it.target_facility?.id) return it.target_facility;
+      if (it.target_boq?.facility_id) {
+        return {
+          id: it.target_boq.facility_id,
+          code: it.target_boq.facility_code,
+          name: it.target_boq.facility_name,
+          location_code: it.target_boq.location_code,
+          location_name: it.target_boq.location_name,
+        };
+      }
+      return null;
+    };
+    for (const it of (vo.items || [])) {
+      const fac = resolveFac(it);
+      if (!fac?.id) continue;
+      if (!facMap.has(fac.id)) {
+        facMap.set(fac.id, {
+          id: fac.id,
+          code: fac.code,
+          name: fac.name,
+          location_code: fac.location_code,
+          location_name: fac.location_name,
+          activeBoqTotal: 0,
+          activeItems: new Map(),
+          voItems: [],
+        });
+      }
+      facMap.get(fac.id).voItems.push(it);
+    }
+
+    // Hanya tampilkan fasilitas yang tersentuh VO
+    const list = [...facMap.values()]
+      .filter((f) => f.voItems.length > 0)
+      .map((f) => ({
+        ...f,
+        voTotal: f.voItems.reduce((s, it) => s + Number(it.cost_impact || 0), 0),
+      }));
+
+    list.sort((a, b) => {
+      const lc = (a.location_code || "").localeCompare(b.location_code || "");
+      if (lc !== 0) return lc;
+      return (a.code || "").localeCompare(b.code || "");
+    });
+    return list;
+  }, [activeBoq, vo.items]);
+
+  if (loading || activeBoq === null) {
+    return (
+      <div className="flex items-center justify-center py-8 text-xs text-ink-500 gap-2">
+        <Spinner size={14} /> Memuat BOQ aktif…
+      </div>
+    );
+  }
+  if (!facilities || facilities.length === 0) {
+    return (
+      <p className="text-xs text-ink-500 italic text-center py-4">
+        Tidak ada fasilitas yang tersentuh oleh VO ini.
+      </p>
+    );
+  }
+
+  // Total grand
+  const grandActive = facilities.reduce((s, f) => s + f.activeBoqTotal, 0);
+  const grandVo = facilities.reduce((s, f) => s + f.voTotal, 0);
+
+  const impactCls = (n) =>
+    n > 0 ? "text-emerald-700" : n < 0 ? "text-red-700" : "text-ink-700";
+
+  return (
+    <div>
+      <p className="text-xs font-semibold text-ink-700 mb-2">
+        Komparasi BOQ Aktif vs Usulan ({facilities.length} fasilitas tersentuh) — klik baris untuk lihat per item
+      </p>
+      <div className="border border-ink-200 rounded overflow-hidden max-h-[55vh] overflow-y-auto">
+        <table className="w-full text-xs">
+          <thead className="bg-ink-50 sticky top-0 z-10">
+            <tr className="text-left">
+              <th className="px-3 py-2 font-semibold text-ink-700">Uraian</th>
+              <th className="px-3 py-2 font-semibold text-ink-700 text-right w-48">Total Nilai Fasilitas BOQ Aktif</th>
+              <th className="px-3 py-2 font-semibold text-ink-700 text-right w-48">Total BOQ Usulan</th>
+              <th className="px-3 py-2 font-semibold text-ink-700 text-right w-44">Selisih</th>
+            </tr>
+          </thead>
+          <tbody>
+            {facilities.map((f) => {
+              const isOpen = !!expanded[f.id];
+              const proposed = f.activeBoqTotal + f.voTotal;
+              return (
+                <React.Fragment key={f.id}>
+                  <tr
+                    className="border-t border-ink-200 bg-white hover:bg-ink-50 cursor-pointer"
+                    onClick={() => setExpanded((p) => ({ ...p, [f.id]: !p[f.id] }))}
+                  >
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-1.5">
+                        <ChevronRight
+                          size={14}
+                          className={`text-ink-500 transition-transform ${isOpen ? "rotate-90" : ""}`}
+                        />
+                        <div>
+                          <div className="font-semibold text-ink-900">{f.name || f.code}</div>
+                          <div className="text-[10px] font-mono text-ink-500">
+                            {f.location_code}/{f.code}
+                            {f.location_name ? ` · ${f.location_name}` : ""}
+                            {" · "}{f.voItems.length} usulan
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono">{fmtCurrency(f.activeBoqTotal, false)}</td>
+                    <td className="px-3 py-2 text-right font-mono">{fmtCurrency(proposed, false)}</td>
+                    <td className={`px-3 py-2 text-right font-mono font-semibold ${impactCls(f.voTotal)}`}>
+                      {f.voTotal > 0 ? "+" : ""}{fmtCurrency(f.voTotal, false)}
+                    </td>
+                  </tr>
+                  {isOpen && (
+                    <VOComparisonItemRows fac={f} />
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+          <tfoot className="bg-ink-50 sticky bottom-0">
+            <tr className="border-t-2 border-ink-300">
+              <td className="px-3 py-2 font-semibold text-ink-800">TOTAL</td>
+              <td className="px-3 py-2 text-right font-mono font-bold">{fmtCurrency(grandActive, false)}</td>
+              <td className="px-3 py-2 text-right font-mono font-bold">{fmtCurrency(grandActive + grandVo, false)}</td>
+              <td className={`px-3 py-2 text-right font-mono font-bold ${impactCls(grandVo)}`}>
+                {grandVo > 0 ? "+" : ""}{fmtCurrency(grandVo, false)}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <p className="text-[10px] text-ink-500 mt-1.5">
+        <i>Total Nilai Fasilitas BOQ Aktif</i> = total nilai item aktif fasilitas pada revisi BOQ aktif saat ini.{" "}
+        <i>Total BOQ Usulan</i> = nilai BOQ aktif + Δ usulan VO (proyeksi setelah VO disetujui).{" "}
+        <i>Selisih</i> = Δ usulan (positif = naik, negatif = turun).
+      </p>
+    </div>
+  );
+}
+
+// Sub-baris komparasi per item (drilldown saat fasilitas di-expand)
+function VOComparisonItemRows({ fac }) {
+  const impactCls = (n) =>
+    n > 0 ? "text-emerald-700" : n < 0 ? "text-red-700" : "text-ink-700";
+
+  // Per-item:
+  //   active   = nilai item di BOQ aktif (sebelum VO)
+  //   proposed = proyeksi nilai item setelah VO
+  //   delta    = cost_impact (selisih)
+  const rows = fac.voItems.map((it) => {
+    const action = it.action;
+    let uraian = it.description || it.target_boq?.description || it.target_facility?.name || "—";
+    let active = null; // null = belum ada di BOQ aktif
+    let proposed = null;
+    let scopeNote = null;
+    const delta = Number(it.cost_impact || 0);
+
+    if (action === "add") {
+      active = null; // belum ada
+      proposed = delta;
+      scopeNote = "Item baru";
+    } else if (action === "remove_facility") {
+      active = Number(it.target_facility?.total_value || 0);
+      proposed = 0;
+      uraian = `Hapus seluruh fasilitas: ${it.target_facility?.name || fac.name}`;
+      scopeNote = `${it.target_facility?.item_count || "?"} item`;
+    } else if (action === "remove") {
+      active = Number(it.target_boq?.total_price || 0);
+      proposed = 0;
+      if (!it.description && it.target_boq?.description) uraian = it.target_boq.description;
+    } else if (action === "modify_spec") {
+      active = Number(it.target_boq?.total_price || 0);
+      proposed = active + delta; // delta biasanya 0
+      if (!it.description && it.target_boq?.description) uraian = it.target_boq.description;
+    } else {
+      // increase / decrease
+      active = Number(it.target_boq?.total_price || 0);
+      proposed = active + delta;
+      if (!it.description && it.target_boq?.description) uraian = it.target_boq.description;
+    }
+
+    return { it, action, uraian, active, proposed, delta, scopeNote };
+  });
+
+  return (
+    <>
+      {rows.map(({ it, action, uraian, active, proposed, delta, scopeNote }) => (
+        <tr key={it.id} className="border-t border-ink-100 bg-ink-50/40">
+          <td className="px-3 py-1.5 pl-9">
+            <div className="flex items-start gap-2">
+              <VOActionBadge action={action} />
+              <div className="flex-1">
+                <div className="text-ink-800">{uraian}</div>
+                {(it.target_boq?.full_code || scopeNote) && (
+                  <div className="text-[10px] font-mono text-ink-500">
+                    {it.target_boq?.full_code || ""}
+                    {it.target_boq?.full_code && scopeNote ? " · " : ""}
+                    {scopeNote || ""}
+                  </div>
+                )}
+              </div>
+            </div>
+          </td>
+          <td className="px-3 py-1.5 text-right font-mono text-ink-700">
+            {active == null ? <span className="text-ink-400 italic">—</span> : fmtCurrency(active, false)}
+          </td>
+          <td className="px-3 py-1.5 text-right font-mono text-ink-700">
+            {proposed == null ? <span className="text-ink-400 italic">—</span> : fmtCurrency(proposed, false)}
+          </td>
+          <td className={`px-3 py-1.5 text-right font-mono font-semibold ${impactCls(delta)}`}>
+            {delta > 0 ? "+" : ""}{fmtCurrency(delta, false)}
+          </td>
+        </tr>
+      ))}
+    </>
+  );
+}
+
+// ─── VO Comparison Drawer (full-screen panel, replaces modal) ────────────────
+const COMPARISON_STATUS = {
+  tetap:             { label: "Tetap",              cls: "bg-slate-100 text-slate-700 border-slate-200" },
+  vol_berubah:       { label: "Volume Berubah",     cls: "bg-amber-50 text-amber-800 border-amber-200" },
+  harga_berubah:     { label: "Harga Berubah",      cls: "bg-amber-50 text-amber-800 border-amber-200" },
+  vol_harga_berubah: { label: "Vol & Harga Berubah", cls: "bg-amber-50 text-amber-800 border-amber-200" },
+  spec_berubah:      { label: "Spek Berubah",       cls: "bg-blue-50 text-blue-700 border-blue-200" },
+  baru:              { label: "Item Baru",          cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  dihapus:           { label: "Item Dihapus",       cls: "bg-red-50 text-red-700 border-red-200" },
+  fasilitas_baru:    { label: "Fasilitas Baru",     cls: "bg-emerald-100 text-emerald-800 border-emerald-300" },
+};
+
+function buildVOComparison(activeBoq, vo) {
+  const items = (vo?.items) || [];
+  const voByBoqId = new Map();
+  const addByFac = new Map();
+  const removedFacIds = new Set();
+  const addFacilityItems = []; // ADD_FACILITY items, ditampilkan sebagai row sendiri
+  // Indeks ADD_FACILITY by code → dipakai untuk hidrasi facility info pada
+  // ADD items yang target-nya fasilitas pending (dibuat di VO yang sama).
+  const pendingFacByCode = new Map();
+  for (const it of items) {
+    if (it.action === "add_facility" && it.new_facility_code) {
+      pendingFacByCode.set(it.new_facility_code, it);
+    }
+  }
+  for (const it of items) {
+    if (it.action === "remove_facility") {
+      if (it.facility_id) removedFacIds.add(it.facility_id);
+    } else if (it.action === "add_facility") {
+      addFacilityItems.push(it);
+    } else if (it.action === "add") {
+      // Target bisa fasilitas existing (facility_id) ATAU fasilitas pending
+      // di VO yang sama (new_facility_code, facility_id null).
+      let fid = it.facility_id || it.target_facility?.id;
+      if (!fid && it.new_facility_code) {
+        fid = `PENDING:${it.new_facility_code}`;
+      }
+      if (!fid) continue;
+      if (!addByFac.has(fid)) addByFac.set(fid, []);
+      addByFac.get(fid).push(it);
+    } else if (it.boq_item_id) {
+      voByBoqId.set(it.boq_item_id, it);
+    }
+  }
+
+  const rows = [];
+  for (const b of activeBoq) {
+    const aktif_vol = Number(b.volume || 0);
+    const aktif_price = Number(b.unit_price || 0);
+    const aktif_jml = Number(b.total_price || 0);
+    let usulan_vol = aktif_vol, usulan_price = aktif_price, usulan_jml = aktif_jml;
+    let status = "tetap";
+    let voAction = null, voNotes = null;
+    let uraian = b.description, unit = b.unit;
+
+    if (removedFacIds.has(b.facility_id)) {
+      usulan_vol = 0; usulan_price = aktif_price; usulan_jml = 0;
+      status = "dihapus"; voAction = "remove_facility";
+    } else if (voByBoqId.has(b.id)) {
+      const vit = voByBoqId.get(b.id);
+      voAction = vit.action; voNotes = vit.notes;
+      if (vit.action === "remove") {
+        usulan_vol = 0; usulan_jml = 0; status = "dihapus";
+      } else if (vit.action === "modify_spec") {
+        uraian = vit.description || uraian;
+        unit = vit.unit || unit;
+        status = "spec_berubah";
+      } else {
+        usulan_vol = aktif_vol + Number(vit.volume_delta || 0);
+        usulan_price = Number(vit.unit_price || 0) || aktif_price;
+        usulan_jml = usulan_vol * usulan_price;
+        const volChanged = Math.abs(usulan_vol - aktif_vol) > 1e-9;
+        const priceChanged = Math.abs(usulan_price - aktif_price) > 1e-9;
+        status = volChanged && priceChanged ? "vol_harga_berubah"
+               : volChanged ? "vol_berubah"
+               : priceChanged ? "harga_berubah" : "tetap";
+      }
+    }
+
+    rows.push({
+      key: b.id, kode: b.full_code || b.original_code || "—", uraian, unit,
+      facility_id: b.facility_id, facility_code: b.facility_code, facility_name: b.facility_name,
+      location_code: b.location_code, location_name: b.location_name,
+      aktif_vol, aktif_price, aktif_jml,
+      usulan_vol, usulan_price, usulan_jml,
+      delta_vol: usulan_vol - aktif_vol,
+      delta_price: usulan_price - aktif_price,
+      delta_jml: usulan_jml - aktif_jml,
+      status, voAction, voNotes,
+      _isAdd: false,
+    });
+  }
+
+  for (const [facId, addItems] of addByFac.entries()) {
+    const isPending = typeof facId === "string" && facId.startsWith("PENDING:");
+    let pendingFacRef = null;
+    if (isPending) {
+      const code = facId.slice("PENDING:".length);
+      pendingFacRef = pendingFacByCode.get(code);
+    }
+    for (const it of addItems) {
+      let fac;
+      if (isPending && pendingFacRef) {
+        const loc = pendingFacRef.target_location || {};
+        fac = {
+          facility_code: pendingFacRef.new_facility_code,
+          facility_name: pendingFacRef.description || "Fasilitas Baru",
+          location_code: loc.code, location_name: loc.name,
+        };
+      } else {
+        fac = it.target_facility || activeBoq.find((b) => b.facility_id === facId) || {};
+      }
+      const usulan_vol = Number(it.volume_delta || 0);
+      const usulan_price = Number(it.unit_price || 0);
+      const usulan_jml = usulan_vol * usulan_price;
+      rows.push({
+        key: `add-${it.id}`,
+        kode: it.new_item_code || "BARU",
+        uraian: it.description, unit: it.unit,
+        facility_id: facId,
+        facility_code: fac.facility_code || fac.code || "—",
+        facility_name: fac.facility_name || fac.name || "—",
+        location_code: fac.location_code, location_name: fac.location_name,
+        aktif_vol: 0, aktif_price: 0, aktif_jml: 0,
+        usulan_vol, usulan_price, usulan_jml,
+        delta_vol: usulan_vol, delta_price: usulan_price, delta_jml: usulan_jml,
+        status: "baru", voAction: "add", voNotes: it.notes,
+        _isAdd: true,
+        _isPendingFacility: isPending,
+      });
+    }
+  }
+
+  // ADD_FACILITY rows — tampilkan sebagai row level fasilitas sendiri
+  for (const it of addFacilityItems) {
+    const loc = it.target_location || {};
+    rows.push({
+      key: `addfac-${it.id}`,
+      kode: it.new_facility_code || "BARU",
+      uraian: it.description, unit: "—",
+      facility_id: null,
+      facility_code: it.new_facility_code || "—",
+      facility_name: it.description || "Fasilitas Baru",
+      location_code: loc.code, location_name: loc.name,
+      aktif_vol: 0, aktif_price: 0, aktif_jml: 0,
+      usulan_vol: 0, usulan_price: 0, usulan_jml: 0,
+      delta_vol: 0, delta_price: 0, delta_jml: 0,
+      status: "fasilitas_baru", voAction: "add_facility", voNotes: it.notes,
+      _isAdd: true,
+      _isNewFacility: true,
+    });
+  }
+
+  rows.sort((a, b) => {
+    const lc = (a.location_code || "").localeCompare(b.location_code || "");
+    if (lc !== 0) return lc;
+    const fc = (a.facility_code || "").localeCompare(b.facility_code || "");
+    if (fc !== 0) return fc;
+    if (a._isAdd !== b._isAdd) return a._isAdd ? 1 : -1;
+    return (a.kode || "").localeCompare(b.kode || "");
+  });
+
+  const summary = {
+    item_total: rows.length,
+    item_berubah: rows.filter((r) => r.status !== "tetap").length,
+    item_baru: rows.filter((r) => r.status === "baru").length,
+    item_dihapus: rows.filter((r) => r.status === "dihapus").length,
+    item_fasilitas_baru: rows.filter((r) => r.status === "fasilitas_baru").length,
+    item_vol_berubah: rows.filter((r) => r.status === "vol_berubah" || r.status === "vol_harga_berubah").length,
+    item_harga_berubah: rows.filter((r) => r.status === "harga_berubah" || r.status === "vol_harga_berubah").length,
+    total_aktif: rows.reduce((s, r) => s + r.aktif_jml, 0),
+    total_usulan: rows.reduce((s, r) => s + r.usulan_jml, 0),
+  };
+  summary.delta_jml = summary.total_usulan - summary.total_aktif;
+  summary.delta_pct = summary.total_aktif > 0 ? (summary.delta_jml / summary.total_aktif) * 100 : 0;
+
+  const divMap = new Map();
+  for (const r of rows) {
+    if (!r.facility_code) continue;
+    if (!divMap.has(r.facility_code)) {
+      divMap.set(r.facility_code, {
+        code: r.facility_code, name: r.facility_name,
+        location_code: r.location_code,
+      });
+    }
+  }
+  const divisions = [...divMap.values()].sort((a, b) =>
+    (a.location_code || "").localeCompare(b.location_code || "") ||
+    (a.code || "").localeCompare(b.code || "")
+  );
+
+  return { rows, summary, divisions };
+}
+
+function VOComparisonDrawer({ voId, contract, canApprove, onClose, onAction, onEdit, onChanged }) {
+  const [vo, setVo] = useState(null);
+  const [activeBoq, setActiveBoq] = useState(null);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [filterDivisi, setFilterDivisi] = useState("");
+  const [filterStatus, setFilterStatus] = useState("all"); // all|naik|turun|tetap
+  const [hideTetap, setHideTetap] = useState(false);
+  const [tab, setTab] = useState("all"); // all|berubah|baru|dihapus|rekap
+
+  // Lock scroll + ESC
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e) => { if (e.key === "Escape") onClose?.(); };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  // Parallel fetch
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true); setError(null);
+    Promise.all([
+      voAPI.get(voId),
+      boqAPI.listByContractFlat(contract.id, false),
+    ])
+      .then(([voRes, boqRes]) => {
+        if (cancelled) return;
+        setVo(voRes.data);
+        setActiveBoq(boqRes.data || []);
+      })
+      .catch((e) => { if (!cancelled) setError(parseApiError(e)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [voId, contract.id]);
+
+  const { rows, summary, divisions } = useMemo(() => {
+    if (!vo || !activeBoq) return { rows: [], summary: null, divisions: [] };
+    return buildVOComparison(activeBoq, vo);
+  }, [vo, activeBoq]);
+
+  const visibleRows = useMemo(() => {
+    let r = rows;
+    if (tab === "berubah") r = r.filter((row) => row.status !== "tetap");
+    else if (tab === "baru") r = r.filter((row) => row.status === "baru" || row.status === "fasilitas_baru");
+    else if (tab === "dihapus") r = r.filter((row) => row.status === "dihapus");
+    if (filterDivisi) r = r.filter((row) => row.facility_code === filterDivisi);
+    if (filterStatus === "naik") r = r.filter((row) => row.delta_jml > 0);
+    else if (filterStatus === "turun") r = r.filter((row) => row.delta_jml < 0);
+    else if (filterStatus === "tetap") r = r.filter((row) => row.delta_jml === 0);
+    if (hideTetap) r = r.filter((row) => row.status !== "tetap");
+    if (search.trim()) {
+      const s = search.trim().toLowerCase();
+      r = r.filter((row) =>
+        (row.uraian || "").toLowerCase().includes(s) ||
+        (row.kode || "").toLowerCase().includes(s)
+      );
+    }
+    return r;
+  }, [rows, tab, filterDivisi, filterStatus, hideTetap, search]);
+
+  const [drawerActing, setDrawerActing] = useState(null); // "submit" | "approve" | "return" | "reject"
+
+  const doSubmit = async () => {
+    if (drawerActing) return;
+    setDrawerActing("submit");
+    try {
+      await voAPI.submit(vo.id);
+      toast.success("VO disubmit untuk review");
+      onChanged?.();
+      onClose?.();
+    } catch (e) { toast.error(parseApiError(e)); }
+    finally { setDrawerActing(null); }
+  };
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex flex-col bg-ink-50">
+      {/* Header strip */}
+      <div className="bg-white border-b border-ink-200 px-5 py-3 flex items-start gap-4">
+        <button
+          onClick={drawerActing ? undefined : onClose}
+          className={`p-1.5 -ml-1 rounded text-ink-600 ${drawerActing ? "opacity-40 cursor-not-allowed" : "hover:bg-ink-100"}`}
+          title="Tutup (Esc)"
+        >
+          <XIcon size={18} />
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-mono text-[11px] text-brand-600">{vo?.vo_number || "…"}</span>
+            {vo && (
+              <span className={`text-[10px] px-2 py-0.5 rounded border font-medium ${VO_STATUS_BADGE[vo.status]}`}>
+                {VO_STATUS_LABEL[vo.status] || vo.status}
+              </span>
+            )}
+            <h2 className="text-base font-semibold text-ink-900 truncate">
+              Komparasi BOQ {vo ? `— ${vo.title}` : ""}
+            </h2>
+          </div>
+          <p className="text-[11px] text-ink-500 mt-0.5">
+            {contract?.contract_number ? <>Kontrak {contract.contract_number} · </> : null}
+            {vo ? <>Dibuat {fmtDate(vo.created_at)}</> : "Memuat…"}
+            {vo?.source_observation && (
+              <>
+                {" · "}<span className="text-brand-700">↖ {vo.source_observation.type === "mc_0" ? "MC-0" : "MC"}</span>
+                {": "}{vo.source_observation.title}
+              </>
+            )}
+          </p>
+        </div>
+        <div className="flex gap-1.5 flex-wrap items-center">
+          {vo?.status === "draft" && (
+            <>
+              <button
+                className="btn-ghost btn-sm"
+                disabled={!!drawerActing}
+                onClick={() => { onEdit?.(vo); onClose?.(); }}
+              >
+                <Edit2 size={12} /> Edit
+              </button>
+              <button
+                className="btn-primary btn-sm"
+                disabled={!!drawerActing}
+                onClick={doSubmit}
+              >
+                {drawerActing === "submit"
+                  ? <><Spinner size={12} /> Submitting…</>
+                  : <><Send size={12} /> Submit</>}
+              </button>
+            </>
+          )}
+          {vo?.status === "under_review" && canApprove && (
+            <>
+              <button
+                className="btn-secondary btn-sm"
+                disabled={!!drawerActing}
+                onClick={() => { onAction?.({ vo, action: "approve" }); onClose?.(); }}
+              >
+                <Check size={12} /> Approve
+              </button>
+              <button
+                className="btn-ghost btn-sm text-amber-600"
+                disabled={!!drawerActing}
+                onClick={() => { onAction?.({ vo, action: "return_for_revision" }); onClose?.(); }}
+              >
+                <RotateCcw size={12} /> Kembalikan untuk Revisi
+              </button>
+              <button
+                className="btn-ghost btn-sm text-red-600"
+                disabled={!!drawerActing}
+                onClick={() => { onAction?.({ vo, action: "reject" }); onClose?.(); }}
+              >
+                <XIcon size={12} /> Reject
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Body scroll */}
+      <div className="flex-1 overflow-auto">
+        {error && (
+          <div className="m-5 p-4 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+            Gagal memuat: {error}
+          </div>
+        )}
+
+        {/* Header info bar */}
+        <div className="px-5 pt-4">
+          <div className="bg-white border border-ink-200 rounded-lg px-4 py-3 grid grid-cols-1 md:grid-cols-4 gap-4 text-xs">
+            <div>
+              <p className="text-ink-500">Proyek</p>
+              <p className="font-medium text-ink-900">{contract?.title || "—"}</p>
+            </div>
+            <div>
+              <p className="text-ink-500">Kontrak</p>
+              <p className="font-medium text-ink-900 font-mono">{contract?.contract_number || "—"}</p>
+            </div>
+            <div className="bg-emerald-50 border border-emerald-200 rounded px-3 py-2">
+              <p className="text-ink-500 text-[10px] uppercase">BOQ Aktif (Dasar)</p>
+              <p className="font-semibold text-emerald-800">Revisi aktif saat ini</p>
+            </div>
+            <div className="bg-blue-50 border border-blue-200 rounded px-3 py-2">
+              <p className="text-ink-500 text-[10px] uppercase">VO Usulan (Dibandingkan)</p>
+              <p className="font-semibold text-blue-800">
+                {vo?.vo_number || "…"} · {vo ? fmtDate(vo.created_at) : ""}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Banner: dikembalikan untuk revisi */}
+        {vo?.review_notes && (
+          <div className="px-5 pt-3">
+            <div className="flex items-start gap-2 bg-amber-50 border border-amber-300 rounded-lg px-4 py-3 text-xs">
+              <RotateCcw size={14} className="text-amber-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold text-amber-800 mb-0.5">
+                  Dikembalikan untuk Revisi
+                  {vo.reviewed_at ? ` · ${fmtDate(vo.reviewed_at)}` : ""}
+                </p>
+                <p className="text-amber-700 whitespace-pre-line">{vo.review_notes}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Summary cards */}
+        <div className="px-5 pt-3">
+          <SummaryCards summary={summary} loading={loading} />
+        </div>
+
+        {/* Justifikasi (collapsible-ish: just show) */}
+        {vo?.technical_justification && (
+          <div className="px-5 pt-3">
+            <details className="bg-white border border-ink-200 rounded-lg p-3 text-xs">
+              <summary className="cursor-pointer font-semibold text-ink-700">Justifikasi Teknis & Perhitungan</summary>
+              <div className="mt-2 space-y-2">
+                <div>
+                  <p className="text-[10px] text-ink-500 uppercase">Justifikasi Teknis</p>
+                  <p className="whitespace-pre-line text-ink-800">{vo.technical_justification}</p>
+                </div>
+                {vo.quantity_calculation && (
+                  <div>
+                    <p className="text-[10px] text-ink-500 uppercase">Perhitungan Volume</p>
+                    <p className="whitespace-pre-line text-ink-800">{vo.quantity_calculation}</p>
+                  </div>
+                )}
+                {vo.rejection_reason && (
+                  <div className="p-2 bg-red-50 border border-red-200 rounded text-red-800">
+                    <p className="font-semibold">Ditolak</p>
+                    <p>{vo.rejection_reason}</p>
+                  </div>
+                )}
+              </div>
+            </details>
+          </div>
+        )}
+
+        {/* Filter bar */}
+        <div className="px-5 pt-3">
+          <div className="bg-white border border-ink-200 rounded-lg p-3 flex flex-wrap items-center gap-2 text-xs">
+            <input
+              className="input flex-1 min-w-[200px]"
+              placeholder="Cari kode atau uraian pekerjaan…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            <select className="input w-44" value={filterDivisi} onChange={(e) => setFilterDivisi(e.target.value)}>
+              <option value="">Semua Fasilitas</option>
+              {divisions.map((d) => (
+                <option key={d.code} value={d.code}>{d.location_code}/{d.code} · {d.name}</option>
+              ))}
+            </select>
+            <select className="input w-44" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
+              <option value="all">Semua Δ Nilai</option>
+              <option value="naik">Hanya Naik</option>
+              <option value="turun">Hanya Turun</option>
+              <option value="tetap">Hanya Tetap</option>
+            </select>
+            <label className="flex items-center gap-1.5 text-ink-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hideTetap}
+                onChange={(e) => setHideTetap(e.target.checked)}
+              />
+              Sembunyikan item tanpa perubahan
+            </label>
+            <button
+              className="btn-ghost btn-xs"
+              onClick={() => { setSearch(""); setFilterDivisi(""); setFilterStatus("all"); setHideTetap(false); }}
+            >
+              <RotateCcw size={11} /> Reset
+            </button>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div className="px-5 pt-3">
+          <div className="flex gap-1 border-b border-ink-200">
+            {[
+              ["all", `Semua Item${summary ? ` (${summary.item_total})` : ""}`],
+              ["berubah", `Item Berubah${summary ? ` (${summary.item_berubah})` : ""}`],
+              ["baru", `Baru${summary ? ` (${summary.item_baru + summary.item_fasilitas_baru})` : ""}`],
+              ["dihapus", `Dihapus${summary ? ` (${summary.item_dihapus})` : ""}`],
+              ["rekap", "Rekap Fasilitas"],
+            ].map(([k, label]) => (
+              <button
+                key={k}
+                onClick={() => setTab(k)}
+                className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${
+                  tab === k
+                    ? "border-brand-600 text-brand-700"
+                    : "border-transparent text-ink-500 hover:text-ink-700"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Table / Recap */}
+        <div className="px-5 py-3">
+          {tab === "rekap"
+            ? <FacilityRecap rows={rows} loading={loading} />
+            : <ComparisonTable rows={visibleRows} loading={loading} totalRows={rows.length} />
+          }
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function SummaryCards({ summary, loading }) {
+  if (loading || !summary) {
+    return (
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-9 gap-2">
+        {Array.from({ length: 9 }).map((_, i) => (
+          <div key={i} className="bg-white border border-ink-200 rounded-lg p-3 animate-pulse h-20" />
+        ))}
+      </div>
+    );
+  }
+  const arrow = summary.delta_jml > 0 ? "↑" : summary.delta_jml < 0 ? "↓" : "•";
+  const trendCls = summary.delta_jml > 0 ? "text-emerald-700"
+    : summary.delta_jml < 0 ? "text-red-700" : "text-ink-700";
+  const cards = [
+    { label: "Nilai BOQ Aktif", val: fmtCurrency(summary.total_aktif, false), sub: null, cls: "text-ink-900" },
+    { label: "Nilai BOQ Usulan", val: fmtCurrency(summary.total_usulan, false), sub: null, cls: "text-ink-900" },
+    { label: "Selisih Nilai", val: `${summary.delta_jml >= 0 ? "+" : ""}${fmtCurrency(summary.delta_jml, false)}`,
+      sub: `${arrow} ${summary.delta_jml >= 0 ? "Naik" : "Turun"}`, cls: trendCls },
+    { label: "Persentase Perubahan", val: `${summary.delta_pct >= 0 ? "+" : ""}${summary.delta_pct.toFixed(2)}%`,
+      sub: null, cls: trendCls },
+    { label: "Fasilitas Baru", val: `${summary.item_fasilitas_baru} fasilitas`, sub: null, cls: "text-emerald-700" },
+    { label: "Item Bertambah", val: `${summary.item_baru} item`, sub: null, cls: "text-emerald-700" },
+    { label: "Item Dihapus", val: `${summary.item_dihapus} item`, sub: null, cls: "text-red-700" },
+    { label: "Volume Berubah", val: `${summary.item_vol_berubah} item`, sub: null, cls: "text-amber-700" },
+    { label: "Harga Berubah", val: `${summary.item_harga_berubah} item`, sub: null, cls: "text-amber-700" },
+  ];
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-9 gap-2">
+      {cards.map((c) => (
+        <div key={c.label} className="bg-white border border-ink-200 rounded-lg p-3">
+          <p className="text-[10px] text-ink-500 uppercase truncate" title={c.label}>{c.label}</p>
+          <p className={`text-base font-bold font-mono ${c.cls}`}>{c.val}</p>
+          {c.sub && <p className={`text-[10px] font-semibold ${c.cls}`}>{c.sub}</p>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ComparisonTable({ rows, loading, totalRows }) {
+  if (loading) {
+    return (
+      <div className="bg-white border border-ink-200 rounded-lg p-6 space-y-2">
+        {Array.from({ length: 8 }).map((_, i) => (
+          <div key={i} className="h-6 bg-ink-100 rounded animate-pulse" />
+        ))}
+      </div>
+    );
+  }
+  if (!rows.length) {
+    return (
+      <div className="bg-white border border-ink-200 rounded-lg p-8 text-center text-xs text-ink-500">
+        Tidak ada item yang cocok dengan filter. {totalRows ? `Total ${totalRows} item di komparasi.` : ""}
+      </div>
+    );
+  }
+  const fmt = (n) => fmtCurrency(n, false);
+  const fmtV = (n) => fmtNum(n, 2);
+  const deltaCls = (n) => n > 0 ? "text-emerald-700" : n < 0 ? "text-red-700" : "text-ink-400";
+
+  return (
+    <div className="bg-white border border-ink-200 rounded-lg overflow-hidden">
+      <div className="overflow-x-auto max-h-[60vh]">
+        <table className="w-full text-[11px]">
+          <thead className="bg-ink-50 sticky top-0 z-10">
+            <tr className="text-left">
+              <th rowSpan={2} className="px-2 py-2 font-semibold text-ink-700 border-b border-ink-200">Kode</th>
+              <th rowSpan={2} className="px-2 py-2 font-semibold text-ink-700 border-b border-ink-200 min-w-[240px]">Uraian Pekerjaan</th>
+              <th rowSpan={2} className="px-2 py-2 font-semibold text-ink-700 border-b border-ink-200">Sat</th>
+              <th colSpan={3} className="px-2 py-1 font-semibold text-ink-700 text-center border-l border-b border-ink-200">Volume</th>
+              <th colSpan={3} className="px-2 py-1 font-semibold text-ink-700 text-center border-l border-b border-ink-200">Harga Satuan (Rp)</th>
+              <th colSpan={3} className="px-2 py-1 font-semibold text-ink-700 text-center border-l border-b border-ink-200">Jumlah (Rp)</th>
+              <th rowSpan={2} className="px-2 py-2 font-semibold text-ink-700 text-center border-l border-b border-ink-200">Status</th>
+            </tr>
+            <tr className="text-right text-[10px] text-ink-600">
+              <th className="px-2 py-1 border-l border-b border-ink-200 font-medium">Aktif</th>
+              <th className="px-2 py-1 border-b border-ink-200 font-medium">Usulan</th>
+              <th className="px-2 py-1 border-b border-ink-200 font-medium">Δ</th>
+              <th className="px-2 py-1 border-l border-b border-ink-200 font-medium">Aktif</th>
+              <th className="px-2 py-1 border-b border-ink-200 font-medium">Usulan</th>
+              <th className="px-2 py-1 border-b border-ink-200 font-medium">Δ</th>
+              <th className="px-2 py-1 border-l border-b border-ink-200 font-medium">Aktif</th>
+              <th className="px-2 py-1 border-b border-ink-200 font-medium">Usulan</th>
+              <th className="px-2 py-1 border-b border-ink-200 font-medium">Δ</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const stMeta = COMPARISON_STATUS[r.status] || { label: r.status, cls: "bg-slate-100" };
+              const dim = r.status === "tetap";
+              return (
+                <tr key={r.key} className={`border-t border-ink-100 ${r.status === "baru" || r.status === "fasilitas_baru" ? "bg-emerald-50/40" : r.status === "dihapus" ? "bg-red-50/40" : "hover:bg-ink-50/60"}`}>
+                  <td className="px-2 py-1.5 font-mono text-[10px] whitespace-nowrap">{r.kode}</td>
+                  <td className="px-2 py-1.5">
+                    <div className={r.status === "dihapus" ? "line-through text-ink-500" : ""}>{r.uraian || "—"}</div>
+                    <div className="text-[9px] font-mono text-ink-400">{r.location_code}/{r.facility_code} · {r.facility_name}</div>
+                  </td>
+                  <td className="px-2 py-1.5 text-ink-600">{r.unit || "—"}</td>
+                  {/* Volume */}
+                  <td className={`px-2 py-1.5 text-right font-mono border-l border-ink-100 ${dim ? "text-ink-500" : ""}`}>{fmtV(r.aktif_vol)}</td>
+                  <td className={`px-2 py-1.5 text-right font-mono ${dim ? "text-ink-500" : ""}`}>{fmtV(r.usulan_vol)}</td>
+                  <td className={`px-2 py-1.5 text-right font-mono font-semibold ${deltaCls(r.delta_vol)}`}>
+                    {r.delta_vol > 0 ? "+" : ""}{Math.abs(r.delta_vol) < 1e-9 ? "0" : fmtV(r.delta_vol)}
+                  </td>
+                  {/* Harga */}
+                  <td className={`px-2 py-1.5 text-right font-mono border-l border-ink-100 ${dim ? "text-ink-500" : ""}`}>{fmt(r.aktif_price)}</td>
+                  <td className={`px-2 py-1.5 text-right font-mono ${dim ? "text-ink-500" : ""}`}>{fmt(r.usulan_price)}</td>
+                  <td className={`px-2 py-1.5 text-right font-mono font-semibold ${deltaCls(r.delta_price)}`}>
+                    {r.delta_price > 0 ? "+" : ""}{Math.abs(r.delta_price) < 1e-9 ? "0" : fmt(r.delta_price)}
+                  </td>
+                  {/* Jumlah */}
+                  <td className={`px-2 py-1.5 text-right font-mono border-l border-ink-100 ${dim ? "text-ink-500" : ""}`}>{fmt(r.aktif_jml)}</td>
+                  <td className={`px-2 py-1.5 text-right font-mono ${dim ? "text-ink-500" : ""}`}>{fmt(r.usulan_jml)}</td>
+                  <td className={`px-2 py-1.5 text-right font-mono font-semibold ${deltaCls(r.delta_jml)}`}>
+                    {r.delta_jml > 0 ? "+" : ""}{Math.abs(r.delta_jml) < 1e-9 ? "0" : fmt(r.delta_jml)}
+                  </td>
+                  <td className="px-2 py-1.5 text-center border-l border-ink-100">
+                    <span className={`text-[9px] px-1.5 py-0.5 rounded border font-semibold whitespace-nowrap ${stMeta.cls}`}>
+                      {stMeta.label}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="px-3 py-2 text-[10px] text-ink-500 border-t border-ink-200 bg-ink-50">
+        Menampilkan {rows.length} dari {totalRows} item
+      </div>
+    </div>
+  );
+}
+
+function FacilityRecap({ rows, loading }) {
+  const recap = useMemo(() => {
+    const map = new Map();
+    for (const r of rows) {
+      const key = r.facility_code;
+      if (!map.has(key)) {
+        map.set(key, {
+          code: r.facility_code, name: r.facility_name,
+          location_code: r.location_code, location_name: r.location_name,
+          aktif: 0, usulan: 0, item_total: 0, item_berubah: 0,
+          isNew: false,
+        });
+      }
+      const f = map.get(key);
+      f.aktif += r.aktif_jml;
+      f.usulan += r.usulan_jml;
+      // Pseudo-row ADD_FACILITY hanya marker — tidak dihitung sebagai item BOQ
+      if (!r._isNewFacility) {
+        f.item_total += 1;
+        if (r.status !== "tetap") f.item_berubah += 1;
+      }
+      if (r._isNewFacility || r._isPendingFacility) f.isNew = true;
+    }
+    return [...map.values()].sort((a, b) =>
+      (a.location_code || "").localeCompare(b.location_code || "") ||
+      (a.code || "").localeCompare(b.code || "")
+    );
+  }, [rows]);
+
+  if (loading) {
+    return <div className="bg-white border border-ink-200 rounded-lg p-6 h-40 animate-pulse" />;
+  }
+  const fmt = (n) => fmtCurrency(n, false);
+  const deltaCls = (n) => n > 0 ? "text-emerald-700" : n < 0 ? "text-red-700" : "text-ink-700";
+  const grandA = recap.reduce((s, f) => s + f.aktif, 0);
+  const grandU = recap.reduce((s, f) => s + f.usulan, 0);
+
+  return (
+    <div className="bg-white border border-ink-200 rounded-lg overflow-hidden">
+      <table className="w-full text-xs">
+        <thead className="bg-ink-50">
+          <tr className="text-left">
+            <th className="px-3 py-2 font-semibold text-ink-700">Fasilitas</th>
+            <th className="px-3 py-2 font-semibold text-ink-700 text-right">Item Berubah / Total</th>
+            <th className="px-3 py-2 font-semibold text-ink-700 text-right">Nilai BOQ Aktif</th>
+            <th className="px-3 py-2 font-semibold text-ink-700 text-right">Nilai BOQ Usulan</th>
+            <th className="px-3 py-2 font-semibold text-ink-700 text-right">Selisih</th>
+          </tr>
+        </thead>
+        <tbody>
+          {recap.map((f) => {
+            const delta = f.usulan - f.aktif;
+            return (
+              <tr key={f.code} className={`border-t border-ink-100 ${f.isNew ? "bg-emerald-50/40" : ""}`}>
+                <td className="px-3 py-2">
+                  <div className="font-medium text-ink-900 flex items-center gap-1.5">
+                    {f.isNew && (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 font-semibold">
+                        FASILITAS BARU
+                      </span>
+                    )}
+                    {f.name || f.code}
+                  </div>
+                  <div className="text-[10px] font-mono text-ink-500">{f.location_code}/{f.code}</div>
+                </td>
+                <td className="px-3 py-2 text-right font-mono">
+                  <span className={f.item_berubah > 0 ? "text-amber-700 font-semibold" : "text-ink-500"}>
+                    {f.item_berubah}
+                  </span>
+                  <span className="text-ink-400"> / {f.item_total}</span>
+                </td>
+                <td className="px-3 py-2 text-right font-mono">{fmt(f.aktif)}</td>
+                <td className="px-3 py-2 text-right font-mono">{fmt(f.usulan)}</td>
+                <td className={`px-3 py-2 text-right font-mono font-semibold ${deltaCls(delta)}`}>
+                  {delta > 0 ? "+" : ""}{fmt(delta)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+        <tfoot className="bg-ink-50">
+          <tr className="border-t-2 border-ink-300">
+            <td className="px-3 py-2 font-bold">TOTAL</td>
+            <td className="px-3 py-2"></td>
+            <td className="px-3 py-2 text-right font-mono font-bold">{fmt(grandA)}</td>
+            <td className="px-3 py-2 text-right font-mono font-bold">{fmt(grandU)}</td>
+            <td className={`px-3 py-2 text-right font-mono font-bold ${deltaCls(grandU - grandA)}`}>
+              {grandU - grandA > 0 ? "+" : ""}{fmt(grandU - grandA)}
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  );
+}
+
 function VODetailModal({ vo, onClose }) {
+  const [view, setView] = useState("comparison"); // "comparison" | "items"
+  const [activeBoq, setActiveBoq] = useState(null);
+  const [boqLoading, setBoqLoading] = useState(false);
+
+  useEffect(() => {
+    if (view !== "comparison" || activeBoq !== null || !vo.contract_id) return;
+    setBoqLoading(true);
+    boqAPI.listByContractFlat(vo.contract_id, false)
+      .then((r) => setActiveBoq(r.data || []))
+      .catch(() => setActiveBoq([]))
+      .finally(() => setBoqLoading(false));
+  }, [view, vo.contract_id, activeBoq]);
+
   // Summary per action
   const summary = useMemo(() => {
     const s = { add: 0, increase: 0, decrease: 0, modify_spec: 0, remove: 0, remove_facility: 0 };
@@ -3993,11 +5660,11 @@ function VODetailModal({ vo, onClose }) {
           </div>
           <div className="text-right">
             <p className="text-[10px] text-ink-500 uppercase">Total Δ Biaya</p>
-            <p className={`text-lg font-bold ${
+            <p className={`text-lg font-bold font-mono ${
               vo.cost_impact > 0 ? "text-emerald-700"
               : vo.cost_impact < 0 ? "text-red-700" : "text-ink-700"
             }`}>
-              {vo.cost_impact >= 0 ? "+" : ""}{fmtCurrency(vo.cost_impact)}
+              {vo.cost_impact >= 0 ? "+" : ""}{fmtCurrency(vo.cost_impact, false)}
             </p>
           </div>
         </div>
@@ -4033,15 +5700,46 @@ function VODetailModal({ vo, onClose }) {
           </div>
         )}
 
-        {/* Items Before/After */}
+        {/* Tab toggle: Komparasi vs Per-Item */}
         {(vo.items?.length || 0) > 0 ? (
           <div>
-            <p className="text-xs font-semibold text-ink-700 mb-2">
-              Rincian Perubahan ({vo.items.length} item) — Sebelum vs Sesudah
-            </p>
-            <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
-              {vo.items.map((it, i) => <VOItemCard key={it.id || i} it={it} />)}
+            <div className="flex gap-1 border-b border-ink-200 mb-3">
+              <button
+                type="button"
+                onClick={() => setView("comparison")}
+                className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${
+                  view === "comparison"
+                    ? "border-brand-600 text-brand-700"
+                    : "border-transparent text-ink-500 hover:text-ink-700"
+                }`}
+              >
+                Komparasi per Fasilitas
+              </button>
+              <button
+                type="button"
+                onClick={() => setView("items")}
+                className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${
+                  view === "items"
+                    ? "border-brand-600 text-brand-700"
+                    : "border-transparent text-ink-500 hover:text-ink-700"
+                }`}
+              >
+                Per Item (Sebelum vs Sesudah)
+              </button>
             </div>
+
+            {view === "comparison" ? (
+              <VOComparisonView vo={vo} activeBoq={activeBoq} loading={boqLoading} />
+            ) : (
+              <div>
+                <p className="text-xs font-semibold text-ink-700 mb-2">
+                  Rincian Perubahan ({vo.items.length} item) — Sebelum vs Sesudah
+                </p>
+                <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
+                  {vo.items.map((it, i) => <VOItemCard key={it.id || i} it={it} />)}
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <p className="text-xs text-ink-500 italic text-center py-4">
@@ -4056,28 +5754,51 @@ function VODetailModal({ vo, onClose }) {
 function VOActionModal({ vo, action, onClose, onConfirm }) {
   const [notes, setNotes] = useState("");
   const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
   const isApprove = action === "approve";
   const isReject = action === "reject";
-  const canConfirm = isApprove || (isReject && reason.trim().length >= 20);
+  const isReturn = action === "return_for_revision";
+
+  const canConfirm = !saving && (isApprove
+    || (isReject && reason.trim().length >= 20)
+    || (isReturn && notes.trim().length >= 10));
+
+  const title = isApprove ? `Approve ${vo.vo_number}`
+    : isReturn ? `Kembalikan untuk Revisi — ${vo.vo_number}`
+    : `Reject ${vo.vo_number}`;
+
+  const confirmPayload = isReject ? { reason }
+    : isReturn ? { notes }
+    : { notes };
+
+  const confirmCls = isReject
+    ? "btn-primary bg-red-600 hover:bg-red-700 border-red-600"
+    : isReturn
+    ? "btn-primary bg-amber-500 hover:bg-amber-600 border-amber-500"
+    : "btn-primary";
+
+  const confirmLabel = isReject ? "Reject (Permanen)" : isReturn ? "Kembalikan untuk Revisi" : "Approve";
+
+  const handleConfirm = async () => {
+    setSaving(true);
+    try { await onConfirm(confirmPayload); }
+    finally { setSaving(false); }
+  };
+
   return (
-    <Modal open onClose={onClose}
-      title={isApprove ? `Approve ${vo.vo_number}` : `Reject ${vo.vo_number}`}
-      size="md"
+    <Modal open onClose={saving ? undefined : onClose} title={title} size="md"
       footer={
         <>
-          <button className="btn-secondary" onClick={onClose}>Batal</button>
-          <button
-            className={isReject ? "btn-primary bg-red-600 hover:bg-red-700 border-red-600" : "btn-primary"}
-            onClick={() => onConfirm(isReject ? { reason } : { notes })}
-            disabled={!canConfirm}>
-            {isReject ? "Reject" : "Approve"}
+          <button className="btn-secondary" onClick={onClose} disabled={saving}>Batal</button>
+          <button className={confirmCls} onClick={handleConfirm} disabled={!canConfirm}>
+            {saving ? <><Spinner size={12} /> Memproses…</> : confirmLabel}
           </button>
         </>
       }
     >
       <div className="space-y-3">
         <p className="text-sm text-ink-700">{vo.title}</p>
-        {isApprove ? (
+        {isApprove && (
           <div>
             <label className="label">Catatan (opsional)</label>
             <textarea className="input" rows={3} value={notes}
@@ -4087,14 +5808,33 @@ function VOActionModal({ vo, action, onClose, onConfirm }) {
               ⓘ Approve = VO masuk antrean BUNDLED. Belum mengubah BOQ sampai di-bundle ke Addendum yang ditandatangani.
             </p>
           </div>
-        ) : (
+        )}
+        {isReturn && (
+          <div>
+            <label className="label">Catatan Revisi * (min 10 karakter)</label>
+            <textarea className="input" rows={4} value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Jelaskan apa yang perlu diperbaiki oleh kontraktor..." />
+            <p className="text-[11px] text-ink-500 mt-0.5">
+              {notes.trim().length} / 10 karakter minimum
+            </p>
+            <p className="text-[11px] text-amber-700 mt-1">
+              ⓘ VO kembali ke status DRAFT. Kontraktor dapat mengedit lalu submit ulang, atau membatalkan/menghapus VO.
+              Catatan ini akan ditampilkan sebagai banner kuning pada card VO.
+            </p>
+          </div>
+        )}
+        {isReject && (
           <div>
             <label className="label">Alasan Penolakan * (min 20 karakter)</label>
             <textarea className="input" rows={4} value={reason}
               onChange={(e) => setReason(e.target.value)}
               placeholder="Jelaskan alasan teknis/administratif penolakan..." />
             <p className="text-[11px] text-ink-500 mt-0.5">
-              {reason.trim().length} / 20 karakter · Penolakan bersifat terminal (tidak bisa di-undo)
+              {reason.trim().length} / 20 karakter
+            </p>
+            <p className="text-[11px] text-red-700 mt-1">
+              ⚠ Penolakan bersifat terminal — VO tidak bisa diedit atau disubmit ulang. Gunakan "Kembalikan untuk Revisi" jika masih ingin ada perbaikan.
             </p>
           </div>
         )}

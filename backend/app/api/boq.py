@@ -1,8 +1,30 @@
 import os
 import tempfile
 import uuid
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Query
+
+
+_FIVEPLACES_BOQ = Decimal("0.00001")
+
+
+def _q5_boq(v) -> Decimal:
+    """Quantize ke 5 dp (ROUND_HALF_UP). Aturan presisi sistem: volume,
+    unit_price, total_price BOQ disimpan dengan 5 dp eksak. Defensive vs
+    garbage input (None/NaN/Inf/non-numeric) → Decimal('0.00')."""
+    from decimal import InvalidOperation
+    if v is None:
+        return Decimal("0.00000")
+    if isinstance(v, float) and (v != v or v in (float("inf"), float("-inf"))):
+        return Decimal("0.00000")
+    if not isinstance(v, Decimal):
+        try:
+            v = Decimal(str(v))
+        except (TypeError, ValueError, InvalidOperation):
+            return Decimal("0.00000")
+    if v.is_nan() or v.is_infinite():
+        return Decimal("0.00000")
+    return v.quantize(_FIVEPLACES_BOQ, rounding=ROUND_HALF_UP)
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -46,6 +68,12 @@ router = APIRouter(prefix="/boq", tags=["boq"])
 
 
 def _boq_to_dict(b: BOQItem) -> dict:
+    # Aturan presisi sistem: volume, unit_price, total_price selalu 5 dp.
+    # Quantize di output juga (bukan hanya saat input) supaya data legacy yang
+    # tersimpan dengan presisi lebih tinggi tampil 5 dp dan vol×price = total.
+    vol = _q5_boq(b.volume or 0)
+    price = _q5_boq(b.unit_price or 0)
+    total = _q5_boq(b.total_price or 0)
     return {
         "id": str(b.id),
         "facility_id": str(b.facility_id),
@@ -57,9 +85,9 @@ def _boq_to_dict(b: BOQItem) -> dict:
         "display_order": b.display_order,
         "description": b.description,
         "unit": b.unit,
-        "volume": float(b.volume or 0),
-        "unit_price": float(b.unit_price or 0),
-        "total_price": float(b.total_price or 0),
+        "volume": float(vol),
+        "unit_price": float(price),
+        "total_price": float(total),
         "weight_pct": float(b.weight_pct or 0),
         "planned_start_week": b.planned_start_week,
         "planned_duration_weeks": b.planned_duration_weeks,
@@ -291,8 +319,10 @@ def create_boq_item(
 ):
     rev = _resolve_writable_revision_for_facility(db, str(data.facility_id))
 
+    # Volume/unit_price/total_price sudah di-quantize 5 dp oleh Pydantic validator.
+    # Hitung total_price = volume × unit_price kalau user tidak isi manual.
     if (not data.total_price or data.total_price == 0) and data.volume and data.unit_price:
-        data.total_price = data.volume * data.unit_price
+        data.total_price = _q5_boq(data.volume * data.unit_price)
 
     payload = data.model_dump()
     # Never trust a client-supplied revision id here — the resolver decides.
@@ -336,7 +366,7 @@ def bulk_create(
         rev = touched_revisions[str(d.facility_id)]
 
         if (not d.total_price or d.total_price == 0) and d.volume and d.unit_price:
-            d.total_price = d.volume * d.unit_price
+            d.total_price = _q5_boq(d.volume * d.unit_price)
         payload = d.model_dump()
         payload.pop("boq_revision_id", None)
         item = BOQItem(boq_revision_id=rev.id, **payload)
@@ -430,9 +460,15 @@ def update_boq_item(
     # karena hubungan parent-child masih utuh di DB.
     dump = data.model_dump(exclude_unset=True)
     parent_changed = "parent_id" in dump
+    vol_or_price_changed = "volume" in dump or "unit_price" in dump
     for field, val in dump.items():
         if field not in ("addendum_id", "change_reason") and hasattr(item, field):
             setattr(item, field, val)
+
+    # Auto re-derive total_price jika volume/unit_price diubah dan user tidak
+    # mengirim total_price baru. Pakai _q5_boq supaya hasilnya tetap 5 dp.
+    if vol_or_price_changed and "total_price" not in dump:
+        item.total_price = _q5_boq((item.volume or 0) * (item.unit_price or 0))
 
     db.flush()
     if parent_changed and item.boq_revision_id:
@@ -713,11 +749,15 @@ async def import_excel(
             created_items: list = []
             for order_idx, it in enumerate(fac_data["items"]):
 
-                total_price = it.get("total_price") or 0
-                volume = it.get("volume") or 0
-                unit_price = it.get("unit_price") or 0
-                if not total_price and volume and unit_price:
-                    total_price = volume * unit_price
+                # Aturan presisi sistem: volume & unit_price 5 dp eksak.
+                # total_price = volume × unit_price (Decimal, exact).
+                volume_q = _q5_boq(it.get("volume") or 0)
+                price_q = _q5_boq(it.get("unit_price") or 0)
+                total_q = _q5_boq(it.get("total_price") or 0)
+                if total_q == Decimal("0.00000") and volume_q and price_q:
+                    total_q = (volume_q * price_q).quantize(
+                        Decimal("0.00001"), rounding=ROUND_HALF_UP
+                    )
 
                 new_item = BOQItem(
                     boq_revision_id=target_revision.id,
@@ -729,9 +769,9 @@ async def import_excel(
                     display_order=order_idx,
                     description=it["description"],
                     unit=it.get("unit"),
-                    volume=Decimal(str(volume)),
-                    unit_price=Decimal(str(unit_price)),
-                    total_price=Decimal(str(total_price)),
+                    volume=volume_q,
+                    unit_price=price_q,
+                    total_price=total_q,
                     planned_start_week=it.get("planned_start_week"),
                     planned_duration_weeks=it.get("planned_duration_weeks"),
                     is_leaf=True,  # auto-flip via _recompute_is_leaf di akhir
@@ -804,7 +844,7 @@ async def import_excel(
                 )
                 if working_rev and working_rev.total_value:
                     ppn_factor = _Dec("1") + (c.ppn_pct or _Dec("0")) / _Dec("100")
-                    value_with_ppn = working_rev.total_value * ppn_factor
+                    value_with_ppn = _q5_boq(working_rev.total_value * ppn_factor)
                     c.original_value = value_with_ppn
                     c.current_value = value_with_ppn
 

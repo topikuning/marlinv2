@@ -12,6 +12,7 @@ from app.api.deps import get_current_user, require_permission, user_can_access_c
 from app.api._guards import (
     assert_scope_editable_by_contract,
     assert_scope_editable_by_location,
+    resolve_active_addendum_id,
 )
 from app.services.audit_service import log_audit
 
@@ -35,6 +36,7 @@ def list_by_contract(
             "latitude": float(r.latitude) if r.latitude else None,
             "longitude": float(r.longitude) if r.longitude else None,
             "is_active": r.is_active,
+            "addendum_id": str(r.addendum_id) if r.addendum_id else None,
         } for r in rows
     ]
 
@@ -54,12 +56,13 @@ def create_location(
         Location.location_code == data.location_code,
     ).first():
         raise HTTPException(400, "Kode lokasi sudah dipakai")
-    loc = Location(contract_id=contract_id, **data.model_dump())
+    addendum_id = resolve_active_addendum_id(db, contract_id)
+    loc = Location(contract_id=contract_id, addendum_id=addendum_id, **data.model_dump())
     db.add(loc)
     db.commit()
     db.refresh(loc)
     log_audit(db, current_user, "create", "location", str(loc.id), request=request, commit=True)
-    return {"id": str(loc.id), "success": True}
+    return {"id": str(loc.id), "success": True, "addendum_id": str(loc.addendum_id) if loc.addendum_id else None}
 
 
 @router.post("/by-contract/{contract_id}/bulk", response_model=dict)
@@ -73,6 +76,7 @@ def bulk_create_locations(
         raise HTTPException(404, "Kontrak tidak ditemukan")
     assert_scope_editable_by_contract(db, contract_id, entity="location")
 
+    addendum_id = resolve_active_addendum_id(db, contract_id)
     created = 0
     skipped = 0
     for d in items:
@@ -83,7 +87,7 @@ def bulk_create_locations(
         if exists:
             skipped += 1
             continue
-        db.add(Location(contract_id=contract_id, **d.model_dump()))
+        db.add(Location(contract_id=contract_id, addendum_id=addendum_id, **d.model_dump()))
         created += 1
     db.commit()
     log_audit(db, current_user, "bulk_create", "location",
@@ -104,6 +108,7 @@ async def import_locations_excel(
     if not c:
         raise HTTPException(404, "Kontrak tidak ditemukan")
     assert_scope_editable_by_contract(db, contract_id, entity="location")
+    addendum_id = resolve_active_addendum_id(db, contract_id)
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
         tmp.write(await file.read())
@@ -139,6 +144,7 @@ async def import_locations_excel(
                 province=str(rec.get("province") or "") or None,
                 latitude=float(rec["latitude"]) if rec.get("latitude") not in (None, "") else None,
                 longitude=float(rec["longitude"]) if rec.get("longitude") not in (None, "") else None,
+                addendum_id=addendum_id,
             ))
             result.items_imported += 1
         db.commit()

@@ -26,6 +26,7 @@ def _ensure_enum_values():
     from sqlalchemy import text
     pending = [
         ("voitemaction", "REMOVE_FACILITY"),
+        ("voitemaction", "ADD_FACILITY"),
     ]
     with engine.begin() as conn:
         for enum_name, value in pending:
@@ -45,6 +46,15 @@ def _ensure_columns():
         ("variation_order_items", "parent_boq_item_id", "UUID REFERENCES boq_items(id)"),
         # PPN per-contract — default 11% (UU HPP 2021)
         ("contracts", "ppn_pct", "NUMERIC(5,2) NOT NULL DEFAULT 11.00"),
+        # ADD chain: parent di antara item-item ADD baru di VO yang sama
+        ("variation_order_items", "parent_code", "VARCHAR(100)"),
+        ("variation_order_items", "new_item_code", "VARCHAR(100)"),
+        # ADD_FACILITY: lokasi target + facility_code yang akan dibuat
+        ("variation_order_items", "location_id", "UUID REFERENCES locations(id)"),
+        ("variation_order_items", "new_facility_code", "VARCHAR(50)"),
+        # Traceability: link Facility/Location ke addendum yang membuatnya
+        ("facilities", "addendum_id", "UUID REFERENCES contract_addenda(id)"),
+        ("locations", "addendum_id", "UUID REFERENCES contract_addenda(id)"),
     ]
     with engine.begin() as conn:
         for table, col, ddl in pending:
@@ -59,6 +69,68 @@ def _ensure_columns():
                 pass
 
 
+def _ensure_column_precision_5dp():
+    """One-time ALTER kolom Numeric ke (18, 5) — tanpa ini, DB truncate input
+    5 dp jadi 4 dp (volume) atau 2 dp (unit_price/total_price/cost_impact).
+    PostgreSQL: ALTER ke presisi yang lebih tinggi aman, tidak mengubah data.
+    Idempotent — kalau sudah (18, 5) tidak ada efek."""
+    from sqlalchemy import text
+    alters = [
+        # Item-level (BOQ) — sumber data per row
+        "ALTER TABLE boq_items ALTER COLUMN volume TYPE NUMERIC(18, 5)",
+        "ALTER TABLE boq_items ALTER COLUMN unit_price TYPE NUMERIC(18, 5)",
+        "ALTER TABLE boq_items ALTER COLUMN total_price TYPE NUMERIC(18, 5)",
+        # Item-level (VO)
+        "ALTER TABLE variation_order_items ALTER COLUMN volume_delta TYPE NUMERIC(18, 5)",
+        "ALTER TABLE variation_order_items ALTER COLUMN unit_price TYPE NUMERIC(18, 5)",
+        "ALTER TABLE variation_order_items ALTER COLUMN cost_impact TYPE NUMERIC(18, 5)",
+        "ALTER TABLE variation_orders ALTER COLUMN cost_impact TYPE NUMERIC(18, 5)",
+        # Progress mingguan (volume realisasi)
+        "ALTER TABLE weekly_progress_items ALTER COLUMN volume_this_week TYPE NUMERIC(18, 5)",
+        "ALTER TABLE weekly_progress_items ALTER COLUMN volume_cumulative TYPE NUMERIC(18, 5)",
+        # Aggregate totals (sum of items) — wajib 5 dp juga, kalau tidak hasil sum
+        # ter-truncate dan total kontrak yang ditampilkan ke user salah.
+        "ALTER TABLE facilities ALTER COLUMN total_value TYPE NUMERIC(18, 5)",
+        "ALTER TABLE boq_revisions ALTER COLUMN total_value TYPE NUMERIC(18, 5)",
+        "ALTER TABLE contracts ALTER COLUMN original_value TYPE NUMERIC(18, 5)",
+        "ALTER TABLE contracts ALTER COLUMN current_value TYPE NUMERIC(18, 5)",
+        "ALTER TABLE contract_addenda ALTER COLUMN old_contract_value TYPE NUMERIC(18, 5)",
+        "ALTER TABLE contract_addenda ALTER COLUMN new_contract_value TYPE NUMERIC(18, 5)",
+    ]
+    with engine.begin() as conn:
+        for stmt in alters:
+            try:
+                conn.execute(text(stmt))
+            except Exception:
+                pass
+
+
+def _ensure_quantized_5dp():
+    """One-time normalize legacy data to 5-decimal-place precision.
+    Aturan sistem: volume & unit_price selalu 5 dp. Data yang ter-import
+    sebelum aturan ini berlaku bisa punya presisi 4-6 dp, menyebabkan
+    display (rounded 5 dp) tidak match dengan vol×price hasil sistem.
+    Idempotent — quantize lagi nilai yang sudah 5 dp adalah no-op.
+    """
+    from sqlalchemy import text
+    statements = [
+        # BOQ items
+        "UPDATE boq_items SET volume = ROUND(volume, 5) WHERE volume IS NOT NULL AND volume <> ROUND(volume, 5)",
+        "UPDATE boq_items SET unit_price = ROUND(unit_price, 5) WHERE unit_price IS NOT NULL AND unit_price <> ROUND(unit_price, 5)",
+        "UPDATE boq_items SET total_price = ROUND(volume * unit_price, 5) WHERE volume IS NOT NULL AND unit_price IS NOT NULL AND total_price <> ROUND(volume * unit_price, 5)",
+        # VO items
+        "UPDATE variation_order_items SET volume_delta = ROUND(volume_delta, 5) WHERE volume_delta IS NOT NULL AND volume_delta <> ROUND(volume_delta, 5)",
+        "UPDATE variation_order_items SET unit_price = ROUND(unit_price, 5) WHERE unit_price IS NOT NULL AND unit_price <> ROUND(unit_price, 5)",
+        "UPDATE variation_order_items SET cost_impact = ROUND(cost_impact, 5) WHERE cost_impact IS NOT NULL AND cost_impact <> ROUND(cost_impact, 5)",
+    ]
+    with engine.begin() as conn:
+        for stmt in statements:
+            try:
+                conn.execute(text(stmt))
+            except Exception:
+                pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
@@ -66,6 +138,8 @@ async def lifespan(app: FastAPI):
         os.makedirs(os.path.join(settings.UPLOAD_DIR, sub), exist_ok=True)
     _ensure_enum_values()
     _ensure_columns()
+    _ensure_column_precision_5dp()
+    _ensure_quantized_5dp()
     if settings.SCHEDULER_ENABLED:
         start_scheduler()
     yield

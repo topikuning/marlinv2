@@ -166,6 +166,7 @@ class VOItemAction(str, enum.Enum):
     MODIFY_SPEC = "modify_spec"         # ubah spesifikasi (deskripsi/satuan)
     REMOVE = "remove"                   # hilangkan item dari BOQ
     REMOVE_FACILITY = "remove_facility" # hilangkan seluruh fasilitas beserta item-nya
+    ADD_FACILITY = "add_facility"       # tambah fasilitas baru di lokasi existing
 
 
 class NotificationStatus(str, enum.Enum):
@@ -402,8 +403,8 @@ class Contract(Base):
     konsultan_id = Column(UUID(as_uuid=True), ForeignKey("companies.id"))
 
     fiscal_year = Column(Integer, nullable=False)
-    original_value = Column(Numeric(18, 2), nullable=False)
-    current_value = Column(Numeric(18, 2), nullable=False)
+    original_value = Column(Numeric(18, 5), nullable=False)
+    current_value = Column(Numeric(18, 5), nullable=False)
     # PPN (Pajak Pertambahan Nilai) percentage. BOQ items disimpan PRE-PPN.
     # Nilai kontrak (original_value/current_value) adalah POST-PPN (= BOQ × (1 + ppn/100)).
     # Default 11% sesuai UU HPP 2021. Bisa diubah per kontrak (mis. 0% kalau
@@ -477,8 +478,8 @@ class ContractAddendum(Base):
     extension_days = Column(Integer, default=0)
     old_end_date = Column(Date)
     new_end_date = Column(Date)
-    old_contract_value = Column(Numeric(18, 2))
-    new_contract_value = Column(Numeric(18, 2))
+    old_contract_value = Column(Numeric(18, 5))
+    new_contract_value = Column(Numeric(18, 5))
     description = Column(Text)
     document_file = Column(String(500))
     # Untuk perubahan nilai >10%, butuh persetujuan KPA/PA. Saat signed oleh
@@ -551,7 +552,7 @@ class VariationOrder(Base):
     title = Column(String(255), nullable=False)
     technical_justification = Column(Text, nullable=False)  # min 50 char, wajib
     quantity_calculation = Column(Text)                     # cara hitung volume
-    cost_impact = Column(Numeric(18, 2), default=0)         # delta nilai (bisa -)
+    cost_impact = Column(Numeric(18, 5), default=0)         # delta nilai (bisa -)
 
     # Sumber temuan (optional; VO bisa juga lahir tanpa MC formal)
     source_observation_id = Column(
@@ -628,13 +629,26 @@ class VariationOrderItem(Base):
     # baru di-set = clone dari parent ini.
     parent_boq_item_id = Column(UUID(as_uuid=True), ForeignKey("boq_items.id"), nullable=True)
 
+    # Untuk ADD chain (parent juga item ADD baru di VO yang sama):
+    # parent_code = original_code item ADD yang jadi parent (fallback jika parent_boq_item_id null)
+    # new_item_code = original_code yang akan di-assign ke BOQItem baru ini
+    parent_code = Column(String(100), nullable=True)
+    new_item_code = Column(String(100), nullable=True)
+
+    # Untuk ADD_FACILITY:
+    # location_id      = lokasi tempat fasilitas baru akan dibuat
+    # new_facility_code = facility_code yang akan di-assign ke Facility baru
+    # description       = facility_name (re-purposed dari kolom yang sama)
+    location_id = Column(UUID(as_uuid=True), ForeignKey("locations.id"), nullable=True)
+    new_facility_code = Column(String(50), nullable=True)
+
     # Detail item (snapshot saat VO dibuat)
     master_work_code = Column(String(30))
     description = Column(Text, nullable=False)
     unit = Column(String(30))
-    volume_delta = Column(Numeric(18, 4), default=0)       # + untuk tambah, - untuk kurang
-    unit_price = Column(Numeric(18, 2), default=0)
-    cost_impact = Column(Numeric(18, 2), default=0)        # volume_delta * unit_price
+    volume_delta = Column(Numeric(18, 5), default=0)       # + untuk tambah, - untuk kurang
+    unit_price = Column(Numeric(18, 5), default=0)
+    cost_impact = Column(Numeric(18, 5), default=0)        # volume_delta * unit_price
 
     # MODIFY_SPEC: snapshot deskripsi lama untuk diff audit
     old_description = Column(Text)
@@ -666,6 +680,9 @@ class Location(Base):
     konsultan_id = Column(UUID(as_uuid=True), ForeignKey("companies.id"), nullable=True)
 
     is_active = Column(Boolean, default=True)
+    # Traceability: addendum yang menambahkan lokasi ini.
+    # NULL = baseline kontrak (V0). Diisi saat lokasi dibuat dalam status ADDENDUM.
+    addendum_id = Column(UUID(as_uuid=True), ForeignKey("contract_addenda.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -693,9 +710,13 @@ class Facility(Base):
     facility_type = Column(String(100))  # "gudang_beku", etc.
     facility_name = Column(String(500), nullable=False)
     display_order = Column(Integer, default=0)
-    total_value = Column(Numeric(18, 2), default=0)
+    total_value = Column(Numeric(18, 5), default=0)
     notes = Column(Text)
     is_active = Column(Boolean, default=True)
+    # Traceability: addendum yang menambahkan fasilitas ini.
+    # NULL = baseline kontrak (V0). Diisi saat fasilitas dibuat dalam
+    # status ADDENDUM (baik via VO ADD_FACILITY maupun direct POST).
+    addendum_id = Column(UUID(as_uuid=True), ForeignKey("contract_addenda.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     location = relationship("Location", back_populates="facilities")
@@ -735,7 +756,7 @@ class BOQRevision(Base):
     status = Column(Enum(RevisionStatus), default=RevisionStatus.DRAFT, nullable=False)
     is_active = Column(Boolean, default=False, nullable=False)
 
-    total_value = Column(Numeric(18, 2), default=0)    # sum of leaf total_prices
+    total_value = Column(Numeric(18, 5), default=0)    # sum of leaf total_prices
     item_count = Column(Integer, default=0)
 
     approved_at = Column(DateTime, nullable=True)
@@ -792,9 +813,9 @@ class BOQItem(Base):
 
     description = Column(Text, nullable=False)
     unit = Column(String(30))
-    volume = Column(Numeric(18, 4), default=0)
-    unit_price = Column(Numeric(18, 2), default=0)
-    total_price = Column(Numeric(18, 2), default=0)
+    volume = Column(Numeric(18, 5), default=0)
+    unit_price = Column(Numeric(18, 5), default=0)
+    total_price = Column(Numeric(18, 5), default=0)
     weight_pct = Column(Numeric(10, 8), default=0)
 
     planned_start_week = Column(Integer)
@@ -899,8 +920,8 @@ class WeeklyProgressItem(Base):
     weekly_report_id = Column(UUID(as_uuid=True), ForeignKey("weekly_reports.id", ondelete="CASCADE"), nullable=False)
     boq_item_id = Column(UUID(as_uuid=True), ForeignKey("boq_items.id"), nullable=False)
 
-    volume_this_week = Column(Numeric(18, 4), default=0)
-    volume_cumulative = Column(Numeric(18, 4), default=0)
+    volume_this_week = Column(Numeric(18, 5), default=0)
+    volume_cumulative = Column(Numeric(18, 5), default=0)
     progress_this_week_pct = Column(Numeric(10, 8), default=0)
     progress_cumulative_pct = Column(Numeric(10, 8), default=0)
     weighted_progress_pct = Column(Numeric(10, 8), default=0)

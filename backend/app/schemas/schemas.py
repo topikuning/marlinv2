@@ -1,8 +1,8 @@
 """Pydantic schemas for API I/O."""
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_validator
 from typing import Optional, List, Any, Dict
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from uuid import UUID
 from app.models.models import (
     ContractStatus, AddendumType, DeviationStatus, WorkCategory,
@@ -12,6 +12,32 @@ from app.models.models import (
 
 
 # ─── Generic ─────────────────────────────────────────────────────────────────
+
+# Aturan presisi sistem: volume, unit_price, total_price, volume_delta,
+# cost_impact SELALU 5 dp eksak. Apa pun yang masuk via API (ketikan user,
+# Excel parser, kalkulasi frontend) di-quantize ke 5 dp. Validator ini dipakai
+# berulang di schema BOQItemCreate/Update, VOItemInput, dst.
+_FIVEPLACES = Decimal("0.00001")
+
+
+def _quantize_5dp(v: Any) -> Optional[Decimal]:
+    """Quantize input ke 5 dp (ROUND_HALF_UP). Defensive vs garbage input
+    (None/NaN/Inf/non-numeric) → None (atau Decimal('0.00000') untuk default).
+    Return None untuk None input agar Optional[Decimal] field bisa tetap None
+    (dipakai sama "field tidak di-set")."""
+    if v is None:
+        return None
+    if isinstance(v, float) and (v != v or v in (float("inf"), float("-inf"))):
+        return Decimal("0.00000")
+    if not isinstance(v, Decimal):
+        try:
+            v = Decimal(str(v))
+        except (TypeError, ValueError, InvalidOperation):
+            return Decimal("0.00000")
+    if v.is_nan() or v.is_infinite():
+        return Decimal("0.00000")
+    return v.quantize(_FIVEPLACES, rounding=ROUND_HALF_UP)
+
 
 class ORMBase(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -299,6 +325,12 @@ class BOQItemCreate(BaseModel):
     planned_duration_weeks: Optional[int] = None
     is_leaf: bool = True
 
+    @field_validator("volume", "unit_price", "total_price", mode="before")
+    @classmethod
+    def _q5_required(cls, v):
+        q = _quantize_5dp(v)
+        return q if q is not None else Decimal("0.00000")
+
 
 class BOQItemUpdate(BaseModel):
     description: Optional[str] = None
@@ -315,6 +347,11 @@ class BOQItemUpdate(BaseModel):
     is_active: Optional[bool] = None
     addendum_id: Optional[UUID] = None
     change_reason: Optional[str] = None
+
+    @field_validator("volume", "unit_price", "total_price", mode="before")
+    @classmethod
+    def _q5_optional(cls, v):
+        return _quantize_5dp(v)
 
 
 class BOQItemOut(ORMBase):
@@ -359,6 +396,12 @@ class ContractCreate(BaseModel):
     # NEW: accept locations upfront (array)
     locations: List[LocationCreate] = []
 
+    @field_validator("original_value", mode="before")
+    @classmethod
+    def _q5(cls, v):
+        q = _quantize_5dp(v)
+        return q if q is not None else Decimal("0.00000")
+
 
 class ContractUpdate(BaseModel):
     # Field yang selalu editable
@@ -381,6 +424,11 @@ class ContractUpdate(BaseModel):
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     status: Optional[ContractStatus] = None
+
+    @field_validator("original_value", "current_value", mode="before")
+    @classmethod
+    def _q5(cls, v):
+        return _quantize_5dp(v)
 
 
 class ContractOut(ORMBase):
@@ -429,6 +477,11 @@ class AddendumCreate(BaseModel):
     kpa_approved_by_id: Optional[UUID] = None
     kpa_approval_notes: Optional[str] = None
 
+    @field_validator("new_contract_value", mode="before")
+    @classmethod
+    def _q5(cls, v):
+        return _quantize_5dp(v)
+
 
 class AddendumOut(ORMBase):
     id: UUID
@@ -459,6 +512,12 @@ class ProgressItemInput(BaseModel):
     # Lihat app.services.progress_service.update_progress_item_calculations.
     volume_cumulative: Decimal = Decimal("0")
     notes: Optional[str] = None
+
+    @field_validator("volume_this_week", "volume_cumulative", mode="before")
+    @classmethod
+    def _q5(cls, v):
+        q = _quantize_5dp(v)
+        return q if q is not None else Decimal("0.00000")
 
 
 class WeeklyReportCreate(BaseModel):
@@ -641,10 +700,16 @@ class FieldObservationOut(ORMBase):
 # ─── Variation Order ─────────────────────────────────────────────────────────
 
 class VOItemInput(BaseModel):
-    action: str                       # add/increase/decrease/modify_spec/remove
+    action: str  # add | increase | decrease | modify_spec | remove | remove_facility | add_facility
     boq_item_id: Optional[UUID] = None
     facility_id: Optional[UUID] = None
-    parent_boq_item_id: Optional[UUID] = None  # untuk ADD: parent dalam hirarki BOQ
+    parent_boq_item_id: Optional[UUID] = None  # untuk ADD: parent item existing di hirarki BOQ
+    # Untuk ADD chain: parent juga item ADD baru di VO yang sama
+    parent_code: Optional[str] = None       # original_code item ADD yang jadi parent
+    new_item_code: Optional[str] = None     # original_code yang akan di-assign ke BOQItem baru
+    # Untuk ADD_FACILITY: lokasi target + kode fasilitas baru
+    location_id: Optional[UUID] = None
+    new_facility_code: Optional[str] = None
     master_work_code: Optional[str] = None
     description: str
     unit: Optional[str] = None
@@ -653,6 +718,12 @@ class VOItemInput(BaseModel):
     old_description: Optional[str] = None
     old_unit: Optional[str] = None
     notes: Optional[str] = None
+
+    @field_validator("volume_delta", "unit_price", mode="before")
+    @classmethod
+    def _q5(cls, v):
+        q = _quantize_5dp(v)
+        return q if q is not None else Decimal("0.00000")
 
 
 class VariationOrderCreate(BaseModel):
@@ -682,6 +753,11 @@ class VOItemOut(ORMBase):
     action: str
     boq_item_id: Optional[UUID] = None
     facility_id: Optional[UUID] = None
+    parent_boq_item_id: Optional[UUID] = None
+    parent_code: Optional[str] = None
+    new_item_code: Optional[str] = None
+    location_id: Optional[UUID] = None
+    new_facility_code: Optional[str] = None
     master_work_code: Optional[str] = None
     description: str
     unit: Optional[str] = None
