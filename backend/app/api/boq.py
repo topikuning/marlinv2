@@ -319,8 +319,10 @@ def create_boq_item(
 ):
     rev = _resolve_writable_revision_for_facility(db, str(data.facility_id))
 
+    # Volume/unit_price/total_price sudah di-quantize 2 dp oleh Pydantic validator.
+    # Hitung total_price = volume × unit_price kalau user tidak isi manual.
     if (not data.total_price or data.total_price == 0) and data.volume and data.unit_price:
-        data.total_price = data.volume * data.unit_price
+        data.total_price = _q2_boq(data.volume * data.unit_price)
 
     payload = data.model_dump()
     # Never trust a client-supplied revision id here — the resolver decides.
@@ -364,7 +366,7 @@ def bulk_create(
         rev = touched_revisions[str(d.facility_id)]
 
         if (not d.total_price or d.total_price == 0) and d.volume and d.unit_price:
-            d.total_price = d.volume * d.unit_price
+            d.total_price = _q2_boq(d.volume * d.unit_price)
         payload = d.model_dump()
         payload.pop("boq_revision_id", None)
         item = BOQItem(boq_revision_id=rev.id, **payload)
@@ -458,9 +460,15 @@ def update_boq_item(
     # karena hubungan parent-child masih utuh di DB.
     dump = data.model_dump(exclude_unset=True)
     parent_changed = "parent_id" in dump
+    vol_or_price_changed = "volume" in dump or "unit_price" in dump
     for field, val in dump.items():
         if field not in ("addendum_id", "change_reason") and hasattr(item, field):
             setattr(item, field, val)
+
+    # Auto re-derive total_price jika volume/unit_price diubah dan user tidak
+    # mengirim total_price baru. Pakai _q2_boq supaya hasilnya tetap 2 dp.
+    if vol_or_price_changed and "total_price" not in dump:
+        item.total_price = _q2_boq((item.volume or 0) * (item.unit_price or 0))
 
     db.flush()
     if parent_changed and item.boq_revision_id:

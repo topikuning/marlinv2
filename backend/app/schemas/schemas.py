@@ -1,8 +1,8 @@
 """Pydantic schemas for API I/O."""
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_validator
 from typing import Optional, List, Any, Dict
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from uuid import UUID
 from app.models.models import (
     ContractStatus, AddendumType, DeviationStatus, WorkCategory,
@@ -12,6 +12,32 @@ from app.models.models import (
 
 
 # ─── Generic ─────────────────────────────────────────────────────────────────
+
+# Aturan presisi sistem: volume, unit_price, total_price, volume_delta,
+# cost_impact SELALU 2 dp eksak. Apa pun yang masuk via API (ketikan user,
+# Excel parser, kalkulasi frontend) di-quantize ke 2 dp. Validator ini dipakai
+# berulang di schema BOQItemCreate/Update, VOItemInput, dst.
+_TWOPLACES = Decimal("0.01")
+
+
+def _quantize_2dp(v: Any) -> Optional[Decimal]:
+    """Quantize input ke 2 dp (ROUND_HALF_UP). Defensive vs garbage input
+    (None/NaN/Inf/non-numeric) → None (atau Decimal('0.00') untuk default).
+    Return None untuk None input agar Optional[Decimal] field bisa tetap None
+    (dipakai sama "field tidak di-set")."""
+    if v is None:
+        return None
+    if isinstance(v, float) and (v != v or v in (float("inf"), float("-inf"))):
+        return Decimal("0.00")
+    if not isinstance(v, Decimal):
+        try:
+            v = Decimal(str(v))
+        except (TypeError, ValueError, InvalidOperation):
+            return Decimal("0.00")
+    if v.is_nan() or v.is_infinite():
+        return Decimal("0.00")
+    return v.quantize(_TWOPLACES, rounding=ROUND_HALF_UP)
+
 
 class ORMBase(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -299,6 +325,12 @@ class BOQItemCreate(BaseModel):
     planned_duration_weeks: Optional[int] = None
     is_leaf: bool = True
 
+    @field_validator("volume", "unit_price", "total_price", mode="before")
+    @classmethod
+    def _q2_required(cls, v):
+        q = _quantize_2dp(v)
+        return q if q is not None else Decimal("0.00")
+
 
 class BOQItemUpdate(BaseModel):
     description: Optional[str] = None
@@ -315,6 +347,11 @@ class BOQItemUpdate(BaseModel):
     is_active: Optional[bool] = None
     addendum_id: Optional[UUID] = None
     change_reason: Optional[str] = None
+
+    @field_validator("volume", "unit_price", "total_price", mode="before")
+    @classmethod
+    def _q2_optional(cls, v):
+        return _quantize_2dp(v)
 
 
 class BOQItemOut(ORMBase):
@@ -459,6 +496,12 @@ class ProgressItemInput(BaseModel):
     # Lihat app.services.progress_service.update_progress_item_calculations.
     volume_cumulative: Decimal = Decimal("0")
     notes: Optional[str] = None
+
+    @field_validator("volume_this_week", "volume_cumulative", mode="before")
+    @classmethod
+    def _q2(cls, v):
+        q = _quantize_2dp(v)
+        return q if q is not None else Decimal("0.00")
 
 
 class WeeklyReportCreate(BaseModel):
@@ -659,6 +702,12 @@ class VOItemInput(BaseModel):
     old_description: Optional[str] = None
     old_unit: Optional[str] = None
     notes: Optional[str] = None
+
+    @field_validator("volume_delta", "unit_price", mode="before")
+    @classmethod
+    def _q2(cls, v):
+        q = _quantize_2dp(v)
+        return q if q is not None else Decimal("0.00")
 
 
 class VariationOrderCreate(BaseModel):
