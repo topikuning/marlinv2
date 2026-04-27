@@ -30,20 +30,33 @@ export function Modal({ open, onClose, title, children, size = "md", footer }) {
         onClick={onClose}
       />
       <div
-        className={`relative bg-white rounded-2xl shadow-hard w-full ${widths[size]} max-h-[90vh] flex flex-col`}
+        className={`relative rounded-2xl shadow-hard w-full ${widths[size]} max-h-[90vh] flex flex-col`}
+        style={{ background: "var(--c-modal-bg)" }}
       >
-        <div className="px-5 py-4 border-b border-ink-200 flex items-center justify-between flex-shrink-0">
-          <h3 className="font-display font-semibold text-ink-900">{title}</h3>
+        <div
+          className="px-5 py-4 flex items-center justify-between flex-shrink-0"
+          style={{ borderBottom: "1px solid var(--c-divider)" }}
+        >
+          <h3 className="font-display font-semibold" style={{ color: "var(--c-text-1)" }}>{title}</h3>
           <button
             onClick={onClose}
-            className="p-1 rounded-lg hover:bg-ink-100 text-ink-500"
+            className="p-1 rounded-lg transition-colors"
+            style={{ color: "var(--c-text-3)" }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--c-row-hover)")}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
           >
             <X size={18} />
           </button>
         </div>
-        <div className="p-5 overflow-y-auto flex-1">{children}</div>
+        <div className="p-5 overflow-y-auto flex-1" style={{ color: "var(--c-text-1)" }}>{children}</div>
         {footer && (
-          <div className="px-5 py-3 border-t border-ink-200 flex items-center justify-end gap-2 bg-ink-50/60 rounded-b-2xl flex-shrink-0">
+          <div
+            className="px-5 py-3 flex items-center justify-end gap-2 rounded-b-2xl flex-shrink-0"
+            style={{
+              borderTop: "1px solid var(--c-divider)",
+              background: "var(--c-row-hover)",
+            }}
+          >
             {footer}
           </div>
         )}

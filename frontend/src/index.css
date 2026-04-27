@@ -330,12 +330,10 @@ body.dark .kpi-value {
   color: var(--c-text-1);
 }
 
-/* Bg utility overrides untuk class tailwind raw yang banyak dipakai
-   sebagai surface tetap (mis. modal, card kustom). Hanya yang berdampak
-   ke dark mode — biarkan light mode utuh. */
-body.dark .bg-white {
-  background-color: var(--c-surface) !important;
-}
+/* Bg utility overrides untuk class tailwind raw yang banyak dipakai.
+   NOTE: .bg-white sengaja TIDAK di-override secara global — modal dan
+   surface putih perlu background solid. Tiap komponen yang perlu dark
+   adaptation pakai var(--c-modal-bg) atau var(--c-surface) secara eksplisit. */
 body.dark .border-ink-200,
 body.dark .border-ink-200\/70,
 body.dark .border-ink-100 {
