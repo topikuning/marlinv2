@@ -559,26 +559,33 @@ def _parse_df_rows(
             })
             continue
 
-        # Snapshot vol_efektif from Excel column (preferred) — fallback recompute
-        vol_efektif_excel = _safe_float(rec.get("vol_efektif"))
+        # Snapshot vol_efektif from Excel column (preferred) — fallback recompute.
+        # SEMUA perhitungan volume di-Decimal-kan agar tidak ada akumulasi
+        # error float dari (vol_baru ± vol_pending ± vol_awal). Float subtraction
+        # seperti 33.36 - 30.0 = 3.3600000000000016 menghasilkan Decimal yang
+        # tidak match dengan apa yang user tulis di Excel.
         sum_vol_now, _, _ = _pending_for_item(db, boq_item.id, exclude_vo_id=exclude_vo_id)
-        vol_awal = float(boq_item.volume or 0)
-        vol_efektif_now = vol_awal + float(sum_vol_now)
+        vol_baru_d = Decimal(str(vol_baru))
+        vol_awal_d = Decimal(boq_item.volume or 0)
+        vol_efektif_now_d = vol_awal_d + sum_vol_now  # Decimal + Decimal
 
-        vol_efektif_used = vol_efektif_excel if vol_efektif_excel else vol_efektif_now
-        if vol_efektif_excel and abs(vol_efektif_excel - vol_efektif_now) > 1e-6:
+        vol_efektif_excel_d = _safe_decimal(rec.get("vol_efektif"))
+        # Note: pakai `is not None`, BUKAN truthy — vol_efektif=0 itu nilai sah
+        # untuk item baru atau item yang sudah di-cancel oleh VO lain.
+        vol_efektif_used_d = (
+            vol_efektif_excel_d if vol_efektif_excel_d is not None else vol_efektif_now_d
+        )
+        if vol_efektif_excel_d is not None and abs(vol_efektif_excel_d - vol_efektif_now_d) > Decimal("0.000001"):
             warnings.append(
                 f"Baris {idx+2} ({fac_code}/{code}): vol_efektif berubah sejak export "
-                f"({vol_efektif_excel} → {vol_efektif_now}). Disarankan re-export."
+                f"({vol_efektif_excel_d} → {vol_efektif_now_d}). Disarankan re-export."
             )
 
-        # Round to 6 d.p. to eliminate IEEE-754 float-subtraction noise
-        # e.g. 33.36 - 30.0 = 3.3600000000000016 without rounding → Decimal stores
-        # the exact float repr which differs from Decimal("3.36"), causing tiny
-        # cost_impact discrepancies vs. the user's Excel formula.
-        delta = round(vol_baru - vol_efektif_used, 6)
-        if abs(delta) < 1e-6:
+        delta_d = vol_baru_d - vol_efektif_used_d
+        if abs(delta_d) < Decimal("0.000001"):
             continue  # no change
+        delta = float(delta_d)
+        vol_awal = float(vol_awal_d)
 
         if vol_baru == 0 and vol_awal > 0:
             # REMOVE — delta = -vol_awal (kembalikan dari rev aktif)
@@ -588,7 +595,7 @@ def _parse_df_rows(
                 "boq_item_id": str(boq_item.id),
                 "description": boq_item.description,
                 "unit": boq_item.unit,
-                "volume_delta": -vol_awal,
+                "volume_delta": float(-vol_awal_d),
                 "unit_price": float(boq_item.unit_price or 0),
             })
         elif delta > 0:
@@ -729,3 +736,24 @@ def _safe_float(v) -> float:
         return float(v)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _safe_decimal(v) -> Optional[Decimal]:
+    """Convert Excel cell value to Decimal preserving the user-typed precision.
+    Returns None when the cell is missing/empty/NaN (vs. 0 which is a real value).
+    Goes via str() so float values use Python's shortest round-trip representation
+    (e.g. 33.36 not 33.35999999999999943155847532...).
+    """
+    from decimal import InvalidOperation
+    if v is None:
+        return None
+    if isinstance(v, float) and pd.isna(v):
+        return None
+    if isinstance(v, str):
+        v = v.strip()
+        if not v:
+            return None
+    try:
+        return Decimal(str(v))
+    except (TypeError, ValueError, InvalidOperation):
+        return None
