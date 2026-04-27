@@ -396,6 +396,12 @@ class ContractCreate(BaseModel):
     # NEW: accept locations upfront (array)
     locations: List[LocationCreate] = []
 
+    @field_validator("original_value", mode="before")
+    @classmethod
+    def _q5(cls, v):
+        q = _quantize_5dp(v)
+        return q if q is not None else Decimal("0.00000")
+
 
 class ContractUpdate(BaseModel):
     # Field yang selalu editable
@@ -418,6 +424,11 @@ class ContractUpdate(BaseModel):
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     status: Optional[ContractStatus] = None
+
+    @field_validator("original_value", "current_value", mode="before")
+    @classmethod
+    def _q5(cls, v):
+        return _quantize_5dp(v)
 
 
 class ContractOut(ORMBase):
@@ -465,6 +476,11 @@ class AddendumCreate(BaseModel):
     #   kpa_approval_notes = catatan persetujuan
     kpa_approved_by_id: Optional[UUID] = None
     kpa_approval_notes: Optional[str] = None
+
+    @field_validator("new_contract_value", mode="before")
+    @classmethod
+    def _q5(cls, v):
+        return _quantize_5dp(v)
 
 
 class AddendumOut(ORMBase):

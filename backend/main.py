@@ -76,15 +76,26 @@ def _ensure_column_precision_5dp():
     Idempotent — kalau sudah (18, 5) tidak ada efek."""
     from sqlalchemy import text
     alters = [
+        # Item-level (BOQ) — sumber data per row
         "ALTER TABLE boq_items ALTER COLUMN volume TYPE NUMERIC(18, 5)",
         "ALTER TABLE boq_items ALTER COLUMN unit_price TYPE NUMERIC(18, 5)",
         "ALTER TABLE boq_items ALTER COLUMN total_price TYPE NUMERIC(18, 5)",
+        # Item-level (VO)
         "ALTER TABLE variation_order_items ALTER COLUMN volume_delta TYPE NUMERIC(18, 5)",
         "ALTER TABLE variation_order_items ALTER COLUMN unit_price TYPE NUMERIC(18, 5)",
         "ALTER TABLE variation_order_items ALTER COLUMN cost_impact TYPE NUMERIC(18, 5)",
         "ALTER TABLE variation_orders ALTER COLUMN cost_impact TYPE NUMERIC(18, 5)",
+        # Progress mingguan (volume realisasi)
         "ALTER TABLE weekly_progress_items ALTER COLUMN volume_this_week TYPE NUMERIC(18, 5)",
         "ALTER TABLE weekly_progress_items ALTER COLUMN volume_cumulative TYPE NUMERIC(18, 5)",
+        # Aggregate totals (sum of items) — wajib 5 dp juga, kalau tidak hasil sum
+        # ter-truncate dan total kontrak yang ditampilkan ke user salah.
+        "ALTER TABLE facilities ALTER COLUMN total_value TYPE NUMERIC(18, 5)",
+        "ALTER TABLE boq_revisions ALTER COLUMN total_value TYPE NUMERIC(18, 5)",
+        "ALTER TABLE contracts ALTER COLUMN original_value TYPE NUMERIC(18, 5)",
+        "ALTER TABLE contracts ALTER COLUMN current_value TYPE NUMERIC(18, 5)",
+        "ALTER TABLE contract_addenda ALTER COLUMN old_contract_value TYPE NUMERIC(18, 5)",
+        "ALTER TABLE contract_addenda ALTER COLUMN new_contract_value TYPE NUMERIC(18, 5)",
     ]
     with engine.begin() as conn:
         for stmt in alters:

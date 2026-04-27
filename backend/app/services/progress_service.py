@@ -385,19 +385,26 @@ def recalculate_facility_weights(db: Session, facility_id: str):
         BOQItem.is_leaf == True,
     ).all()
 
-    total = sum(float(i.total_price or 0) for i in items)
+    # Aturan presisi sistem: sum di Decimal (bukan float) supaya total agregat
+    # eksak 5 dp, tidak akumulasi float-noise dari sum() bawaan.
+    from decimal import Decimal as _D, ROUND_HALF_UP as _RHU
+    _Q5 = _D("0.00001")
+    total_d = sum((_D(i.total_price or 0) for i in items), _D("0"))
 
     # Update facility.total_value cache (meskipun total == 0, supaya
     # refresh saat semua item dihapus juga benar).
     fac = db.query(Facility).filter(Facility.id == facility_id).first()
     if fac:
-        fac.total_value = Decimal(str(total))
+        fac.total_value = total_d.quantize(_Q5, rounding=_RHU)
 
-    if total <= 0:
+    if total_d <= 0:
         return
 
     for i in items:
-        i.weight_pct = Decimal(str(round(float(i.total_price or 0) / total, 8)))
+        # weight_pct biarkan 8 dp (kolom Numeric(10,8)) — fraction
+        i.weight_pct = (_D(i.total_price or 0) / total_d).quantize(
+            _D("0.00000001"), rounding=_RHU
+        )
 
 
 def recalculate_contract_weights(db: Session, contract_id: str):

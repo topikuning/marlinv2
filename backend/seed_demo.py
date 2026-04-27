@@ -826,7 +826,7 @@ def run():
             # = BOQ × (1 + ppn/100). Dipertahankan konsisten supaya
             # approve revisi langsung sinkron.
             ppn_factor = Decimal("1") + (contract.ppn_pct or Decimal("0")) / Decimal("100")
-            value_with_ppn = (leaf_total * ppn_factor).quantize(Decimal("0.01"))
+            value_with_ppn = (leaf_total * ppn_factor).quantize(Decimal("0.00001"))
             contract.original_value = value_with_ppn
             contract.current_value = value_with_ppn
 

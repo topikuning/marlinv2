@@ -403,8 +403,8 @@ class Contract(Base):
     konsultan_id = Column(UUID(as_uuid=True), ForeignKey("companies.id"))
 
     fiscal_year = Column(Integer, nullable=False)
-    original_value = Column(Numeric(18, 2), nullable=False)
-    current_value = Column(Numeric(18, 2), nullable=False)
+    original_value = Column(Numeric(18, 5), nullable=False)
+    current_value = Column(Numeric(18, 5), nullable=False)
     # PPN (Pajak Pertambahan Nilai) percentage. BOQ items disimpan PRE-PPN.
     # Nilai kontrak (original_value/current_value) adalah POST-PPN (= BOQ × (1 + ppn/100)).
     # Default 11% sesuai UU HPP 2021. Bisa diubah per kontrak (mis. 0% kalau
@@ -478,8 +478,8 @@ class ContractAddendum(Base):
     extension_days = Column(Integer, default=0)
     old_end_date = Column(Date)
     new_end_date = Column(Date)
-    old_contract_value = Column(Numeric(18, 2))
-    new_contract_value = Column(Numeric(18, 2))
+    old_contract_value = Column(Numeric(18, 5))
+    new_contract_value = Column(Numeric(18, 5))
     description = Column(Text)
     document_file = Column(String(500))
     # Untuk perubahan nilai >10%, butuh persetujuan KPA/PA. Saat signed oleh
@@ -710,7 +710,7 @@ class Facility(Base):
     facility_type = Column(String(100))  # "gudang_beku", etc.
     facility_name = Column(String(500), nullable=False)
     display_order = Column(Integer, default=0)
-    total_value = Column(Numeric(18, 2), default=0)
+    total_value = Column(Numeric(18, 5), default=0)
     notes = Column(Text)
     is_active = Column(Boolean, default=True)
     # Traceability: addendum yang menambahkan fasilitas ini.
@@ -756,7 +756,7 @@ class BOQRevision(Base):
     status = Column(Enum(RevisionStatus), default=RevisionStatus.DRAFT, nullable=False)
     is_active = Column(Boolean, default=False, nullable=False)
 
-    total_value = Column(Numeric(18, 2), default=0)    # sum of leaf total_prices
+    total_value = Column(Numeric(18, 5), default=0)    # sum of leaf total_prices
     item_count = Column(Integer, default=0)
 
     approved_at = Column(DateTime, nullable=True)

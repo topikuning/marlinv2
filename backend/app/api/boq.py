@@ -844,7 +844,7 @@ async def import_excel(
                 )
                 if working_rev and working_rev.total_value:
                     ppn_factor = _Dec("1") + (c.ppn_pct or _Dec("0")) / _Dec("100")
-                    value_with_ppn = working_rev.total_value * ppn_factor
+                    value_with_ppn = _q5_boq(working_rev.total_value * ppn_factor)
                     c.original_value = value_with_ppn
                     c.current_value = value_with_ppn
 
