@@ -1,8 +1,21 @@
 import os
 import tempfile
 import uuid
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Query
+
+
+_TWOPLACES_BOQ = Decimal("0.01")
+
+
+def _q2_boq(v) -> Decimal:
+    """Quantize ke 2 dp (ROUND_HALF_UP). Aturan presisi sistem: volume,
+    unit_price, total_price BOQ disimpan dengan 2 dp eksak."""
+    if v is None:
+        return Decimal("0.00")
+    if not isinstance(v, Decimal):
+        v = Decimal(str(v))
+    return v.quantize(_TWOPLACES_BOQ, rounding=ROUND_HALF_UP)
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -713,11 +726,15 @@ async def import_excel(
             created_items: list = []
             for order_idx, it in enumerate(fac_data["items"]):
 
-                total_price = it.get("total_price") or 0
-                volume = it.get("volume") or 0
-                unit_price = it.get("unit_price") or 0
-                if not total_price and volume and unit_price:
-                    total_price = volume * unit_price
+                # Aturan presisi sistem: volume & unit_price 2 dp eksak.
+                # total_price = volume × unit_price (Decimal, exact).
+                volume_q = _q2_boq(it.get("volume") or 0)
+                price_q = _q2_boq(it.get("unit_price") or 0)
+                total_q = _q2_boq(it.get("total_price") or 0)
+                if total_q == Decimal("0.00") and volume_q and price_q:
+                    total_q = (volume_q * price_q).quantize(
+                        Decimal("0.01"), rounding=ROUND_HALF_UP
+                    )
 
                 new_item = BOQItem(
                     boq_revision_id=target_revision.id,
@@ -729,9 +746,9 @@ async def import_excel(
                     display_order=order_idx,
                     description=it["description"],
                     unit=it.get("unit"),
-                    volume=Decimal(str(volume)),
-                    unit_price=Decimal(str(unit_price)),
-                    total_price=Decimal(str(total_price)),
+                    volume=volume_q,
+                    unit_price=price_q,
+                    total_price=total_q,
                     planned_start_week=it.get("planned_start_week"),
                     planned_duration_weeks=it.get("planned_duration_weeks"),
                     is_leaf=True,  # auto-flip via _recompute_is_leaf di akhir

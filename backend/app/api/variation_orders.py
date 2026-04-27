@@ -9,8 +9,21 @@ State machine (dicerminkan di vo_service):
 God-mode (Unlock Mode): bila contract.unlock_until aktif, semua validasi
 state transition di-bypass. Setiap bypass di-log dengan tag khusus.
 """
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional
+
+
+_TWOPLACES = Decimal("0.01")
+
+
+def _q2(v) -> Decimal:
+    """Quantize ke 2 dp (ROUND_HALF_UP). Aturan presisi sistem: volume &
+    unit_price disimpan & dihitung dengan 2 dp eksak."""
+    if v is None:
+        return Decimal("0.00")
+    if not isinstance(v, Decimal):
+        v = Decimal(str(v))
+    return v.quantize(_TWOPLACES, rounding=ROUND_HALF_UP)
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query, UploadFile, File
 from sqlalchemy.orm import Session
@@ -207,8 +220,8 @@ def _recompute_cost_impact(db: Session, vo: VariationOrder) -> None:
             # Fasilitas baru tanpa items = 0; items ADD ditangani terpisah
             expected = Decimal("0")
         else:
-            delta = Decimal(it.volume_delta or 0)
-            price = Decimal(it.unit_price or 0)
+            delta = _q2(it.volume_delta or 0)
+            price = _q2(it.unit_price or 0)
             expected = delta * price
         # Normalisasi — setiap item cost_impact harus sinkron dengan
         # volume_delta × unit_price (kalau tidak, integrity rusak).
@@ -289,7 +302,10 @@ def _apply_items_from_payload(vo: VariationOrder, items_input, db: Session):
             cost_impact_val = Decimal("0")
             desc_override = it.description
         else:
-            cost_impact_val = Decimal(it.volume_delta or 0) * Decimal(it.unit_price or 0)
+            # Aturan presisi sistem: volume & unit_price wajib 2 dp.
+            vol_q = _q2(it.volume_delta or 0)
+            price_q = _q2(it.unit_price or 0)
+            cost_impact_val = vol_q * price_q
             desc_override = it.description
 
         zero_actions = (VOItemAction.REMOVE_FACILITY, VOItemAction.ADD_FACILITY)
@@ -309,8 +325,8 @@ def _apply_items_from_payload(vo: VariationOrder, items_input, db: Session):
             master_work_code=it.master_work_code,
             description=desc_override,
             unit=it.unit,
-            volume_delta=Decimal("0") if action in zero_actions else it.volume_delta,
-            unit_price=Decimal("0") if action in zero_actions else it.unit_price,
+            volume_delta=Decimal("0.00") if action in zero_actions else _q2(it.volume_delta or 0),
+            unit_price=Decimal("0.00") if action in zero_actions else _q2(it.unit_price or 0),
             cost_impact=cost_impact_val,
             old_description=old_desc,
             old_unit=old_unit,

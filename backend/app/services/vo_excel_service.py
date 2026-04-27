@@ -22,7 +22,7 @@ Mode import: auto-detect dari sheet names:
 from __future__ import annotations
 import io
 import re
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, List, Optional, Set, Tuple
 
 import pandas as pd
@@ -234,12 +234,12 @@ def _write_facility_rows(
             it.original_code or "",
             parent_code_str,
             it.description, it.unit or "",
-            float(str(vol_awal)),
-            float(str(pending_vol)),
-            float(str(pending_cost)),
-            float(str(vol_efektif)),
-            float(str(vol_baru)),
-            float(str(unit_price)),
+            float(_q2(vol_awal)),
+            float(_q2(pending_vol)),
+            float(_q2(pending_cost)),
+            float(_q2(vol_efektif)),
+            float(_q2(vol_baru)),
+            float(_q2(unit_price)),
             combined_notes,
         ])
 
@@ -553,41 +553,41 @@ def _parse_df_rows(
                 "new_item_code": code or None,
                 "description": description,
                 "unit": unit,
-                "volume_delta": vol_baru,
-                "unit_price": unit_price,
+                "volume_delta": float(_q2(vol_baru)),
+                "unit_price": float(_q2(unit_price)),
                 "notes": notes_str or None,
             })
             continue
 
-        # Snapshot vol_efektif from Excel column (preferred) — fallback recompute.
-        # SEMUA perhitungan volume di-Decimal-kan agar tidak ada akumulasi
-        # error float dari (vol_baru ± vol_pending ± vol_awal). Float subtraction
-        # seperti 33.36 - 30.0 = 3.3600000000000016 menghasilkan Decimal yang
-        # tidak match dengan apa yang user tulis di Excel.
+        # Aturan sistem: volume & unit_price quantized ke 2 dp. Vol_baru di
+        # Excel = volume aktif di DB persis (no float noise).
         sum_vol_now, _, _ = _pending_for_item(db, boq_item.id, exclude_vo_id=exclude_vo_id)
-        vol_baru_d = Decimal(str(vol_baru))
-        vol_awal_d = Decimal(boq_item.volume or 0)
-        vol_efektif_now_d = vol_awal_d + sum_vol_now  # Decimal + Decimal
+        vol_baru_d = _q2(vol_baru)
+        vol_awal_d = _q2(boq_item.volume or 0)
+        vol_efektif_now_d = _q2(vol_awal_d + sum_vol_now)
 
         vol_efektif_excel_d = _safe_decimal(rec.get("vol_efektif"))
+        if vol_efektif_excel_d is not None:
+            vol_efektif_excel_d = _q2(vol_efektif_excel_d)
         # Note: pakai `is not None`, BUKAN truthy — vol_efektif=0 itu nilai sah
         # untuk item baru atau item yang sudah di-cancel oleh VO lain.
         vol_efektif_used_d = (
             vol_efektif_excel_d if vol_efektif_excel_d is not None else vol_efektif_now_d
         )
-        if vol_efektif_excel_d is not None and abs(vol_efektif_excel_d - vol_efektif_now_d) > Decimal("0.000001"):
+        if vol_efektif_excel_d is not None and abs(vol_efektif_excel_d - vol_efektif_now_d) > _TWOPLACES:
             warnings.append(
                 f"Baris {idx+2} ({fac_code}/{code}): vol_efektif berubah sejak export "
                 f"({vol_efektif_excel_d} → {vol_efektif_now_d}). Disarankan re-export."
             )
 
-        delta_d = vol_baru_d - vol_efektif_used_d
-        if abs(delta_d) < Decimal("0.000001"):
+        delta_d = _q2(vol_baru_d - vol_efektif_used_d)
+        if delta_d == Decimal("0.00"):
             continue  # no change
         delta = float(delta_d)
         vol_awal = float(vol_awal_d)
+        unit_price_d = _q2(boq_item.unit_price or 0)
 
-        if vol_baru == 0 and vol_awal > 0:
+        if vol_baru_d == Decimal("0.00") and vol_awal_d > 0:
             # REMOVE — delta = -vol_awal (kembalikan dari rev aktif)
             items_out.append({
                 "action": "remove",
@@ -596,9 +596,9 @@ def _parse_df_rows(
                 "description": boq_item.description,
                 "unit": boq_item.unit,
                 "volume_delta": float(-vol_awal_d),
-                "unit_price": float(boq_item.unit_price or 0),
+                "unit_price": float(unit_price_d),
             })
-        elif delta > 0:
+        elif delta_d > 0:
             items_out.append({
                 "action": "increase",
                 "facility_id": str(boq_item.facility_id),
@@ -606,9 +606,9 @@ def _parse_df_rows(
                 "description": boq_item.description,
                 "unit": boq_item.unit,
                 "volume_delta": delta,
-                "unit_price": float(boq_item.unit_price or 0),
+                "unit_price": float(unit_price_d),
             })
-        elif delta < 0:
+        elif delta_d < 0:
             items_out.append({
                 "action": "decrease",
                 "facility_id": str(boq_item.facility_id),
@@ -616,7 +616,7 @@ def _parse_df_rows(
                 "description": boq_item.description,
                 "unit": boq_item.unit,
                 "volume_delta": delta,
-                "unit_price": float(boq_item.unit_price or 0),
+                "unit_price": float(unit_price_d),
             })
 
     return items_out, warnings, errors, fac_codes_in_sheet
@@ -736,6 +736,20 @@ def _safe_float(v) -> float:
         return float(v)
     except (TypeError, ValueError):
         return 0.0
+
+
+_TWOPLACES = Decimal("0.01")
+
+
+def _q2(v) -> Decimal:
+    """Quantize to 2 decimal places (ROUND_HALF_UP). Aturan sistem: volume &
+    harga satuan SELALU 2 dp, supaya vol_baru di Excel sama persis dengan
+    volume aktif di DB tanpa float-noise."""
+    if v is None:
+        return Decimal("0.00")
+    if not isinstance(v, Decimal):
+        v = Decimal(str(v))
+    return v.quantize(_TWOPLACES, rounding=ROUND_HALF_UP)
 
 
 def _safe_decimal(v) -> Optional[Decimal]:
