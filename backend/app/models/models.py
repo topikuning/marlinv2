@@ -552,7 +552,7 @@ class VariationOrder(Base):
     title = Column(String(255), nullable=False)
     technical_justification = Column(Text, nullable=False)  # min 50 char, wajib
     quantity_calculation = Column(Text)                     # cara hitung volume
-    cost_impact = Column(Numeric(18, 2), default=0)         # delta nilai (bisa -)
+    cost_impact = Column(Numeric(18, 5), default=0)         # delta nilai (bisa -)
 
     # Sumber temuan (optional; VO bisa juga lahir tanpa MC formal)
     source_observation_id = Column(
@@ -646,9 +646,9 @@ class VariationOrderItem(Base):
     master_work_code = Column(String(30))
     description = Column(Text, nullable=False)
     unit = Column(String(30))
-    volume_delta = Column(Numeric(18, 4), default=0)       # + untuk tambah, - untuk kurang
-    unit_price = Column(Numeric(18, 2), default=0)
-    cost_impact = Column(Numeric(18, 2), default=0)        # volume_delta * unit_price
+    volume_delta = Column(Numeric(18, 5), default=0)       # + untuk tambah, - untuk kurang
+    unit_price = Column(Numeric(18, 5), default=0)
+    cost_impact = Column(Numeric(18, 5), default=0)        # volume_delta * unit_price
 
     # MODIFY_SPEC: snapshot deskripsi lama untuk diff audit
     old_description = Column(Text)
@@ -813,9 +813,9 @@ class BOQItem(Base):
 
     description = Column(Text, nullable=False)
     unit = Column(String(30))
-    volume = Column(Numeric(18, 4), default=0)
-    unit_price = Column(Numeric(18, 2), default=0)
-    total_price = Column(Numeric(18, 2), default=0)
+    volume = Column(Numeric(18, 5), default=0)
+    unit_price = Column(Numeric(18, 5), default=0)
+    total_price = Column(Numeric(18, 5), default=0)
     weight_pct = Column(Numeric(10, 8), default=0)
 
     planned_start_week = Column(Integer)
@@ -920,8 +920,8 @@ class WeeklyProgressItem(Base):
     weekly_report_id = Column(UUID(as_uuid=True), ForeignKey("weekly_reports.id", ondelete="CASCADE"), nullable=False)
     boq_item_id = Column(UUID(as_uuid=True), ForeignKey("boq_items.id"), nullable=False)
 
-    volume_this_week = Column(Numeric(18, 4), default=0)
-    volume_cumulative = Column(Numeric(18, 4), default=0)
+    volume_this_week = Column(Numeric(18, 5), default=0)
+    volume_cumulative = Column(Numeric(18, 5), default=0)
     progress_this_week_pct = Column(Numeric(10, 8), default=0)
     progress_cumulative_pct = Column(Numeric(10, 8), default=0)
     weighted_progress_pct = Column(Numeric(10, 8), default=0)

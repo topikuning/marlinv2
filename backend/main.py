@@ -69,6 +69,31 @@ def _ensure_columns():
                 pass
 
 
+def _ensure_column_precision_5dp():
+    """One-time ALTER kolom Numeric ke (18, 5) — tanpa ini, DB truncate input
+    5 dp jadi 4 dp (volume) atau 2 dp (unit_price/total_price/cost_impact).
+    PostgreSQL: ALTER ke presisi yang lebih tinggi aman, tidak mengubah data.
+    Idempotent — kalau sudah (18, 5) tidak ada efek."""
+    from sqlalchemy import text
+    alters = [
+        "ALTER TABLE boq_items ALTER COLUMN volume TYPE NUMERIC(18, 5)",
+        "ALTER TABLE boq_items ALTER COLUMN unit_price TYPE NUMERIC(18, 5)",
+        "ALTER TABLE boq_items ALTER COLUMN total_price TYPE NUMERIC(18, 5)",
+        "ALTER TABLE variation_order_items ALTER COLUMN volume_delta TYPE NUMERIC(18, 5)",
+        "ALTER TABLE variation_order_items ALTER COLUMN unit_price TYPE NUMERIC(18, 5)",
+        "ALTER TABLE variation_order_items ALTER COLUMN cost_impact TYPE NUMERIC(18, 5)",
+        "ALTER TABLE variation_orders ALTER COLUMN cost_impact TYPE NUMERIC(18, 5)",
+        "ALTER TABLE weekly_progress_items ALTER COLUMN volume_this_week TYPE NUMERIC(18, 5)",
+        "ALTER TABLE weekly_progress_items ALTER COLUMN volume_cumulative TYPE NUMERIC(18, 5)",
+    ]
+    with engine.begin() as conn:
+        for stmt in alters:
+            try:
+                conn.execute(text(stmt))
+            except Exception:
+                pass
+
+
 def _ensure_quantized_5dp():
     """One-time normalize legacy data to 5-decimal-place precision.
     Aturan sistem: volume & unit_price selalu 5 dp. Data yang ter-import
@@ -102,6 +127,7 @@ async def lifespan(app: FastAPI):
         os.makedirs(os.path.join(settings.UPLOAD_DIR, sub), exist_ok=True)
     _ensure_enum_values()
     _ensure_columns()
+    _ensure_column_precision_5dp()
     _ensure_quantized_5dp()
     if settings.SCHEDULER_ENABLED:
         start_scheduler()
