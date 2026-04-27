@@ -1113,14 +1113,32 @@ def _apply_vo_items_to_revision(db: Session, new_rev, bundled_vos):
                 non_add_vis.append(vi)
 
     # ── Non-ADD items ─────────────────────────────────────────────────────────
+    from decimal import Decimal, ROUND_HALF_UP
+    _Q2 = Decimal("0.01")
+
+    def _q2(x):
+        if x is None:
+            return Decimal("0.00")
+        if not isinstance(x, Decimal):
+            x = Decimal(str(x))
+        if x.is_nan() or x.is_infinite():
+            return Decimal("0.00")
+        return x.quantize(_Q2, rounding=ROUND_HALF_UP)
+
     for vi in non_add_vis:
         if vi.action in (VOItemAction.INCREASE, VOItemAction.DECREASE):
             target = cloned_items.get(str(vi.boq_item_id))
             if target:
-                from decimal import Decimal
-                delta = Decimal(vi.volume_delta or 0)
-                target.volume = (target.volume or Decimal("0")) + delta
-                target.total_price = target.volume * (target.unit_price or Decimal("0"))
+                # Aturan presisi sistem: hasil apply VO MUST 2 dp eksak,
+                # supaya vol_baru di Excel == volume aktif di DB persis.
+                # Quantize SEBELUM dan SETELAH operasi untuk menormalkan
+                # data legacy yang mungkin tersimpan >2dp.
+                delta = _q2(vi.volume_delta or 0)
+                cur_vol = _q2(target.volume or 0)
+                cur_price = _q2(target.unit_price or 0)
+                target.volume = _q2(cur_vol + delta)
+                target.unit_price = cur_price
+                target.total_price = _q2(target.volume * cur_price)
                 target.change_type = "modified"
         elif vi.action == VOItemAction.MODIFY_SPEC:
             target = cloned_items.get(str(vi.boq_item_id))
@@ -1196,6 +1214,8 @@ def _apply_vo_items_to_revision(db: Session, new_rev, bundled_vos):
             if parent_clone:
                 parent_clone.is_leaf = False
 
+            _vol = _q2(vi.volume_delta)
+            _price = _q2(vi.unit_price)
             new_item = BOQItem(
                 boq_revision_id=new_rev.id,
                 facility_id=fac_id,
@@ -1205,9 +1225,9 @@ def _apply_vo_items_to_revision(db: Session, new_rev, bundled_vos):
                 master_work_code=vi.master_work_code,
                 description=vi.description,
                 unit=vi.unit,
-                volume=vi.volume_delta,
-                unit_price=vi.unit_price,
-                total_price=vi.cost_impact,
+                volume=_vol,
+                unit_price=_price,
+                total_price=_q2(_vol * _price),
                 is_active=True,
                 is_leaf=True,
                 is_addendum_item=True,
@@ -1227,6 +1247,8 @@ def _apply_vo_items_to_revision(db: Session, new_rev, bundled_vos):
 
     # Sisa yang tidak bisa di-resolve (data tidak valid/circular) → buat sebagai root
     for vi in unresolved:
+        _vol = _q2(vi.volume_delta)
+        _price = _q2(vi.unit_price)
         new_item = BOQItem(
             boq_revision_id=new_rev.id,
             facility_id=_fac_id(vi),
@@ -1236,9 +1258,9 @@ def _apply_vo_items_to_revision(db: Session, new_rev, bundled_vos):
             master_work_code=vi.master_work_code,
             description=vi.description,
             unit=vi.unit,
-            volume=vi.volume_delta,
-            unit_price=vi.unit_price,
-            total_price=vi.cost_impact,
+            volume=_vol,
+            unit_price=_price,
+            total_price=_q2(_vol * _price),
             is_active=True,
             is_leaf=True,
             is_addendum_item=True,

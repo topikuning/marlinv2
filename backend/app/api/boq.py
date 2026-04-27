@@ -68,6 +68,12 @@ router = APIRouter(prefix="/boq", tags=["boq"])
 
 
 def _boq_to_dict(b: BOQItem) -> dict:
+    # Aturan presisi sistem: volume, unit_price, total_price selalu 2 dp.
+    # Quantize di output juga (bukan hanya saat input) supaya data legacy yang
+    # tersimpan dengan presisi lebih tinggi tampil 2 dp dan vol×price = total.
+    vol = _q2_boq(b.volume or 0)
+    price = _q2_boq(b.unit_price or 0)
+    total = _q2_boq(b.total_price or 0)
     return {
         "id": str(b.id),
         "facility_id": str(b.facility_id),
@@ -79,9 +85,9 @@ def _boq_to_dict(b: BOQItem) -> dict:
         "display_order": b.display_order,
         "description": b.description,
         "unit": b.unit,
-        "volume": float(b.volume or 0),
-        "unit_price": float(b.unit_price or 0),
-        "total_price": float(b.total_price or 0),
+        "volume": float(vol),
+        "unit_price": float(price),
+        "total_price": float(total),
         "weight_pct": float(b.weight_pct or 0),
         "planned_start_week": b.planned_start_week,
         "planned_duration_weeks": b.planned_duration_weeks,
